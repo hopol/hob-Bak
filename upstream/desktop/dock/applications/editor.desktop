@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=文本编辑器
+Name[zh_CN]=文本编辑器
+Comment=编辑器
+Exec=mousepad
+Icon=org.xfce.mousepad
+Terminal=false
+StartupNotify=true
+Categories=Utility;TextEditor;

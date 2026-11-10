@@ -1,0 +1,144 @@
+# Hob 云桌面的 dock（tint2）：左边预装软件，中间正在运行的窗口，右边时钟。
+# desktopd 用 `tint2 -c <这个文件>` 拉起，配置随镜像走，不依赖用户 HOME。
+# 选项说明：https://gitlab.com/o9000/tint2/-/wikis/Configure
+
+#---- 背景 ----
+# 1 = dock 面板，2 = 普通窗口，3 = 当前窗口，4 = 需要处理，5 = 悬停提示
+rounded = 12
+border_width = 1
+border_sides = TBLR
+background_color = #121821 100
+border_color = #26313f 100
+background_color_hover = #121821 100
+border_color_hover = #26313f 100
+background_color_pressed = #121821 100
+border_color_pressed = #26313f 100
+
+rounded = 8
+border_width = 1
+border_sides = TBLR
+background_color = #1a2230 100
+border_color = #223040 100
+background_color_hover = #232f41 100
+border_color_hover = #34465c 100
+background_color_pressed = #141b26 100
+border_color_pressed = #34465c 100
+
+rounded = 8
+border_width = 1
+border_sides = TBLR
+background_color = #243650 100
+border_color = #3c5878 100
+background_color_hover = #2b405e 100
+border_color_hover = #4a6b91 100
+background_color_pressed = #1d2c42 100
+border_color_pressed = #4a6b91 100
+
+rounded = 8
+border_width = 1
+border_sides = TBLR
+background_color = #7a4a20 100
+border_color = #aa7733 100
+background_color_hover = #8f5a28 100
+border_color_hover = #aa7733 100
+background_color_pressed = #7a4a20 100
+border_color_pressed = #aa7733 100
+
+rounded = 8
+border_width = 1
+border_sides = TBLR
+background_color = #0d1218 100
+border_color = #2c3a4a 100
+background_color_hover = #0d1218 100
+border_color_hover = #2c3a4a 100
+background_color_pressed = #0d1218 100
+border_color_pressed = #2c3a4a 100
+
+#---- 面板 ----
+panel_items = LTC
+panel_size = 100% 56
+panel_shrink = 1
+panel_margin = 0 10
+panel_padding = 10 6 6
+panel_background_id = 1
+panel_position = bottom center horizontal
+panel_layer = top
+panel_monitor = all
+strut_policy = follow_size
+autohide = 0
+panel_dock = 0
+wm_menu = 0
+# 没有合成器（Xvfb 式远程桌面里跑 xcompmgr 不值当），alpha 走不透，直接不透明
+disable_transparency = 1
+font_shadow = 0
+mouse_effects = 1
+mouse_hover_icon_asb = 100 0 12
+mouse_pressed_icon_asb = 100 0 0
+
+#---- 窗口列表（正在运行的程序）----
+taskbar_mode = single_desktop
+taskbar_hide_if_empty = 0
+taskbar_padding = 4 2 6
+taskbar_background_id = 0
+taskbar_active_background_id = 0
+taskbar_distribute_size = 0
+taskbar_sort_order = none
+task_align = left
+
+task_text = 1
+task_icon = 1
+task_centered = 1
+task_maximum_size = 200 40
+task_padding = 6 2 6
+task_tooltip = 1
+task_font_color = #cfd8e3 100
+task_active_font_color = #ffffff 100
+task_background_id = 2
+task_active_background_id = 3
+task_iconified_background_id = 2
+task_urgent_background_id = 4
+mouse_left = toggle_iconify
+mouse_middle = none
+mouse_right = close
+mouse_scroll_up = toggle
+mouse_scroll_down = iconify
+
+#---- 启动器 ----
+launcher_padding = 4 2 6
+launcher_background_id = 0
+launcher_icon_background_id = 0
+launcher_icon_size = 30
+launcher_icon_theme = Adwaita
+launcher_icon_asb = 100 0 0
+launcher_icon_theme_override = 0
+startup_notifications = 1
+launcher_tooltip = 1
+launcher_item_app = /app/desktop/dock/applications/browser.desktop
+launcher_item_app = /app/desktop/dock/applications/terminal.desktop
+launcher_item_app = /app/desktop/dock/applications/files.desktop
+launcher_item_app = /app/desktop/dock/applications/editor.desktop
+launcher_item_app = /app/desktop/dock/applications/images.desktop
+launcher_item_app = /app/desktop/dock/applications/calculator.desktop
+
+#---- 时钟 ----
+time1_format = %H:%M
+time2_format = %m月%d日
+time1_timezone =
+time2_timezone =
+clock_font_color = #ffffff 100
+clock_padding = 8 0
+clock_background_id = 0
+clock_tooltip = %Y-%m-%d %A
+clock_tooltip_timezone =
+clock_lclick_command =
+clock_rclick_command =
+clock_mclick_command =
+clock_uwheel_command =
+clock_dwheel_command =
+
+#---- 悬停提示 ----
+tooltip_show_timeout = 0.4
+tooltip_hide_timeout = 0.2
+tooltip_padding = 8 5
+tooltip_background_id = 5
+tooltip_font_color = #e6eef7 100

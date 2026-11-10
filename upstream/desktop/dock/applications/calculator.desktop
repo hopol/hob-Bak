@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=计算器
+Name[zh_CN]=计算器
+Comment=算一算
+Exec=galculator
+Icon=galculator
+Terminal=false
+StartupNotify=true
+Categories=Utility;Calculator;

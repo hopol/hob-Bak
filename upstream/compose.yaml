@@ -1,0 +1,42 @@
+# docker compose up -d 拉取发布的镜像（加 --build 则用本目录源码构建），然后打开 http://127.0.0.1:30148
+# 首次启动前在同目录 .env 里写 HOB_PASSWORD=...；密码会以哈希存进数据卷，之后不再需要这个变量。
+services:
+  hob:
+    image: ghcr.io/ffattiger/hob:latest
+    build: .
+    restart: unless-stopped
+    environment:
+      HOB_PASSWORD: ${HOB_PASSWORD:-}
+      HOB_DESKTOP_URL: http://desktop:6080
+      HOB_DESKTOP_TOKEN_FILE: /shared/desktop-token
+      TZ: ${TZ:-UTC}
+    ports:
+      # 只监听本机，前面接带 HTTPS 的反向代理；要局域网直连改成 "30148:30148"
+      - "127.0.0.1:30148:30148"
+    volumes:
+      - hob-data:/data
+      - hob-shared:/shared:ro
+      # 让任务改宿主机上的项目：挂进来，任务里用这个路径当工作目录
+      # - ./workspace:/workspace
+    stop_grace_period: 15s
+
+  desktop:
+    profiles: [desktop]
+    image: ghcr.io/ffattiger/hob-desktop:latest
+    build: ./desktop
+    restart: unless-stopped
+    shm_size: 1gb
+    environment:
+      DESKTOP_TOKEN_EXPORT: /shared/desktop-token
+      # 时区和桌面语言要和出口网络一致：网站会对照 IP 所在地、时区和语言，对不上更容易被风控拦。
+      # TZ 是 IANA 名（默认 UTC），DESKTOP_LANG 是 BCP 47 标签（默认 zh-CN）。分辨率另用 DESKTOP_RESOLUTION（默认 1280x800）。
+      TZ: ${TZ:-UTC}
+      DESKTOP_LANG: ${DESKTOP_LANG:-zh-CN}
+    volumes:
+      - hob-desktop-data:/data
+      - hob-shared:/shared
+
+volumes:
+  hob-data:
+  hob-desktop-data:
+  hob-shared:

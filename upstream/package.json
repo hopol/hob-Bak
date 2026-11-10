@@ -1,0 +1,75 @@
+{
+  "name": "hob-bot",
+  "version": "1.5.0",
+  "description": "A self-hosted personal assistant that runs real work as background jobs.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FFatTiger/hob.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "hob": "bin/hob.mjs"
+  },
+  "files": [
+    "bin",
+    "server/src",
+    "shared",
+    "dist/web",
+    "vendor"
+  ],
+  "scripts": {
+    "dev:server": "tsx watch server/src/boot.ts",
+    "dev:web": "vite",
+    "build": "vite build && tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "tsx server/src/boot.ts",
+    "test": "vitest run",
+    "update-lore": "node scripts/update-lore.mjs",
+    "layout": "tsx server/src/layout-cli.ts",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.293",
+    "@earendil-works/pi-ai": "1.3.0",
+    "@earendil-works/pi-coding-agent": "1.3.0",
+    "@hono/node-server": "^2.1.6",
+    "@juicesharp/rpiv-config": "2.15.0",
+    "@juicesharp/rpiv-web-tools": "2.15.0",
+    "@novnc/novnc": "^1.7.0",
+    "croner": "^9.0.0",
+    "github-markdown-css": "^5.9.0",
+    "hono": "^4.6.0",
+    "katex": "^0.19.1",
+    "marked": "^18.1.3",
+    "marked-cjk-friendly": "^0.1.3",
+    "pi-claude-bridge": "0.9.3",
+    "pi-memory": "0.4.2",
+    "playwright-core": "^1.64.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsx": "^4.19.0",
+    "unpdf": "^1.9.1",
+    "web-push": "^3.6.7",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/katex": "^0.16.8",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/web-push": "^3.6.4",
+    "@types/ws": "^8.5.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0",
+    "vitest": "^5.0.5"
+  },
+  "overrides": {
+    "undici": "^8.12.3",
+    "minimatch": "^11.0.4"
+  }
+}

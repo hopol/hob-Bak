@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=文件
+Name[zh_CN]=文件
+Comment=浏览 /data 里的文件
+Exec=pcmanfm /data
+Icon=folder
+Terminal=false
+StartupNotify=true
+Categories=System;FileTools;

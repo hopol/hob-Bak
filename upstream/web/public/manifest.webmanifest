@@ -1,0 +1,16 @@
+{
+  "name": "Hob",
+  "short_name": "Hob",
+  "description": "常驻助手：任务交由后台执行，需要确认时才会通知你。",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fff0e4",
+  "theme_color": "#f6f6f4",
+  "icons": [
+    { "src": "/icons/icon-192.png?v=3", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png?v=3", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png?v=3", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

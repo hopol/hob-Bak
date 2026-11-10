@@ -1,0 +1,23 @@
+{
+  "name": "@local/lore-pi-extension",
+  "version": "1.12.5",
+  "description": "Lore memory extension for Pi agent with fixed boot baseline and recall injection",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "typebox": "^1.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2"
+  }
+}

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=图片
+Name[zh_CN]=图片
+Comment=看图
+Exec=ristretto
+Icon=org.xfce.ristretto
+Terminal=false
+StartupNotify=true
+Categories=Graphics;Viewer;

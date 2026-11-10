@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Hob 云桌面的 openbox 配置：中文标题栏、默认带关闭按钮、新窗口居中、助手浏览器开窗即最大化。
+     没写的项用 openbox 自己的默认值（rc.xml 里缺键是合法的）。 -->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <resistance>
+    <strength>10</strength>
+    <screen_edge_strength>20</screen_edge_strength>
+  </resistance>
+
+  <focus>
+    <focusNew>yes</focusNew>
+    <followMouse>no</followMouse>
+    <focusLast>yes</focusLast>
+    <underMouse>no</underMouse>
+    <raiseOnFocus>yes</raiseOnFocus>
+  </focus>
+
+  <placement>
+    <!-- 新窗口一律居中（固定大小），不像 Smart 那样往空处拐弯、不重叠也不越界 -->
+    <policy>CenterPlacement</policy>
+    <center>yes</center>
+  </placement>
+
+  <theme>
+    <name>Onyx</name>
+    <!-- N=图标 L=标签 I=最小化 M=最大化 C=关闭 -->
+    <titleLayout>NLIMC</titleLayout>
+    <keepBorder>yes</keepBorder>
+    <animateIconify>no</animateIconify>
+    <font place="ActiveWindow">
+      <name>Noto Sans CJK SC</name>
+      <size>10</size>
+      <weight>Bold</weight>
+      <slant>normal</slant>
+    </font>
+    <font place="InactiveWindow">
+      <name>Noto Sans CJK SC</name>
+      <size>10</size>
+      <weight>normal</weight>
+      <slant>normal</slant>
+    </font>
+    <font place="MenuHeader">
+      <name>Noto Sans CJK SC</name>
+      <size>10</size>
+      <weight>normal</weight>
+      <slant>normal</slant>
+    </font>
+    <font place="MenuItem">
+      <name>Noto Sans CJK SC</name>
+      <size>10</size>
+      <weight>normal</weight>
+      <slant>normal</slant>
+    </font>
+    <font place="ActiveOnScreenDisplay">
+      <name>Noto Sans CJK SC</name>
+      <size>10</size>
+      <weight>Bold</weight>
+      <slant>normal</slant>
+    </font>
+    <font place="InactiveOnScreenDisplay">
+      <name>Noto Sans CJK SC</name>
+      <size>10</size>
+      <weight>Bold</weight>
+      <slant>normal</slant>
+    </font>
+  </theme>
+
+  <desktops>
+    <number>1</number>
+    <firstdesk>1</firstdesk>
+    <names>
+      <name>桌面</name>
+    </names>
+    <popupTime>0</popupTime>
+  </desktops>
+
+  <applications>
+    <!-- 程序自己给的初始位置不管（pcmanfm/galculator 会把自己摆到左上），一律居中 -->
+    <application class="*">
+      <position force="yes">
+        <x>center</x>
+        <y>center</y>
+      </position>
+    </application>
+    <!-- 助手的浏览器：WM_CLASS 是 hob-<profile>，开窗即最大化（和 Chromium 的启动参数双保险） -->
+    <application class="hob-*">
+      <maximized>yes</maximized>
+    </application>
+  </applications>
+</openbox_config>

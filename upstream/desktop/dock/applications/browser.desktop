@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=浏览器
+Name[zh_CN]=浏览器
+Comment=打开当前屏幕的浏览器
+Exec=node /app/desktopd/dock-browser.mjs
+Icon=web-browser
+Terminal=false
+StartupNotify=true
+Categories=Network;WebBrowser;

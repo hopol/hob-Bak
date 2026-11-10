@@ -1,0 +1,140 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+const DEFAULT_BASE_URL = 'http://127.0.0.1:18901';
+const DEFAULT_TIMEOUT_MS = 30000;
+const DEFAULT_DOMAIN = 'core';
+const CLIENT_TYPE = 'pi';
+
+interface SharedLoreConfig {
+  base_url?: string;
+  api_token?: string;
+  lore_home?: string;
+  server_profile?: {
+    base_url?: string;
+    capabilities?: Record<string, boolean>;
+  };
+}
+
+export function resolveLoreHome(env: NodeJS.ProcessEnv = process.env): string {
+  const fromEnv = typeof env.LORE_HOME === 'string' ? env.LORE_HOME.trim() : '';
+  if (fromEnv) return path.resolve(fromEnv);
+  return path.join(os.homedir(), '.lore');
+}
+
+function sharedConfigPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveLoreHome(env), 'config.json');
+}
+
+function readSharedLoreConfig(): SharedLoreConfig {
+  try {
+    const raw = fs.readFileSync(sharedConfigPath(), 'utf-8');
+    const data = JSON.parse(raw);
+    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+function pickString(value: unknown): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function pickBaseUrl(cfg: any) {
+  const shared = readSharedLoreConfig();
+  const raw = pickString(cfg.baseUrl)
+    || pickString(shared.base_url)
+    || pickString(process.env.LORE_BASE_URL)
+    || DEFAULT_BASE_URL;
+  return raw.trim().replace(/\/+$/, '');
+}
+
+function skillsEnabled(cfg: any, shared: SharedLoreConfig, loreHome: string, baseUrl: string): boolean {
+  if (cfg.skillsEnabled === false || process.env.LORE_SKILLS_ENABLED === '0') return false;
+  const profileBase = pickString(shared.server_profile?.base_url).replace(/\/+$/, '').toLowerCase();
+  const profileMatches = Boolean(profileBase) && profileBase === baseUrl.replace(/\/+$/, '').toLowerCase();
+  if (profileMatches) return shared.server_profile?.capabilities?.skills === true;
+  if (cfg.skillsEnabled === true || process.env.LORE_SKILLS_ENABLED === '1') return true;
+  try {
+    return fs.readFileSync(path.join(loreHome, 'pi', '.lore-skills-enabled'), 'utf8').trim() === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function pickPluginConfig(pi: any) {
+  const cfg = pi?.pluginConfig ?? {};
+  const shared = readSharedLoreConfig();
+  const loreHome = pickString(cfg.loreHome)
+    || pickString(shared.lore_home)
+    || resolveLoreHome();
+  const baseUrl = pickBaseUrl(cfg);
+  return {
+    baseUrl,
+    apiToken: pickString(cfg.apiToken)
+      || pickString(shared.api_token)
+      || pickString(process.env.LORE_API_TOKEN)
+      || pickString(process.env.API_TOKEN),
+    timeoutMs: Number.isFinite(cfg.timeoutMs) ? Number(cfg.timeoutMs) : DEFAULT_TIMEOUT_MS,
+    defaultDomain: typeof cfg.defaultDomain === 'string' && cfg.defaultDomain.trim() ? cfg.defaultDomain.trim() : DEFAULT_DOMAIN,
+    injectPromptGuidance: cfg.injectPromptGuidance !== false,
+    startupHealthcheck: cfg.startupHealthcheck !== false,
+    recallEnabled: cfg.recallEnabled !== false,
+    skillsEnabled: skillsEnabled(cfg, shared, path.resolve(loreHome), baseUrl),
+    loreHome: path.resolve(loreHome),
+  };
+}
+
+export function textResult(text: string, details?: unknown) {
+  return { content: [{ type: 'text', text }], details };
+}
+
+export function authHeaders(pluginCfg: any, includeJson = true) {
+  const headers: Record<string, string> = {};
+  if (includeJson) headers['content-type'] = 'application/json';
+  if (pluginCfg.apiToken) headers.authorization = `Bearer ${pluginCfg.apiToken}`;
+  return headers;
+}
+
+export function buildApiUrl(pluginCfg: any, path: string) {
+  const rawPath = String(path || '');
+  const normalizedPath = `/api${rawPath.startsWith('/') ? rawPath : `/${rawPath}`}`;
+  const url = new URL(normalizedPath, `${pluginCfg.baseUrl}/`);
+  url.searchParams.set('client_type', CLIENT_TYPE);
+  return url.toString();
+}
+
+export async function fetchJson(pluginCfg: any, path: string, options: any = {}) {
+  const url = buildApiUrl(pluginCfg, path);
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      ...authHeaders(pluginCfg, options.method && options.method !== 'GET'),
+      ...(options.headers || {}),
+    },
+    signal: AbortSignal.timeout(pluginCfg.timeoutMs || DEFAULT_TIMEOUT_MS),
+  });
+
+  const text = await response.text();
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+
+  if (!response.ok) {
+    const detail = data?.detail || data?.error || text || `${response.status} ${response.statusText}`;
+    const err: any = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    err.status = response.status;
+    err.data = data;
+    throw err;
+  }
+
+  return data;
+}
+
+export function hasRecallConfig(pluginCfg: any) {
+  return Boolean(pluginCfg.recallEnabled);
+}

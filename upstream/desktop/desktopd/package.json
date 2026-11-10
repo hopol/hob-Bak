@@ -1,0 +1,17 @@
+{
+  "name": "hob-desktopd",
+  "version": "1.4.0",
+  "private": true,
+  "description": "Hob 云桌面服务：监督 Xvnc + openbox，对外只开一个带令牌的 HTTP/WS 端口。",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

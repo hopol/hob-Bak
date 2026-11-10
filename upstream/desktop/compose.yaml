@@ -1,0 +1,28 @@
+# Hob 云桌面（独立服务）：一条命令起一个可观看/可操作的 Linux 桌面容器。
+# 镜像 ghcr.io/ffattiger/hob-desktop（加 --build 用本目录源码构建）。
+# 说明见 README.md；Hob 一侧的对接是票 56。
+services:
+  hob-desktop:
+    image: ghcr.io/ffattiger/hob-desktop:latest
+    build: .
+    restart: unless-stopped
+    environment:
+      # 时区和语言要和出口网络一致：网站会对照 IP 所在地、时区和语言，对不上更容易被风控拦。
+      # 时区填 IANA 名（默认 UTC），语言填 BCP 47 标签（默认 zh-CN，如 en-US、ja-JP）。
+      TZ: ${TZ:-UTC}
+      DESKTOP_LANG: ${DESKTOP_LANG:-zh-CN}
+      # 分辨率（默认 1280x800）：DESKTOP_RESOLUTION: 1440x900
+      # 令牌（默认首次启动自动生成并写进 /data/token）：DESKTOP_TOKEN: 自定义令牌
+      # 空闲回收时间（分钟，可用小数）：DESKTOP_IDLE_MINUTES: 30
+      # 同时运行的屏幕上限：DESKTOP_MAX_SCREENS: 6
+    ports:
+      # 默认只监听本机：Hob 部署在同机时填 http://127.0.0.1:6080。
+      # 改成 "6080:6080" 会对局域网监听——令牌是明文 Bearer，跨机器请走 HTTPS 反代或内网/隧道。
+      - "127.0.0.1:6080:6080"
+    volumes:
+      - hob-desktop-data:/data
+    shm_size: 1gb
+    stop_grace_period: 60s
+
+volumes:
+  hob-desktop-data:
