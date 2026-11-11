@@ -198,6 +198,34 @@ describe("答复审批", () => {
       hob.close();
     }
   });
+
+  it("多问题卡只带 answers、没写补充说明也能答", async () => {
+    const hob = makeHob();
+    try {
+      const { app, cookie } = await appWithCookie(hob.runtime, hob.home);
+      const approval: Approval = {
+        id: "q-multi",
+        assistantId: "hob",
+        title: "导出这几处定一下",
+        options: [],
+        questions: [{ title: "放哪儿？", options: [{ key: "A", label: "对话框里" }, { key: "B", label: "页面上" }] }],
+        status: "pending",
+        source: "job",
+        jobId: "t-gone",
+        createdAt: new Date().toISOString(),
+      };
+      hob.runtime.store.saveApproval(approval);
+      const response = await app.request("/api/approvals/q-multi", {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ answers: [{ key: "A" }] }),
+      });
+      expect(response.status).toBe(200);
+      expect(hob.runtime.store.approval("q-multi")).toMatchObject({ status: "answered", answers: [{ key: "A" }] });
+    } finally {
+      hob.close();
+    }
+  });
 });
 
 describe("设置接口", () => {
@@ -274,6 +302,44 @@ describe("设置接口", () => {
 });
 
 describe("GET /api/jobs", () => {
+  it("按群及话题或单聊过滤", async () => {
+    const hob = makeHob();
+    try {
+      const { app, cookie } = await appWithCookie(hob.runtime, hob.home);
+      const group = hob.runtime.groups.create({ name: "群", purpose: "测试", ownerId: "hob", members: ["hob"] });
+      const topic = hob.runtime.groups.createTopic(group.id, "话题", "user");
+      for (const [id, groupId] of [["t-group", group.id], ["t-topic", topic.id], ["t-direct", undefined]] as const) {
+        hob.runtime.store.saveJob({ id, assistantId: "hob", title: id, instruction: "测试", status: "done", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [], ...(groupId ? { groupId } : {}) });
+      }
+      const inGroup = await (await app.request(`/api/jobs?groupId=${topic.id}`, { headers: { cookie } })).json() as { jobs: { id: string }[] };
+      expect(inGroup.jobs.map((job) => job.id).sort()).toEqual(["t-group", "t-topic"]);
+      const direct = await (await app.request("/api/jobs?groupId=none", { headers: { cookie } })).json() as { jobs: { id: string }[] };
+      expect(direct.jobs.map((job) => job.id)).toEqual(["t-direct"]);
+    } finally { hob.close(); }
+  });
+
+  it("产出按任务归属过滤群及话题", async () => {
+    const hob = makeHob();
+    try {
+      const { app, cookie } = await appWithCookie(hob.runtime, hob.home);
+      const group = hob.runtime.groups.create({ name: "群", purpose: "测试", ownerId: "hob", members: ["hob"] });
+      const topic = hob.runtime.groups.createTopic(group.id, "话题", "user");
+      for (const [id, groupId] of [["t-output-group", topic.id], ["t-output-direct", undefined]] as const) {
+        hob.runtime.store.saveJob({ id, assistantId: "hob", title: id, instruction: "测试", status: "done", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [], ...(groupId ? { groupId } : {}) });
+        const path = join(hob.home, `${id}.txt`);
+        writeFileSync(path, id);
+        await hob.runtime.knowledge.collect({ origin: "output", path, assistantId: "hob", jobId: id });
+      }
+      const page = join(hob.home, "direct-page.txt");
+      writeFileSync(page, "单聊页面");
+      await hob.runtime.knowledge.collect({ origin: "output", path: page, assistantId: "hob" });
+      const inGroup = await (await app.request(`/api/knowledge?origin=output&groupId=${group.id}`, { headers: { cookie } })).json() as { entries: { source?: { jobId?: string } }[] };
+      expect(inGroup.entries.map((entry) => entry.source?.jobId)).toEqual(["t-output-group"]);
+      const direct = await (await app.request("/api/knowledge?origin=output&groupId=none", { headers: { cookie } })).json() as { entries: { source?: { jobId?: string } }[] };
+      expect(direct.entries.map((entry) => entry.source?.jobId).sort()).toEqual(["t-output-direct", undefined].sort());
+    } finally { hob.close(); }
+  });
+
   it("新的在前，按助手和状态筛选，分页给 hasMore", async () => {
     const hob = makeHob();
     try {

@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import type { Item } from "../../shared/types.ts";
-import { answerApproval, createFromDraft } from "../src/actions.ts";
+import { answerApproval } from "../src/actions.ts";
 import { createRuntime } from "../src/runtime.ts";
 import { createApp } from "../src/http.ts";
 import { PiHost } from "../src/pi.ts";
 import { buildRouterTools } from "../src/router-tools.ts";
 import { applyDelta, mergeItems } from "../../web/src/merge.ts";
 import { call, makeHob, memoryDir, text, waitFor } from "./helpers.ts";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
 import { briefModelError } from "../src/router.ts";
 import { join } from "node:path";
 
@@ -241,11 +241,11 @@ describe("Router", () => {
     }
   });
 
-  it("propose_assistant 出草稿卡", async () => {
+  it("create_assistant 直接建好助手，草稿卡是已创建的样子", async () => {
     const hob = makeHob();
     try {
       hob.faux.setResponses([
-        call("propose_assistant", {
+        call("create_assistant", {
           name: "写作",
           duty: "周报和文章",
           dutyLong: "每周写周报，写公众号文章。",
@@ -253,24 +253,27 @@ describe("Router", () => {
           routines: [{ name: "周报", instruction: "写本周周报", schedule: "0 17 * * 5" }],
           askFirst: ["发公众号"],
           facts: ["标题不超过 20 字"],
-          conversations: 3,
         }),
-        text("做了个草稿。"),
+        text("建好了。"),
       ]);
       await hob.runtime.router.send("hob", { text: "以后写作的事单独开个助手" });
       await hob.runtime.router.waitIdle("hob");
 
       const draft = hob.runtime.store.drafts()[0];
       expect(draft).toMatchObject({
-        status: "pending",
+        status: "created",
         name: "写作",
         duty: "周报和文章",
         sprite: "page",
         routinesText: "周报 · 每周五 17:00",
-        carry: { conversations: 3 },
         instructions: ["标题不超过 20 字"],
       });
+      expect(draft).not.toHaveProperty("carry");
+      expect(hob.runtime.store.assistant(draft.createdAssistantId!)?.splitFrom).not.toHaveProperty("conversations");
+      expect(hob.runtime.store.assistant(draft.createdAssistantId!)).toMatchObject({ name: "写作", instructions: "标题不超过 20 字" });
       expect(hob.runtime.router.items("hob").items.some((item) => item.kind === "draft" && item.draftId === draft.id)).toBe(true);
+      // 不结束这一轮：建好之后模型还能接着说话
+      expect(hob.runtime.router.items("hob").items.some((item) => item.kind === "assistant" && item.text === "建好了。")).toBe(true);
     } finally {
       hob.close();
     }
@@ -375,24 +378,20 @@ describe("Router", () => {
     const hob = makeHob();
     try {
       hob.faux.setResponses([
-        call("propose_assistant", {
+        call("create_assistant", {
           name: "写作",
           duty: "周报和文章",
           dutyLong: "每周写周报。",
           sprite: "page",
           routines: [{ name: "周报", instruction: "写周报", schedule: "0 17 * * 5" }],
           facts: ["负责周报"],
-          conversations: 2,
         }),
-        text("草稿好了。"),
+        text("建好了。"),
       ]);
       await hob.runtime.router.send("hob", { text: "写作的事单独开个助手" });
       await hob.runtime.router.waitIdle("hob");
 
-      const draft = hob.runtime.store.drafts()[0];
-      const result = await createFromDraft(hob.runtime, draft.id);
-      expect(result.status).toBe(200);
-      const id = (result.body as { assistant: { id: string } }).assistant.id;
+      const id = hob.runtime.store.drafts()[0]!.createdAssistantId!;
       const items = hob.runtime.router.items(id).items;
       expect(items.map((item) => item.kind)).toEqual(["note", "assistant"]);
       expect(items[0]).toMatchObject({ kind: "note", icon: "split" });
@@ -427,20 +426,29 @@ describe("Router", () => {
       expect(await run("ask_user", { title: "发吗", options: [{ label: "发" }, { label: "别发" }] })).toContain(
         "问题卡已显示给用户。",
       );
-      expect(
-        await run("propose_assistant", {
-          name: "动态",
-          duty: "盯着模型发布和 agent 产品的最新动态",
-          dutyLong: "盯模型发布、agent 产品和开源项目，每天挑 6 条。",
-          sprite: "bird",
-          facts: ["负责模型动态"],
-        }),
-      ).toContain("草稿卡已显示给用户。");
+      await hob.runtime.jobs.waitIdle();
+    } finally {
+      hob.close();
+    }
+  });
+
+  it("新建助手的 duty 裁到 8 个字，头像只认内置的，建好不结束本轮", async () => {
+    const hob = makeHob();
+    try {
+      const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "create_assistant")!;
+      const created = (await tool.execute("tool-call", {
+        name: "动态",
+        duty: "盯着模型发布和 agent 产品的最新动态",
+        dutyLong: "盯模型发布、agent 产品和开源项目，每天挑 6 条。",
+        sprite: "bird",
+        facts: ["负责模型动态"],
+      })) as { terminate?: boolean };
+      // 不结束这一轮：建好以后还能接着说话
+      expect(created.terminate).toBeUndefined();
       expect(hob.runtime.store.drafts()[0]?.duty).toBe("盯着模型发布和");
       // 模型给的头像只认内置的，不能指到生成的头像文件上
-      await run("propose_assistant", { name: "旁门", duty: "试试", dutyLong: "试试。", sprite: "img:img-abc123.png", facts: ["负责测试"] });
+      await tool.execute("tool-call", { name: "旁门", duty: "试试", dutyLong: "试试。", sprite: "img:img-abc123.png", facts: ["负责测试"] });
       expect(hob.runtime.store.drafts().find((draft) => draft.name === "旁门")?.sprite).toBe("page");
-      await hob.runtime.jobs.waitIdle();
     } finally {
       hob.close();
     }
@@ -500,21 +508,19 @@ describe("Router", () => {
     const hob = makeHob();
     try {
       hob.faux.setResponses([
-        call("propose_assistant", {
+        call("create_assistant", {
           name: "写作",
           duty: "周报和文章",
           dutyLong: "每周写周报。",
           sprite: "page",
           routines: [],
           facts: ["负责周报"],
-          conversations: 1,
         }),
-        text("草稿好了。"),
+        text("建好了。"),
       ]);
       await hob.runtime.router.send("hob", { text: "写作的事单独开个助手" });
       await hob.runtime.router.waitIdle("hob");
-      const draft = hob.runtime.store.drafts()[0];
-      expect((await createFromDraft(hob.runtime, draft.id)).status).toBe(200);
+      expect(hob.runtime.store.drafts()[0]).toMatchObject({ status: "created" });
 
       const seen: string[] = [];
       hob.faux.setResponses([
@@ -626,6 +632,8 @@ describe("Router", () => {
   it("模型出错（限流等）不再悄无声息：对话里补一行回复失败", async () => {
     const hob = makeHob();
     try {
+      const session = (await hob.runtime.router.ensure("hob")).session!;
+      session.setAutoRetryEnabled(false);
       hob.faux.setResponses([
         fauxAssistantMessage([], {
           stopReason: "error",
@@ -635,11 +643,38 @@ describe("Router", () => {
       await hob.runtime.router.event("hob", "任务「查资料」已完成：结果在这里");
       await hob.runtime.router.waitIdle("hob");
       const notes = hob.runtime.router.items("hob").items.filter((item) => item.kind === "note");
-      // 引擎会自动重试，测试里重试吃到的是「没有更多假回复」，照样是出错收尾
       expect(notes.at(-1)).toMatchObject({ kind: "note", text: expect.stringMatching(/^回复失败：.+。发送任意消息即可重试。$/) });
     } finally {
       hob.close();
     }
+  });
+
+  it("单聊模型错误只显示失败说明，清除流式错误气泡", async () => {
+    const hob = makeHob();
+    try {
+      hob.faux.setResponses(Array.from({ length: 4 }, () => fauxAssistantMessage([fauxText("API Error: ECONNRESET")], { stopReason: "error", errorMessage: "ECONNRESET" })));
+      const events: Item[] = [];
+      const off = hob.runtime.bus.subscribe((event) => { if (event.type === "item" && event.assistantId === "hob") events.push(event.item); });
+      await hob.runtime.router.event("hob", "任务结束");
+      await hob.runtime.router.waitIdle("hob");
+      off();
+      const items = hob.runtime.router.items("hob").items;
+      expect(items.some((item) => item.kind === "note" && item.text.includes("回复失败"))).toBe(true);
+      expect(items.some((item) => item.kind === "assistant" && item.text.includes("ECONNRESET"))).toBe(false);
+      expect(mergeItems([], events).some((item) => item.kind === "assistant" && item.text.includes("ECONNRESET"))).toBe(false);
+    } finally { hob.close(); }
+  });
+
+  it("断流前已经写出来的正文照常留着，下面补一行回复失败", async () => {
+    const hob = makeHob();
+    try {
+      hob.faux.setResponses([fauxAssistantMessage([fauxText("我先查一下订阅列表")], { stopReason: "aborted", errorMessage: "stream ended before a terminal response event" })]);
+      await hob.runtime.router.event("hob", "任务结束");
+      await hob.runtime.router.waitIdle("hob");
+      const items = hob.runtime.router.items("hob").items;
+      expect(items.some((item) => item.kind === "assistant" && item.text === "我先查一下订阅列表")).toBe(true);
+      expect(items.some((item) => item.kind === "note" && item.text.includes("回复失败"))).toBe(true);
+    } finally { hob.close(); }
   });
 
   it("briefModelError 压成一句", () => {

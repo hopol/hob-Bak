@@ -9,17 +9,24 @@ export interface FilePreviewState {
 
 export type PanelPage =
   | { kind: "routine"; id: string }
-  | { kind: "newRoutine" }
+  | { kind: "newRoutine"; groupId?: string }
   | { kind: "assistant" }
-  | { kind: "routines" | "skills" | "knowledge" | "rules" }
+  | { kind: "groupSettings"; id: string }
+  /** 群信息里点了某个成员：右栏换成这个助手的信息页，群聊留在中间 */
+  | { kind: "member"; id: string }
+  /** 群里的一个事项：从事项卡或群信息里打开 */
+  | { kind: "project"; groupId: string; id: string }
+  | { kind: "routines" | "skills" | "knowledge" | "rules"; groupId?: string }
   | { kind: "jobs" }
-  | { kind: "job"; id: string; round?: number }
+  | { kind: "job"; id: string; round?: number; full?: boolean; instant?: boolean }
   | ({ kind: "file" } & FilePreviewState);
 
 function samePage(a: PanelPage, b: PanelPage): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "routine" && b.kind === "routine") return a.id === b.id;
   if (a.kind === "job" && b.kind === "job") return a.id === b.id;
+  if (a.kind === "member" && b.kind === "member") return a.id === b.id;
+  if (a.kind === "project" && b.kind === "project") return a.id === b.id;
   if (a.kind === "file" && b.kind === "file") return a.liveId || b.liveId ? a.liveId === b.liveId : a.path === b.path;
   return true;
 }
@@ -34,6 +41,12 @@ export function selectPanelStack(stack: PanelPage[], previous: string | null, ne
   return previous !== next && !keep ? [] : stack;
 }
 
+/** 右栏现在讲的是哪个助手：栈里有群成员页就是那个成员，否则是选中的助手。 */
+export function panelAssistant(stack: PanelPage[], sel: string | null): string {
+  const member = stack.findLast((page) => page.kind === "member");
+  return member?.kind === "member" ? member.id : sel ?? "hob";
+}
+
 export function popPage(stack: PanelPage[]): PanelPage[] {
   return stack.slice(0, -1);
 }
@@ -43,7 +56,7 @@ export function replacePage(stack: PanelPage[], page: PanelPage): PanelPage[] {
 }
 
 export function pageKey(page: PanelPage): string {
-  return `${page.kind}:${"id" in page ? page.id : "path" in page ? page.liveId ?? page.path : ""}`;
+  return `${page.kind}:${page.kind === "project" ? `${page.groupId}/${page.id}` : "id" in page ? page.id : "path" in page ? page.liveId ?? page.path : ""}`;
 }
 
 export type GonePage = { page: PanelPage; index: number; leaving: boolean };

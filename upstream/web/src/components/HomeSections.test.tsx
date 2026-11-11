@@ -69,6 +69,14 @@ describe("首页头像状态", () => {
     for (const html of render(busy)) expect(html).toContain('class="av-mark present stuck"');
   });
 
+  it("任务提了问在等助手回，不算等你确认，算在办", () => {
+    state.jobs.asking = { assistantId: "a", status: "waiting" };
+    for (const html of render(assistant)) {
+      expect(html).not.toContain('class="av-mark present ask"');
+      expect(html).toContain('class="av-mark present busy"');
+    }
+  });
+
   it("转交出去的活还在对方那儿跑时，自己的头像不转圈", () => {
     state.jobs = {};
     state.delegations = { dg: { from: "a", to: "b", status: "running" } };

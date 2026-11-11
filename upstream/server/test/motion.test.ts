@@ -20,7 +20,7 @@ describe("火苗动画", () => {
   });
 
   it("工具标签有中文、参数和长度限制", () => {
-    const names = ["start_job", "reply_job", "stop_job", "ask_user", "set_rule", "remove_rule", "create_routine", "update_routine", "delete_routine", "send_file", "set_avatar", "propose_assistant", "message_assistant", "hand_back_to_hob", "show_page", "web_search", "web_fetch", "memory_read", "memory_write", "lore_get_node", "lore_create_node", "read_skill", "generate_image", "overview"];
+    const names = ["start_job", "reply_job", "stop_job", "ask_user", "set_rule", "remove_rule", "create_routine", "update_routine", "delete_routine", "send_file", "set_avatar", "create_assistant", "message_assistant", "hand_back_to_hob", "show_page", "web_search", "web_fetch", "memory_read", "memory_write", "lore_get_node", "lore_create_node", "read_skill", "generate_image", "overview"];
     for (const name of names) expect(activityLabel(name)).not.toBe("调用工具");
     expect(activityLabel("start_job", { title: "检查磁盘" })).toBe("派任务：检查磁盘");
     expect(activityLabel("message_assistant", { assistantId: "ops" }, () => "运维")).toBe("交给「运维」");
@@ -91,6 +91,9 @@ describe("火苗动画", () => {
       const activity = events.filter((e) => e.type === "router-activity").map((e) => e.activity);
       expect(activity[0]).toEqual({ state: "thinking", label: "正在想…" });
       expect(activity).toContainEqual({ state: "tool", label: "改规矩" });
+      // 工具跑完回到「正在想…」，不挂着上一个工具的名字等下一次回复
+      const tool = activity.findIndex((item) => item?.label === "改规矩");
+      expect(activity.slice(tool + 1).find((item) => item?.label !== "改规矩")).toEqual({ state: "thinking", label: "正在想…" });
       expect(activity.at(-1)).toBeNull();
       expect(hob.runtime.router.bootstrap().assistants[0].activity).toBeNull();
     } finally { hob.close(); }

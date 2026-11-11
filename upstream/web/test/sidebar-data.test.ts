@@ -19,20 +19,18 @@ describe("右栏数据", () => {
     expect(routineSummary([], "UTC")).toBe("没有");
     expect(routineSummary([routine(false)], "UTC")).toBe("1 个 · 已暂停");
   });
-  it.each(["running", "queued", "waiting"] as const)("%s 是当前任务，只有运行中显示命令行", (status) => {
+  it.each(["running", "queued", "waiting"] as const)("%s 只有运行中显示命令行", (status) => {
     const result = sidebarJobs([job(status), job("done")], "a");
-    expect(result.active?.status).toBe(status);
     expect(result.running?.status).toBe(status === "running" ? status : undefined);
     expect(result.last?.status).toBe("done");
   });
   it("无任务和空闲最近任务", () => {
-    expect(sidebarJobs([], "a")).toMatchObject({ active: undefined, running: undefined, last: undefined, recent: [] });
+    expect(sidebarJobs([], "a")).toMatchObject({ running: undefined, last: undefined });
     expect(sidebarJobs([job("failed")], "a").last?.status).toBe("failed");
   });
-  it("最近任务只显示当前助手最新的 20 条", () => {
-    const jobs = Array.from({ length: 25 }, (_, i) => ({ ...job("done", String(i)), createdAt: new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString() }));
-    const other = { ...job("done", "other"), assistantId: "other", createdAt: "2027-01-01T00:00:00Z" };
-    expect(sidebarJobs([...jobs, other], "a").recent.map((item) => item.id)).toEqual(Array.from({ length: 20 }, (_, i) => String(24 - i)));
+  it("只显示当前助手的任务", () => {
+    const other = { ...job("running", "other"), assistantId: "other" };
+    expect(sidebarJobs([other, job("done")], "a")).toMatchObject({ running: undefined, last: job("done") });
   });
   it("助手状态统一计算并按确认、执行、排队排序", () => {
     const a = { id: "a", busy: false };
@@ -46,7 +44,8 @@ describe("右栏数据", () => {
     expect(assistantStatus(a, [job("queued")], [], [])).toBe("排队中");
     expect(assistantStatus(a, [], [], [])).toBe("空闲");
     expect(assistantStatus({ ...a, busy: true }, [job("running"), job("queued")], [approval], [delegation])).toBe("等你确认");
-    expect(assistantStatus(a, [job("running"), job("waiting"), job("queued")], [], [])).toBe("等你确认");
+    // 任务提了问在等助手回：不是等用户，算执行中
+    expect(assistantStatus(a, [job("waiting"), job("queued")], [], [])).toBe("执行中");
     expect(assistantStatus(a, [job("running"), job("queued")], [], [])).toBe("执行中");
     expect(assistantStatus(a, [job("queued")], [], [delegation])).toBe("执行中");
     expect(assistantStatus(a, [job("running")], [{ ...approval, assistantId: "other", source: "job", jobId: "running" }], [])).toBe("等你确认");

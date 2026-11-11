@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AssistantMenu } from "./components/AssistantMenu.tsx";
 import { Chat, ChatPage } from "./components/Chat.tsx";
 import { DropFiles } from "./components/DropFiles.tsx";
@@ -10,6 +10,9 @@ import { MobileList, Sheet } from "./components/Mobile.tsx";
 import { Panel } from "./components/Panel.tsx";
 import { SettingsPage } from "./components/Settings.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
+import { GroupSidebar, MobileTopics } from "./components/Topics.tsx";
+import { Home } from "./components/Home.tsx";
+import { groupSidebarFor } from "./topics.ts";
 import { useLeave } from "./motion.ts";
 import { applyUpdate } from "./pwa.ts";
 import { gonePages, layerList, pageKey, type GonePage } from "./panel-stack.ts";
@@ -42,10 +45,21 @@ function rawError(text: string): string {
 export function App() {
   const s = useApp();
   const [narrow, setNarrow] = useState(() => window.innerWidth < 768);
-  const chat = useLeave(s.mobile === "chat" && Boolean(s.sel), 240);
+  const chat = useLeave(s.mobile === "chat" && Boolean(s.sel ?? s.gsel), 240);
   const settings = useLeave(s.page === "settings", 180);
   const knowledge = useLeave(s.page === "knowledge", 180);
   const sheet = useLeave(s.sheet, 180);
+  // 左栏的群二级页（桌面）和手机的话题列表：退场时还要画着刚才那个群，id 先记下来
+  const sideGroup = groupSidebarFor(s.gsel, s.sideHome, s.groups);
+  const groupSide = useLeave(Boolean(sideGroup), 180);
+  const sideGroupId = useRef<string | undefined>(undefined);
+  if (sideGroup) sideGroupId.current = sideGroup.id;
+  // 打开页面时就在群里：二级页直接在那，不播推入
+  const sideStill = useRef(Boolean(sideGroup));
+  if (!groupSide.mounted) sideStill.current = false;
+  const topicsPane = useLeave(s.mobile !== "list" && Boolean(s.gsel), 180);
+  const topicsGroupId = useRef<string | undefined>(undefined);
+  if (s.mobile !== "list" && s.gsel) topicsGroupId.current = s.gsel;
   const top = s.panelStack.at(-1);
   const layers = useLayers(s.panelStack, s.sel);
   const mobileLayers = layers.map(({ page, leaving }) => (
@@ -84,9 +98,9 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const n = s.assistants.reduce((sum, a) => sum + a.unread, 0);
+    const n = s.assistants.reduce((sum, a) => sum + a.unread, 0) + s.groups.reduce((sum, g) => sum + g.unread, 0);
     document.title = n > 0 ? `(${n}) Hob` : "Hob";
-  }, [s.assistants]);
+  }, [s.assistants, s.groups]);
 
   useEffect(() => {
     if (!s.notice) return;
@@ -147,15 +161,22 @@ export function App() {
     );
   }
 
-  const filePreview = top?.kind === "file" ? top : null;
+  const fullPage = (top?.kind === "file" || top?.kind === "job") && top.full;
+  // 桌面没打开对话就是首页：右栏收起，点开的任务、文件照样盖上来
+  const home = !s.sel && !s.gsel;
 
   if (narrow) {
     return (
       <>
         <div className="mapp">
-          <div className={`mpane list${s.mobile === "chat" ? " back" : ""}`}>
+          <div className={`mpane list${s.mobile === "list" ? "" : " back"}`}>
             <MobileList />
           </div>
+          {topicsPane.mounted ? (
+            <div className={`mpane topics${topicsPane.leaving ? " out" : s.mobile === "chat" ? " back" : ""}`}>
+              <MobileTopics groupId={topicsGroupId.current} />
+            </div>
+          ) : null}
           {chat.mounted ? (
             <div className={`mpane chat${chat.leaving ? " out" : ""}`}>
               <ChatPage />
@@ -172,14 +193,23 @@ export function App() {
   }
 
   return (
-    <div className={`app${filePreview?.full ? " preview-full" : ""}`}>
-      <Sidebar />
-      <Chat />
+    <div className={`app${fullPage ? " preview-full" : ""}`}>
+      <div className="sidestack">
+        <div className={`sidepane home${sideGroup ? " away" : ""}`} aria-hidden={sideGroup ? true : undefined}>
+          <Sidebar />
+        </div>
+        {groupSide.mounted ? (
+          <div className={`sidepane grp${groupSide.leaving ? " out" : ""}${sideStill.current ? " still" : ""}`}>
+            <GroupSidebar groupId={sideGroupId.current} />
+          </div>
+        ) : null}
+      </div>
+      {home ? <Home /> : <Chat />}
       {/* 右栏宽度只跟根页走（收起、云桌面展开）；上面的页盖上去，宽页直接盖在对话区上，不挤对话区 */}
-      <div className={`panelwrap${filePreview?.full ? " full" : s.collapsed ? " off" : s.nowWide ? " wide" : ""}`}>
+      <div className={`panelwrap${fullPage ? " full" : home || s.collapsed ? " off" : s.nowWide ? " wide" : ""}`}>
         <Panel page={null} />
         {layers.map(({ page, leaving }) => (
-          <div key={pageKey(page)} className={`panel-layer${page.kind === "file" || page.kind === "job" || page.kind === "jobs" ? " wide" : ""}${leaving ? " leaving" : ""}`}>
+          <div key={pageKey(page)} className={`panel-layer${page.kind === "file" || page.kind === "job" || page.kind === "jobs" || page.kind === "project" ? " wide" : ""}${page.kind === "job" && page.instant ? " instant" : ""}${leaving ? " leaving" : ""}`}>
             {page.kind === "file" ? <FilePreviewOverlay embedded page={page} />
               : page.kind === "job" || page.kind === "jobs" ? <JobOverlay embedded page={page} />
               : <Panel page={page} />}

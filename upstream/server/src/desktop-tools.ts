@@ -107,7 +107,7 @@ export class DesktopToolSession {
     }
     this.connections.clear();
   }
-  tools(): ToolDefinition<any, any>[] {
+  tools(canSeeImages = this.canSeeImages): ToolDefinition<any, any>[] {
     const allowPublic = this.runtime.settings.settings.desktop?.publicAssistants?.includes(this.assistantId) ?? false;
     const make = (name: string, label: string, description: string, parameters: any, run: (params: any, screen: string) => Promise<string | Buffer>): ToolDefinition<any, any> => ({
       name, label, description,
@@ -134,7 +134,7 @@ export class DesktopToolSession {
               const files = readdirSync(dir).filter((name) => /^\d{8}T\d{9}\.png$/.test(name)).sort();
               for (const name of files.slice(0, -20)) unlinkSync(join(dir, name));
               const send = this.router ? "用 send_file 发它" : "report 时放进 files";
-              if (!(typeof this.canSeeImages === "function" ? this.canSeeImages() : this.canSeeImages)) return { content: [{ type: "text" as const, text: `当前模型不能看图。截图已存到 ${path}：要给用户看，${send}；要自己读页面内容，用 browser_snapshot。` }], details: undefined };
+              if (!(typeof canSeeImages === "function" ? canSeeImages() : canSeeImages)) return { content: [{ type: "text" as const, text: `当前模型不能看图。截图已存到 ${path}：要给用户看，${send}；要自己读页面内容，用 browser_snapshot。` }], details: undefined };
               return { content: [{ type: "image" as const, data: value.toString("base64"), mimeType: "image/png" }, { type: "text" as const, text: `截图已存到 ${path}。要给用户看，${send}。` }], details: undefined };
             }
             return { content: [{ type: "text" as const, text: value }], details: undefined };

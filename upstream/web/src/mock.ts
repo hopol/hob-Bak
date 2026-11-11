@@ -1,11 +1,16 @@
 // 浏览器内的假后端：只有 URL 带 ?mock=1 时才会用它。数据照 docs/design/v2 的 6 张效果图。
 import type {
   Approval,
+  ApprovalQuestion,
   AssistantSummary,
   Bootstrap,
   Delegation,
   DesktopView,
   Draft,
+  Group,
+  GroupItem,
+  GroupItemsPage,
+  GroupSummary,
   HobEvent,
   ImageKeyView,
   ImageSettings,
@@ -20,9 +25,12 @@ import type {
   MemoryConfig,
   MemoryProvider,
   Profile,
+  Project,
+  ProjectStage,
   Routine,
   RoutineRun,
   Rule,
+  Subtask,
   ThinkingLevelMapSetting,
   ModelsView,
   ModelThinkingView,
@@ -40,29 +48,43 @@ import type {
   WorklogEntry,
 } from "../../shared/types.ts";
 import { defaultSearch } from "../../shared/search.ts";
+import { subtaskStatus } from "../../shared/project.ts";
 import { knowledgeGroup, type KnowledgeCollection, type KnowledgeEntry } from "../../shared/knowledge.ts";
 import type { McpView } from "../../shared/mcp.ts";
 import type { AssistantSkill } from "../../shared/skills.ts";
 import { ApiError, type HobApi } from "./api.ts";
 import { normalizeThinkingMap, thinkingPlan } from "../../shared/thinking.ts";
 
-export type SceneId = "readme-chat" | "readme-cards" | "readme-dark" | "readme-rules" | "readme-desktop" | "readme-page" | "readme-knowledge" | "readme-list" | "readme-question" | "readme-profile" | "image" | "act-demo" | "act-think" | "act-tool" | "act-dark" | "act-home" | "boot" | "bubbles" | "bubbles-dark" | "card-130" | "card-130-dark" | "routine-check-dark" | "routine-once" | "routine-once-dark" | "routine-once-list" | "s1" | "s2" | "s3" | "s4" | "s6" | "mlist" | "mchat" | "d-running" | "d-waiting" | "d-done" | "d-dark" | "d-source" | "d-mobile" | "h-hob" | "h-dark" | "h-source" | "h-settings" | "h-mobile";
+export type SceneId = "g-owns" | "g-owns-dark" | "readme-chat" | "readme-cards" | "readme-desktop" | "readme-knowledge" | "readme-profile" | "readme-group-now" | "readme-mobile-list" | "readme-mobile-chat" | "readme-mobile-project" | "image" | "act-demo" | "act-think" | "act-tool" | "act-dark" | "act-home" | "boot" | "bubbles" | "bubbles-dark" | "card-130" | "card-130-dark" | "job-after" | "job-after-dark" | "routine-check-dark" | "routine-once" | "routine-once-dark" | "routine-once-list" | "ask-rounds" | "ask-rounds-answered" | "ask-rounds-group" | "ask-rounds-dark" | "ask-rounds-mobile" | "s1" | "s2" | "s3" | "s4" | "s6" | "mlist" | "mchat" | "d-running" | "d-waiting" | "d-done" | "d-dark" | "d-source" | "d-mobile" | "h-hob" | "h-dark" | "h-source" | "h-settings" | "h-mobile" | "g-chat" | "g-mention" | "g-mobile" | "g-dark" | "g-team" | "p-clarify" | "p-plan" | "p-doing" | "p-card" | "p-check" | "p-done" | "p-dropped" | "p-dark" | "p-mobile" | "topics" | "topics-plain";
 
-/** 每个截图场景对应的界面状态（选中哪个助手、右栏开什么）。 */
+/** 演示场景对应的事项阶段（g6、g7 那件「登录页加「记住我」」）。 */
+const PROJECT_SCENES: Partial<Record<SceneId, ProjectStage>> = {
+  "g-team": "doing",
+  "p-doing": "doing",
+  "p-dark": "doing",
+  "p-mobile": "doing",
+  "p-clarify": "clarify",
+  "p-plan": "plan",
+  "p-card": "plan",
+  "p-check": "review",
+  "p-done": "done",
+  "p-dropped": "dropped",
+};
+
+/** 每个截图场景对应的界面状态（选中哪个助手或群、右栏开什么）。 */
 export const SCENE_UI: Record<
   SceneId,
-  { sel: string | null; panel: string; collapsed: boolean; dark: boolean; mobile: "list" | "chat" }
+  { sel: string | null; gsel?: string | null; panel: string; collapsed: boolean; dark: boolean; mobile: "list" | "chat"; text?: string }
 > = {
   "readme-chat": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "readme-cards": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
-  "readme-dark": { sel: "hob", panel: "now", collapsed: false, dark: true, mobile: "chat" },
-  "readme-rules": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "readme-desktop": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
-  "readme-page": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "readme-knowledge": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
-  "readme-list": { sel: null, panel: "now", collapsed: false, dark: false, mobile: "list" },
-  "readme-question": { sel: "page", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "readme-profile": { sel: "page", panel: "assistant", collapsed: false, dark: false, mobile: "chat" },
+  "readme-group-now": { sel: null, gsel: "t-readme", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "readme-mobile-list": { sel: null, panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "readme-mobile-chat": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "readme-mobile-project": { sel: null, gsel: "t-readme", panel: "project:t-readme/p-readme", collapsed: false, dark: false, mobile: "chat" },
   image: { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "act-demo": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "act-think": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
@@ -74,10 +96,17 @@ export const SCENE_UI: Record<
   "bubbles-dark": { sel: "hob", panel: "now", collapsed: false, dark: true, mobile: "chat" },
   "card-130": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "card-130-dark": { sel: "hob", panel: "now", collapsed: false, dark: true, mobile: "chat" },
+  "job-after": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "job-after-dark": { sel: "hob", panel: "now", collapsed: false, dark: true, mobile: "chat" },
   "routine-check-dark": { sel: "hob", panel: "routine:r-pr-watch", collapsed: false, dark: true, mobile: "chat" },
   "routine-once": { sel: "hob", panel: "routine:r-pay-rent", collapsed: false, dark: false, mobile: "chat" },
   "routine-once-dark": { sel: "hob", panel: "routine:r-watch-files", collapsed: false, dark: true, mobile: "chat" },
   "routine-once-list": { sel: "hob", panel: "routines", collapsed: false, dark: false, mobile: "chat" },
+  "ask-rounds": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "ask-rounds-answered": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "ask-rounds-group": { sel: null, gsel: "g-home", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "ask-rounds-dark": { sel: "hob", panel: "now", collapsed: false, dark: true, mobile: "chat" },
+  "ask-rounds-mobile": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   s1: { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
   s2: { sel: "bird", panel: "routine:r-daily", collapsed: false, dark: false, mobile: "list" },
   s3: { sel: "page", panel: "assistant", collapsed: false, dark: false, mobile: "list" },
@@ -96,6 +125,27 @@ export const SCENE_UI: Record<
   "h-source": { sel: "server", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "h-settings": { sel: "server", panel: "assistant", collapsed: false, dark: false, mobile: "chat" },
   "h-mobile": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  // 群：桌面群聊、@ 点名、手机、深色、左栏展开（敏捷团队）
+  "g-chat": { sel: null, gsel: "g-home", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "g-mention": { sel: null, gsel: "g-home", panel: "now", collapsed: false, dark: false, mobile: "chat", text: "@" },
+  "g-mobile": { sel: null, gsel: "g-home", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "g-dark": { sel: null, gsel: "g-home", panel: "now", collapsed: false, dark: true, mobile: "chat" },
+  "g-owns-dark": { sel: null, gsel: "g-dev", panel: "now", collapsed: false, dark: true, mobile: "chat" },
+  "g-owns": { sel: null, gsel: "g-dev", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "g-team": { sel: null, gsel: "g-dev", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  // 事项：需求澄清中、拆好了等确认、执行中、验收中（一条没过）、已完成、已放弃、深色、手机
+  "p-clarify": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: false, mobile: "chat" },
+  "p-plan": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: false, mobile: "chat" },
+  "p-card": { sel: null, gsel: "g-dev", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "p-doing": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: false, mobile: "chat" },
+  "p-check": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: false, mobile: "chat" },
+  "p-done": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: false, mobile: "chat" },
+  "p-dropped": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: false, mobile: "chat" },
+  "p-dark": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: true, mobile: "chat" },
+  "p-mobile": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: false, mobile: "chat" },
+  // 话题（票 152）：软件开发群、无工作方式的群
+  topics: { sel: null, gsel: "g-topics", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "topics-plain": { sel: null, gsel: "g-home", panel: "now", collapsed: false, dark: false, mobile: "chat" },
 };
 
 const uid = (() => {
@@ -203,6 +253,9 @@ const DESKTOP_VIEWS: Record<DesktopScene, DesktopView> = {
 
 interface Db {
   assistants: AssistantSummary[];
+  groups: GroupSummary[];
+  groupItems: Record<string, GroupItem[]>;
+  projects: Record<string, Project[]>;
   items: Record<string, Item[]>;
   jobs: Record<string, Job>;
   delegations: Record<string, Delegation>;
@@ -356,6 +409,85 @@ function buildDb(scene: SceneId): Db {
       instructions: "",
       createdAt: at(18, 9, 0),
       last: { text: "本周三次训练已记录", at: at(2, 19, 0) },
+      unread: 0,
+      busy: false,
+    },
+    // 自带的敏捷团队（收起的助手）：g6、g7 里的五个人
+    {
+      id: "po",
+      name: "产品负责人",
+      duty: "需求和优先级",
+      dutyLong: "把用户的想法问清楚，写成需求说明和验收标准，拆成子任务分给合适的成员；做完以后对照验收标准验收。拿不准用户要什么时先问用户。",
+      sprite: "sticky:purple",
+      primary: false,
+      pinned: false,
+      hidden: true,
+      notify: true,
+      instructions: "",
+      createdAt: at(5, 10, 0),
+      last: { text: "需求说明已完成，拆分为 4 个子任务", at: at(0, 9, 41) },
+      unread: 0,
+      busy: false,
+    },
+    {
+      id: "arch",
+      name: "架构师",
+      duty: "方案和设计",
+      dutyLong: "定方案、拆边界，写清接口和数据结构，让动手的人不用猜。",
+      sprite: "blocks:slate",
+      primary: false,
+      pinned: false,
+      hidden: true,
+      notify: true,
+      instructions: "",
+      createdAt: at(5, 10, 0),
+      last: { text: "30 天的长效 token 放 httpOnly cookie", at: at(0, 9, 44) },
+      unread: 0,
+      busy: false,
+    },
+    {
+      id: "dev",
+      name: "开发",
+      duty: "写代码",
+      dutyLong: "按需求和子任务实现，先写一个会失败的检查，做完自审。",
+      sprite: "code:green",
+      primary: false,
+      pinned: false,
+      hidden: true,
+      notify: true,
+      instructions: "",
+      createdAt: at(5, 10, 0),
+      last: { text: "开工", at: at(0, 9, 45) },
+      unread: 0,
+      busy: true,
+    },
+    {
+      id: "qa",
+      name: "测试",
+      duty: "验收和回归",
+      dutyLong: "没参与做的时候，对照需求说明和验收标准逐条查，附上证据。",
+      sprite: "bug:red",
+      primary: false,
+      pinned: false,
+      hidden: true,
+      notify: true,
+      instructions: "",
+      createdAt: at(5, 10, 0),
+      unread: 0,
+      busy: false,
+    },
+    {
+      id: "release",
+      name: "发布",
+      duty: "上线和回滚",
+      dutyLong: "发版、上线和回滚，写清这次上了什么、怎么退回去。",
+      sprite: "rocket:orange",
+      primary: false,
+      pinned: false,
+      hidden: true,
+      notify: true,
+      instructions: "",
+      createdAt: at(5, 10, 0),
       unread: 0,
       busy: false,
     },
@@ -706,7 +838,7 @@ cp now.txt "$seen"`,
       id: "i-b0",
       at: at(7, 9, 0),
       icon: "split",
-      text: `${new Date(at(7, 9, 0)).getMonth() + 1}月${new Date(at(7, 9, 0)).getDate()}日 由 Hob 创建 · 迁移 8 段对话、14 条记忆`,
+      text: `${new Date(at(7, 9, 0)).getMonth() + 1}月${new Date(at(7, 9, 0)).getDate()}日 由 Hob 创建`,
     },
     asst("i-b1", at(1, 9, 0), "昨天 5 条，没有特别要紧的。[看全部 5 条](https://example.com/)", {
       id: "r-daily",
@@ -817,7 +949,7 @@ cp now.txt "$seen"`,
     const delegation: Delegation = { id: "dg-demo", from: "hob", to: "server", text: "检查服务器磁盘和服务状态，清理前先确认，不要影响正在运行的服务。", createdAt: minsAgo(6), status, jobIds: ["t-delegated"], approvalIds: [] };
     delegations[delegation.id] = delegation;
     jobs["t-delegated"] = { ...jobRunning, id: "t-delegated", assistantId: "server", delegationId: delegation.id, title: "检查服务器状态", status: status === "waiting" ? "waiting" : status };
-    if (status === "waiting") approvals["ap-delegation"] = { id: "ap-delegation", assistantId: "server", title: "清理旧日志吗？", detail: "将清理七天前的日志。", options: [{ key: "A", label: "清理旧日志" }, { key: "B", label: "暂不清理" }], status: "pending", source: "job", jobId: "t-delegated", createdAt: minsAgo(2) };
+    if (status === "waiting") approvals["ap-delegation"] = { id: "ap-delegation", assistantId: "server", title: "清理旧日志吗？", detail: "将清理七天前的日志。", options: [{ key: "A", label: "清理旧日志" }, { key: "B", label: "暂不清理" }], recommended: "A", status: "pending", source: "job", jobId: "t-delegated", createdAt: minsAgo(2) };
     items.hob = [{ kind: "user", id: "d-user", at: minsAgo(7), text: "检查一下服务器的磁盘和服务状态。" }, { kind: "delegation", id: "d-card", at: minsAgo(6), delegationId: delegation.id }];
     items.server = [{ kind: "user", id: "d-forward", at: minsAgo(6), text: delegation.text, from: { assistantId: "hob", name: "Hob", delegationId: delegation.id } }, { kind: "job", id: "d-job", at: minsAgo(5), jobId: "t-delegated" }, ...(status === "waiting" ? [{ kind: "question" as const, id: "d-question", at: minsAgo(2), approvalId: "ap-delegation" }] : [])];
   }
@@ -875,7 +1007,6 @@ cp now.txt "$seen"`,
       stats: { reads: 3, commands: 0, edits: 1 }, summary: "已整理周报初稿，等待确认后发送。",
       activity: [{ at: minsAgo(4), verb: "读", text: "周报/本周素材.md" }, { at: minsAgo(3), verb: "说", text: "周报初稿已整理。" }],
     };
-    if (scene === "readme-list") jobs[active.id] = active;
     if (scene === "readme-chat") jobs["readme-active"] = { ...active, assistantId: "hob", title: "整理实施清单", instruction: "整理团队资料的实施清单。", activity: [{ at: minsAgo(1), verb: "读", text: "团队资料/需求.md" }] };
     for (const key of Object.keys(approvals)) delete approvals[key];
     approvals["readme-approval"] = { id: "readme-approval", assistantId: "page", title: "将周报发到团队群吗？", detail: "周报初稿已整理好，发送前请确认。", options: [{ key: "A", label: "发送" }, { key: "B", label: "暂不发送" }], status: "pending", source: "router", createdAt: minsAgo(1) };
@@ -891,7 +1022,7 @@ cp now.txt "$seen"`,
       asst("readme-browser-reply", minsAgo(2), "已在浏览器中打开示例网站，这是当前页面的截图。"),
       { kind: "file", id: "readme-browser-shot", at: minsAgo(1), path: "/mock/desktop.jpg", name: "网页截图.jpg" },
     ];
-    if (scene === "readme-chat") {
+    if (scene === "readme-chat" || scene === "readme-mobile-chat") {
       approvals["readme-chat-approval"] = { id: "readme-chat-approval", assistantId: "hob", title: "将方案发给团队吗？", options: [{ key: "A", label: "发送" }, { key: "B", label: "暂不发送" }], status: "pending", source: "router", createdAt: minsAgo(1) };
       items.hob = [
         { kind: "user", id: "readme-user", at: minsAgo(9), text: "比较团队资料的整理方式，给我一个建议和实施清单。" },
@@ -944,8 +1075,671 @@ cp now.txt "$seen"`,
     ];
   }
 
+  if (scene === "job-after" || scene === "job-after-dark") {
+    // 票 142 的验收场景：排队里的任务卡在等前置任务
+    const waiting = (id: string, title: string, after: string[]): Job => ({ id, assistantId: "hob", title, instruction: title, status: "queued", createdAt: minsAgo(3), stats: { reads: 0, commands: 0, edits: 0 }, activity: [], after });
+    const first: Job = { id: "t-after-a", assistantId: "hob", title: "先查目录", instruction: "查一下目录里有几个文件", status: "running", createdAt: minsAgo(5), startedAt: minsAgo(5), stats: { reads: 1, commands: 1, edits: 0 }, activity: [{ at: minsAgo(1), verb: "跑", text: "ls /tmp/资料 | wc -l" }] };
+    const second = waiting("t-after-b", "再写总结", [first.id]);
+    const third = waiting("t-after-c", "发布总结", [first.id, second.id]);
+    for (const job of [first, second, third]) jobs[job.id] = job;
+    items.hob = [
+      { kind: "user", id: "after-user", at: minsAgo(6), text: "先查一下目录里有几个文件，查完再按数量写一句总结，最后发给我。" },
+      asst("after-plan", minsAgo(5), "分三步：先查目录，按数量写一句总结，最后发布。后面两步等前面做完再开始。"),
+      { kind: "job", id: "after-card-a", at: minsAgo(5), jobId: first.id },
+      { kind: "job", id: "after-card-b", at: minsAgo(4), jobId: second.id },
+      { kind: "job", id: "after-card-c", at: minsAgo(3), jobId: third.id },
+    ];
+  }
+
+  /* ---------------- 群 ---------------- */
+  // 群里的一段对话：两件事穿插、@、引用、任务卡、提问卡（效果图 g2 ~ g5 用的就是这一段）
+  const groupJob = (patch: Partial<Job> & { id: string; assistantId: string; title: string }): Job => ({
+    instruction: patch.title,
+    status: "done",
+    createdAt: at(0, 9, 10),
+    startedAt: at(0, 9, 12),
+    endedAt: at(0, 9, 14),
+    durationMs: 120_000,
+    stats: { reads: 3, commands: 1, edits: 0 },
+    activity: [],
+    groupId: "g-home",
+    ...patch,
+  });
+  const homeJobs = [
+    groupJob({ id: "t-g-log", assistantId: "house", title: "查看昨晚的备份日志", endedAt: at(0, 9, 14), durationMs: 60_000 }),
+    groupJob({ id: "t-g-clean", assistantId: "server", title: "清理 /backup 旧快照", startedAt: at(0, 9, 15), endedAt: at(0, 9, 17) }),
+    groupJob({ id: "t-g-backup", assistantId: "house", title: "重新备份相册", startedAt: at(0, 9, 19), endedAt: at(0, 9, 25), durationMs: 360_000 }),
+    {
+      ...groupJob({ id: "t-g-dl", assistantId: "server", title: "检查下载目录", startedAt: minsAgo(2) }),
+      status: "running" as const,
+      endedAt: undefined,
+      instruction: "看看下载目录里有什么能清，清之前列出来。",
+      stats: { reads: 2, commands: 4, edits: 0 },
+      activity: [
+        { at: minsAgo(2), verb: "$" as const, text: "du -sh /data/downloads/*" },
+        { at: minsAgo(1), verb: "读" as const, text: "/data/downloads" },
+      ],
+    },
+  ];
+  for (const job of homeJobs) jobs[job.id] = job;
+  approvals["ap-g-snap"] = {
+    id: "ap-g-snap",
+    assistantId: "server",
+    groupId: "g-home",
+    title: "删掉 /backup 里 30 天前的 11 个快照吗？",
+    detail: "一共 86 GB，最近 30 天的都留着。",
+    options: [{ key: "A", label: "删除" }],
+    status: "answered",
+    chosen: "A",
+    source: "router",
+    createdAt: at(0, 9, 15),
+    answeredAt: at(0, 9, 16),
+  };
+
+  const homeItems: GroupItem[] = [
+    { kind: "note", id: "gh-1", at: at(2, 15, 0), icon: "split", text: "Hob 建了群「家里机器」：家里 NAS、服务器", speaker: "user" },
+    { kind: "user", id: "gh-2", at: at(0, 9, 12), text: "昨晚相册好像没备份上，看看怎么回事", speaker: "user" },
+    { kind: "assistant", id: "gh-3", at: at(0, 9, 12), text: "@家里 NAS 先看下昨晚的备份日志，找到出错的地方。", speaker: "hob" },
+    { kind: "job", id: "gh-4", at: at(0, 9, 13), jobId: "t-g-log", speaker: "house" },
+    { kind: "assistant", id: "gh-5", at: at(0, 9, 14), text: "备份在 02:14 中断：服务器上的 /backup 只剩 1.2 GB，这次要传 4.6 GB。\n@服务器 能腾点空间出来吗？", speaker: "house" },
+    { kind: "user", id: "gh-6", at: at(0, 9, 15), text: "顺便看下下载目录，好像也快满了", speaker: "user" },
+    { kind: "job", id: "gh-7", at: at(0, 9, 15), jobId: "t-g-clean", speaker: "server" },
+    { kind: "question", id: "gh-8", at: at(0, 9, 15), approvalId: "ap-g-snap", speaker: "server" },
+    { kind: "assistant", id: "gh-9", at: at(0, 9, 16), text: "删好了，/backup 现在空出 87 GB。@家里 NAS 可以重新备份了。", quote: { itemId: "gh-5", text: "能腾点空间出来吗？" }, speaker: "server" },
+    { kind: "assistant", id: "gh-10", at: at(0, 9, 18), text: "@服务器 这件也交给你：看看下载目录里有什么能清，清之前列给我们看。", quote: { itemId: "gh-6", text: "顺便看下下载目录，好像也快满了" }, speaker: "hob" },
+    { kind: "job", id: "gh-11", at: at(0, 9, 19), jobId: "t-g-backup", speaker: "house" },
+    { kind: "assistant", id: "gh-12", at: at(0, 9, 19), text: "补上了：新增 312 张，共 4.6 GB。", speaker: "house" },
+    { kind: "assistant", id: "gh-13", at: at(0, 9, 26), text: "相册这件办完了：服务器的备份盘满了，删掉 11 个旧快照后，相册已经补上。", quote: { itemId: "gh-2", text: "昨晚相册好像没备份上，看看怎么回事" }, speaker: "hob" },
+    { kind: "job", id: "gh-14", at: at(0, 9, 27), jobId: "t-g-dl", speaker: "server" },
+  ];
+
+  jobs["t-g-dev"] = { ...groupJob({ id: "t-g-dev", assistantId: "server", title: "实现「记住我」", startedAt: minsAgo(6) }), groupId: "g-dev", status: "running", endedAt: undefined };
+  approvals["ap-g-dev"] = {
+    id: "ap-g-dev",
+    assistantId: "po",
+    groupId: "g-dev",
+    title: "换了设备还要记住登录吗？",
+    detail: "这决定 token 绑不绑设备。",
+    options: [{ key: "A", label: "不用，换设备重新登录" }],
+    status: "answered",
+    chosen: "A",
+    source: "router",
+    createdAt: at(0, 9, 40),
+    answeredAt: at(0, 9, 41),
+  };
+
+  // 事项：g6、g7 那件「登录页加「记住我」」。演示场景按阶段各给一套数据。
+  const demoStage = PROJECT_SCENES[scene];
+  const projectJobs: Job[] = [];
+  const projectJob = (n: number, assistantId: string, title: string, patch: Partial<Job>): Job => {
+    const job = groupJob({ id: `t-p-${n}`, assistantId, title, groupId: "g-dev", ...patch });
+    projectJobs.push(job);
+    return job;
+  };
+  const acceptance = ["勾选后关掉浏览器再打开，仍是登录状态", "不勾选时，关掉浏览器要重新登录", "退出登录后，旧的记住状态失效"];
+  const requirements = "# 登录页加「记住我」\n\n## 要解决的问题\n每次关掉浏览器都要重新登录，常用的人觉得麻烦。\n\n## 做成什么样\n- 勾选「记住我」后 30 天内免登录\n- 换设备、换浏览器要重新登录\n- 退出登录后，这台设备的记住状态马上失效\n\n## 定下来的做法\n1. **存在哪里**：30 天的长效 token 放 `httpOnly` cookie，库里只存哈希（架构师定）。\n2. **换设备**：不跨设备记住，换设备重新登录（你定的）。\n\n## 不做的\n- 不做「记住账号但要输密码」";
+  const subtasks: Subtask[] = [
+    { n: 1, title: "定方案", assignee: "arch", brief: "定下 token 存哪里、多久过期、换设备怎么处理，写清接口和数据结构。", after: [], ...(demoStage && demoStage !== "clarify" && demoStage !== "plan" ? { jobId: "t-p-1" } : {}) },
+    { n: 2, title: "实现「记住我」", assignee: "dev", brief: "按方案把勾选、30 天免登录、换设备重新登录做出来，带上测试。", after: [1], ...(demoStage === "doing" || demoStage === "review" || demoStage === "done" ? { jobId: "t-p-2" } : {}) },
+    { n: 3, title: "验收用例和回归", assignee: "qa", brief: "对照验收标准逐条验，附上截图和结果，再跑一遍登录相关的旧用例。", after: [2], check: true, ...(demoStage === "review" || demoStage === "done" ? { jobId: "t-p-3" } : {}) },
+    // 用户这一步只等第 1 个（方案），这样执行中的页面上能同时看到进行中、等待前置任务、待你执行
+    { n: 4, title: "上线前用手机试一次", assignee: "user", brief: "发版后用手机浏览器登录一次，勾上「记住我」，关掉浏览器再打开看还在不在。", after: [1], ...(demoStage === "done" || demoStage === "review" ? { doneAt: at(0, 9, 58) } : {}) },
+  ];
+  if (demoStage && demoStage !== "clarify" && demoStage !== "plan") {
+    projectJob(1, "arch", "定方案", { status: "done", startedAt: at(0, 9, 42), endedAt: at(0, 9, 46), durationMs: 240_000 });
+    if (demoStage === "doing") projectJob(2, "dev", "实现「记住我」", { status: "running", createdAt: at(0, 9, 45), startedAt: minsAgo(6), endedAt: undefined });
+    else if (demoStage !== "dropped") {
+      projectJob(2, "dev", "实现「记住我」", { status: "done", startedAt: at(0, 9, 45), endedAt: at(0, 10, 12), durationMs: 1_620_000 });
+      projectJob(3, "qa", "验收用例和回归", { status: "done", startedAt: at(0, 10, 14), endedAt: at(0, 10, 26), durationMs: 720_000 });
+    }
+  }
+  const remember: Project | undefined = demoStage ? {
+    id: "p-remember",
+    groupId: "g-dev",
+    title: "登录页加「记住我」",
+    ownerId: "po",
+    stage: demoStage,
+    request: { text: "登录页加一个「记住我」，下周发版前要上", itemId: "gd-2", at: at(0, 9, 38) },
+    clarify: [
+      { title: "换了设备还要记住登录吗？", why: "这决定 token 绑不绑设备。", options: ["按设备记", "不绑设备"], recommended: "按设备记，换设备重新登录", answer: "不用，换设备重新登录", askedBy: "po", at: at(0, 9, 40), answeredAt: at(0, 9, 41) },
+      { title: "勾选后多久内免登录？", why: "时间太长，设备丢了风险大。", options: ["7 天", "30 天"], recommended: "30 天", askedBy: "po", at: at(0, 9, 40), ...(demoStage === "clarify" ? {} : { answer: "30 天" }) },
+    ],
+    ...(demoStage === "clarify" ? {} : { requirements: { content: requirements, acceptance, updatedAt: at(0, 9, 41) } }),
+    subtasks: demoStage === "clarify" ? [] : subtasks,
+    ...(demoStage === "doing" || demoStage === "review" || demoStage === "done" || demoStage === "dropped" ? { startedAt: at(0, 9, 42) } : {}),
+    ...(demoStage === "review" ? { checks: [
+      { index: 1, passed: true, evidence: "勾选后关掉浏览器再打开，仍是登录状态。", jobId: "t-p-3", at: at(0, 10, 26) },
+      { index: 2, passed: false, evidence: "不勾选时关掉浏览器，重新打开仍是登录状态：cookie 写的时候没看勾选。", jobId: "t-p-3", at: at(0, 10, 26) },
+    ] } : {}),
+    ...(demoStage === "done" ? {
+      checks: [
+        { index: 1, passed: true, evidence: "勾选后关掉浏览器再打开，仍是登录状态。", jobId: "t-p-3", at: at(0, 10, 26) },
+        { index: 2, passed: true, evidence: "不勾选时关掉浏览器，重新打开要重新登录。", jobId: "t-p-3", at: at(0, 10, 26) },
+        { index: 3, passed: true, evidence: "退出登录后接口返回 401，旧的记住状态失效。", jobId: "t-p-3", at: at(0, 10, 26) },
+      ],
+      summary: "登录页的「记住我」已经上线：勾选后 30 天内免登录，换设备和换浏览器要重新登录，退出登录马上失效。你在手机上试过一遍，三条验收标准都通过。",
+    } : {}),
+    ...(demoStage === "dropped" ? { summary: "这个功能先不做了：下个版本改用短信验证码登录，记住我这件事交给它。" } : {}),
+    ...(demoStage === "done" || demoStage === "dropped" ? { endedAt: at(0, 11, 0) } : {}),
+    itemId: "gd-5",
+    createdAt: at(0, 9, 38),
+    updatedAt: demoStage === "done" || demoStage === "dropped" ? at(0, 11, 0) : at(0, 9, 45),
+  } : undefined;
+  if (remember) for (const job of projectJobs) jobs[job.id] = job;
+  // 敏捷团队的群信息里还有两件已经结束的事项：一件做完了、一件放弃了
+  const endedProjects: Project[] = scene === "g-team" ? [
+    {
+      id: "p-export",
+      groupId: "g-dev",
+      title: "导出加按月筛选",
+      ownerId: "po",
+      stage: "done",
+      request: { text: "导出的表格想按月份筛", at: at(12, 10, 0) },
+      clarify: [],
+      requirements: { content: "导出菜单里选月份，只导出那个月的记录。", acceptance: ["选二月导出，只有二月的记录"], updatedAt: at(11, 10, 0) },
+      subtasks: [],
+      startedAt: at(11, 11, 0),
+      checks: [{ index: 1, passed: true, evidence: "二月导出 218 行，全部是二月的记录。", jobId: "t-p-1", at: at(3, 16, 0) }],
+      summary: "导出的菜单里加了月份筛选，验收通过。",
+      itemId: "gd-export",
+      createdAt: at(12, 10, 0),
+      updatedAt: at(3, 16, 0),
+      endedAt: at(3, 16, 0),
+    },
+    {
+      id: "p-colorway",
+      groupId: "g-dev",
+      title: "首页配色改版",
+      ownerId: "po",
+      stage: "dropped",
+      request: { text: "首页的颜色换一换", at: at(6, 11, 0) },
+      clarify: [],
+      subtasks: [],
+      summary: "先不动配色，等下个版本一起改。",
+      itemId: "gd-colorway",
+      createdAt: at(6, 11, 0),
+      updatedAt: at(5, 11, 0),
+      endedAt: at(5, 11, 0),
+    },
+  ] : [];
+
+  const projectCard: GroupItem[] = remember ? [{ kind: "project", id: "gd-5", at: at(0, 9, 41), projectId: remember.id, speaker: "po" }] : [];
+  const projectRun: GroupItem[] = remember && demoStage !== "clarify" && demoStage !== "plan" ? [
+    { kind: "job", id: "gd-6", at: at(0, 9, 43), jobId: "t-p-1", speaker: "arch" },
+    { kind: "assistant", id: "gd-7", at: at(0, 9, 46), text: "30 天的长效 token 放 httpOnly cookie，库里只存哈希。", speaker: "arch" },
+    ...(demoStage === "dropped" ? [] : [{ kind: "job" as const, id: "gd-8", at: at(0, 9, 47), jobId: "t-p-2", speaker: "dev" }]),
+  ] : [];
+  const devItems: GroupItem[] = [
+    { kind: "note", id: "gd-1", at: at(5, 10, 0), icon: "split", text: "你建了群「敏捷团队」：产品负责人、架构师、开发、测试、发布", speaker: "user" },
+    { kind: "user", id: "gd-2", at: at(0, 9, 38), text: "登录页加一个「记住我」，下周发版前要上", speaker: "user" },
+    { kind: "question", id: "gd-3", at: at(0, 9, 40), approvalId: "ap-g-dev", speaker: "po" },
+    ...(remember && demoStage !== "clarify" ? [{ kind: "assistant" as const, id: "gd-4", at: at(0, 9, 41), text: "需求说明已完成，拆分为 4 个子任务，按顺序执行；第 4 个需要由你执行。", speaker: "po" }] : []),
+    ...projectCard,
+    ...projectRun,
+    ...(remember && (demoStage === "doing" || demoStage === "review" || demoStage === "done" || demoStage === "dropped") ? [{ kind: "assistant" as const, id: "gd-9", at: at(0, 9, 49), text: "@开发 按方案做，做完先在本地把三条验收标准跑一遍。", speaker: "po" }] : []),
+  ];
+
+  const groups: GroupSummary[] = [
+    {
+      id: "g-home",
+      name: "家里机器",
+      purpose: "家里 NAS 和服务器上的存储、备份和服务",
+      ownerId: "hob",
+      members: ["hob", "house", "server"],
+      createdAt: at(2, 15, 0),
+      last: { at: at(0, 9, 27), speaker: "server", text: "开始检查下载目录" },
+      unread: 0,
+      busy: ["server"],
+    },
+    {
+      id: "g-dev",
+      name: "敏捷团队",
+      purpose: "小工具和页面：需求、方案、开发、测试和发布",
+      ownerId: "po",
+      members: ["po", "arch", "dev", "qa", "release"],
+      createdAt: at(5, 10, 0),
+      last: { at: at(0, 9, 49), speaker: "po", text: "按方案做，做完先在本地把三条验收标准跑一遍" },
+      unread: 1,
+      busy: demoStage === "doing" ? ["dev"] : [],
+    },
+  ];
+
+  // 票 147 的验收场景：一张卡问几个问题（待回答、已回答、群里、深色、手机）
+  if (scene.startsWith("ask-rounds")) {
+    const hob = assistants.find((item) => item.id === "hob")!;
+    hob.busy = false;
+    hob.last = { text: "有三处会改变做法，一起问清楚。", at: minsAgo(4) };
+    const answered = scene === "ask-rounds-answered";
+    const questions: ApprovalQuestion[] = [
+      {
+        title: "月份筛选放在导出对话框里，还是页面上直接选？",
+        why: "放在哪决定要不要动页面布局，也决定这一版谁改。",
+        options: [{ key: "A", label: "导出对话框里选月份" }, { key: "B", label: "页面上加一个月份选择器" }],
+        recommended: "A",
+      },
+      {
+        title: "默认导出哪一段时间？",
+        why: "默认值决定大多数人一路点下去的后果。",
+        options: [{ key: "A", label: "当前月份" }, { key: "B", label: "最近三个月" }, { key: "C", label: "全部" }],
+        recommended: "A",
+      },
+      {
+        title: "查不到订单的月份怎么出文件？",
+        why: "导出的文件要给同事直接用表格软件打开。",
+        options: [{ key: "A", label: "只出表头，写一句没有记录" }, { key: "B", label: "不导出，提示没有订单" }],
+        recommended: "A",
+      },
+    ];
+    approvals["ap-ask-rounds"] = {
+      id: "ap-ask-rounds",
+      assistantId: "hob",
+      title: "导出加按月筛选，这几处定一下",
+      detail: "定完就能开工；同意推荐的话直接提交。",
+      options: [],
+      questions,
+      status: answered ? "answered" : "pending",
+      ...(answered
+        ? { answers: [{ key: "A" }, { key: "B" }, { text: "空月份也出表头，备注一句没有记录" }], answerText: "先按这个做，下周我看效果。", answeredAt: minsAgo(2) }
+        : {}),
+      source: "router",
+      createdAt: minsAgo(4),
+    };
+    items.hob = [
+      { kind: "user", id: "ask-user", at: minsAgo(8), text: "给导出的订单加上按月筛选，你先把要定的问清楚，别自己拍。" },
+      asst("ask-plan", minsAgo(6), "有三处会改变做法，一起问清楚；按推荐来回复就行。"),
+      { kind: "question", id: "ask-card", at: minsAgo(4), approvalId: "ap-ask-rounds" },
+      ...(answered ? [asst("ask-done", minsAgo(2), "好，按这个写需求说明；空月份的备注我按你说的先定下。")] : []),
+    ];
+
+    const groupQuestions: ApprovalQuestion[] = [
+      {
+        title: "30 GB 以上的电影怎么处理？",
+        why: "外置盘只剩 40 GB，删了要重新下载。",
+        options: [{ key: "A", label: "删掉" }, { key: "B", label: "挪到外置盘" }],
+        recommended: "A",
+      },
+      {
+        title: "旧安装包还留着吗？",
+        why: "留着能回滚，删了省 8 GB。",
+        options: [{ key: "A", label: "留着" }, { key: "B", label: "删掉" }],
+        recommended: "A",
+      },
+    ];
+    approvals["ap-ask-group"] = {
+      id: "ap-ask-group",
+      assistantId: "server",
+      groupId: "g-home",
+      title: "下载目录里这几个大文件怎么处理",
+      detail: "删了要重新下载，不动的话这周就满了。",
+      options: [],
+      questions: groupQuestions,
+      status: "pending",
+      source: "router",
+      createdAt: minsAgo(2),
+    };
+    homeItems.push(
+      { kind: "assistant", id: "ask-g1", at: minsAgo(3), text: "下载目录看完了：四个电影占 130 GB，旧安装包 8 GB。", speaker: "server" },
+      { kind: "question", id: "ask-g2", at: minsAgo(2), approvalId: "ap-ask-group", speaker: "server" },
+    );
+  }
+
+  // 票 152：话题和工作方式的演示场景。服务端 151 的行为在下面 createMock 里模拟；
+  // 这里只摆数据：软件开发群三个进行中的话题（等你回答、执行中、验收中）和两个关了的，
+  // 「无」工作方式的群两个进行中的话题（没有事项，所以没有阶段标签）。
+  const topicItems: Record<string, GroupItem[]> = {};
+  const topicProjects: Record<string, Project[]> = {};
+  const readmeTopicItems: Record<string, GroupItem[]> = {};
+  const readmeTopicProjects: Record<string, Project[]> = {};
+
+  if (scene === "readme-group-now" || scene === "readme-mobile-list" || scene === "readme-mobile-chat" || scene === "readme-mobile-project") {
+    const product = assistants.find((assistant) => assistant.id === "page")!;
+    const developer = assistants.find((assistant) => assistant.id === "bird")!;
+    const tester = assistants.find((assistant) => assistant.id === "coin")!;
+    product.name = "产品负责人";
+    product.duty = "需求和验收";
+    product.sprite = "sticky:purple";
+    developer.name = "开发";
+    developer.duty = "写代码";
+    developer.sprite = "code:green";
+    developer.last = { text: "深色模式正在实现。", at: minsAgo(3) };
+    tester.name = "测试";
+    tester.duty = "测试和验证";
+    tester.sprite = "bug:red";
+    tester.last = { text: "主要页面的验收准备好了。", at: minsAgo(5) };
+    const readmeGroup: GroupSummary = {
+      id: "g-readme",
+      name: "网站项目",
+      purpose: "网站体验、开发和发布",
+      ownerId: product.id,
+      members: [product.id, developer.id, tester.id],
+      createdAt: at(4, 10, 0),
+      workflow: "software",
+      last: { at: minsAgo(10), speaker: "page", text: "已建立深色模式话题" },
+      unread: 1,
+      busy: [developer.id],
+    };
+    const readmeTopic: GroupSummary = {
+      id: "t-readme",
+      name: "网站加深色模式",
+      purpose: readmeGroup.purpose,
+      ownerId: readmeGroup.ownerId,
+      members: [...readmeGroup.members],
+      createdAt: minsAgo(8),
+      parentId: readmeGroup.id,
+      createdBy: product.id,
+      workflow: "software",
+      last: { at: minsAgo(1), speaker: developer.id, text: "深色主题正在实现。" },
+      unread: 1,
+      busy: [developer.id],
+      project: { id: "p-readme", title: "网站加深色模式", stage: "doing", done: 1, total: 3, waitingUser: false, current: developer.id },
+    };
+    // 左栏的群二级页：一件在拆分、一件已经做完关了，和正在做的那件一起
+    const readmeSearch: GroupSummary = {
+      ...readmeTopic, id: "t-readme-search", name: "博客加站内搜索", createdAt: minsAgo(50), createdBy: product.id, unread: 0, busy: [],
+      last: { at: minsAgo(20), speaker: product.id, text: "需求说明写好了，正在拆子任务。" },
+      project: { id: "p-readme-search", title: "博客加站内搜索", stage: "plan", done: 0, total: 0, waitingUser: false, current: product.id },
+    };
+    const readmeLazy: GroupSummary = {
+      ...readmeTopic, id: "t-readme-lazy", name: "图片懒加载", createdAt: at(3, 10, 0), createdBy: product.id, unread: 0, busy: [],
+      closedAt: at(1, 17, 0), closeNote: "3 条验收标准都过了，已上线",
+      last: { at: at(1, 17, 0), speaker: product.id, text: "3 条验收标准都过了，已上线" },
+      project: { id: "p-readme-lazy", title: "图片懒加载", stage: "done", done: 2, total: 2, waitingUser: false },
+    };
+    groups.splice(0, groups.length, readmeGroup, readmeTopic, readmeSearch, readmeLazy);
+    for (const [id, job] of Object.entries(jobs)) {
+      if (job.groupId && job.groupId !== readmeTopic.id) delete jobs[id];
+    }
+    const readmePlan: Job = {
+      id: "readme-site-plan", assistantId: tester.id, groupId: readmeTopic.id, title: "检查页面颜色对比度",
+      instruction: "检查网站现有页面的颜色对比度。", status: "done", createdAt: minsAgo(7), startedAt: minsAgo(7), endedAt: minsAgo(5), durationMs: 120000,
+      stats: { reads: 5, commands: 2, edits: 0 }, summary: "已记录主要页面的颜色对比度。", activity: [],
+    };
+    const readmeBuild: Job = {
+      id: "readme-site-build", assistantId: developer.id, groupId: readmeTopic.id, title: "实现深色模式",
+      instruction: "按颜色变量为网站加入深色模式，带上切换入口和测试。", status: "running", createdAt: minsAgo(4), startedAt: minsAgo(4),
+      stats: { reads: 12, commands: 4, edits: 8 }, activity: [{ at: minsAgo(1), verb: "改", text: "web/src/theme.css" }],
+    };
+    jobs[readmePlan.id] = readmePlan;
+    jobs[readmeBuild.id] = readmeBuild;
+    readmeTopicProjects[readmeTopic.id] = [{
+      id: "p-readme", groupId: readmeTopic.id, title: "网站加深色模式", ownerId: product.id, stage: "doing",
+      request: { text: "给网站加深色模式，手机和电脑都要好用。", at: minsAgo(8), itemId: "readme-topic-request" },
+      clarify: [{ title: "深色模式跟随系统还是手动切换？", why: "这决定入口放在哪里，也影响首次打开时的颜色。", options: ["跟随系统", "手动切换"], recommended: "跟随系统", answer: "跟随系统，也保留手动切换", askedBy: product.id, at: minsAgo(7), answeredAt: minsAgo(6) }],
+      requirements: { content: "# 网站加深色模式\n\n## 做成什么样\n- 页面默认跟随系统的浅色或深色偏好\n- 设置里可以手动切换\n- 手机和电脑的主要页面都能清楚阅读", acceptance: ["跟随系统切换时页面颜色正确", "手动切换后刷新仍保持选择", "手机和电脑的文字、按钮都清楚"], updatedAt: minsAgo(6) },
+      subtasks: [
+        { n: 1, title: "检查页面颜色对比度", assignee: tester.id, brief: "检查主要页面的颜色对比度。", after: [], jobId: readmePlan.id },
+        { n: 2, title: "实现深色模式", assignee: developer.id, brief: "按方案加入系统跟随、手动切换和测试。", after: [1], jobId: readmeBuild.id },
+        { n: 3, title: "验收主要页面", assignee: tester.id, brief: "在电脑和手机上逐条核对颜色、文字和切换。", after: [2], check: true },
+      ],
+      startedAt: minsAgo(7), itemId: "readme-project-card", createdAt: minsAgo(8), updatedAt: minsAgo(1),
+    }];
+    readmeTopicItems[readmeTopic.id] = [
+      { kind: "user", id: "readme-topic-request", at: minsAgo(8), text: "给网站加深色模式，手机和电脑都要好用。", speaker: "user" },
+      { kind: "question", id: "readme-topic-question", at: minsAgo(7), approvalId: "readme-topic-approval", speaker: product.id },
+      { kind: "assistant", id: "readme-topic-summary", at: minsAgo(6), text: "跟随系统，保留手动开关；需求和验收标准已写好。", speaker: product.id },
+      { kind: "job", id: "readme-topic-plan-card", at: minsAgo(5), jobId: readmePlan.id, speaker: tester.id },
+      { kind: "assistant", id: "readme-topic-plan-result", at: minsAgo(5), text: "主要页面的对比度已记录。", speaker: tester.id },
+      { kind: "job", id: "readme-topic-build-card", at: minsAgo(4), jobId: readmeBuild.id, speaker: developer.id },
+    ];
+    approvals["readme-topic-approval"] = { id: "readme-topic-approval", assistantId: product.id, groupId: readmeTopic.id, title: "深色模式怎么切换？", detail: "这决定入口放在哪里，也影响首次打开时的颜色。", options: [{ key: "A", label: "跟随系统，也保留手动切换" }, { key: "B", label: "只提供手动切换" }], status: "answered", chosen: "A", source: "router", createdAt: minsAgo(7), answeredAt: minsAgo(6) };
+    readmeTopicItems[readmeGroup.id] = [
+      { kind: "note", id: "readme-group-note", at: at(4, 10), icon: "split", text: "你建了群「网站项目」：产品负责人、开发、测试", speaker: "user" },
+      { kind: "topic", id: "readme-topic-card", at: minsAgo(8), topicId: readmeTopic.id, speaker: product.id },
+    ];
+  }
+
+  if (scene === "topics" || scene === "topics-plain") {
+    const software = scene === "topics";
+    const host: GroupSummary = software
+      ? {
+          id: "g-topics",
+          name: "Hob 开发",
+          purpose: "Hob 仓库的需求、方案、开发、测试和发布",
+          ownerId: "po",
+          members: ["po", "arch", "dev", "qa", "release"],
+          createdAt: at(30, 10, 0),
+          workflow: "software",
+          last: { at: at(0, 9, 52), speaker: "po", text: "按方案做，做完先在本地把三条验收标准跑一遍" },
+          unread: 0,
+          busy: [],
+        }
+      : groups.find((g) => g.id === "g-home")!;
+    if (software) groups.push(host);
+
+    const topic = (patch: Partial<GroupSummary> & { id: string; name: string }): GroupSummary => ({
+      purpose: host.purpose,
+      ownerId: host.ownerId,
+      members: [...host.members],
+      createdAt: at(0, 9, 30),
+      parentId: host.id,
+      createdBy: "po",
+      unread: 0,
+      busy: [],
+      ...(host.workflow ? { workflow: host.workflow } : {}),
+      ...patch,
+    });
+
+    const projectOf = (patch: Partial<Project> & { id: string; groupId: string; title: string }): Project => ({
+      ownerId: "po",
+      stage: "clarify",
+      request: { text: patch.title, at: at(0, 9, 30) },
+      clarify: [],
+      subtasks: [],
+      itemId: "",
+      createdAt: at(0, 9, 30),
+      updatedAt: at(0, 9, 30),
+      ...patch,
+    });
+
+    // 进行中 3：一个等你回答、一个执行中、一个验收中
+    const tExport = topic({
+      id: "t-export",
+      name: "导出月度报表",
+      createdAt: at(0, 9, 30),
+      last: { at: at(0, 9, 31), speaker: "po", text: "有两个问题要你定：按自然月还是按账期？导出 Excel 还是 CSV？" },
+      unread: 2,
+      ...(software ? { project: { id: "p-t-export", title: "导出月度报表", stage: "clarify" as const, done: 0, total: 0, waitingUser: true, current: "po" } } : {}),
+    });
+    const tRemember = topic({
+      id: "t-remember",
+      name: "登录页加「记住我」",
+      createdAt: at(0, 9, 38),
+      last: { at: at(0, 9, 50), speaker: "dev", text: "「实现记住我」在做，方案按架构师定的 httpOnly cookie。" },
+      ...(software ? { project: { id: "p-t-remember", title: "登录页加「记住我」", stage: "doing" as const, done: 1, total: 4, waitingUser: false, current: "dev" } } : {}),
+    });
+    const tUpload = topic({
+      id: "t-upload",
+      name: "上传大文件失败",
+      createdAt: at(0, 9, 44),
+      last: { at: at(0, 9, 47), speaker: "qa", text: "3 条验收标准过了 2 条，第 3 条（断网续传）在复测" },
+      ...(software ? { project: { id: "p-t-upload", title: "上传大文件失败", stage: "review" as const, done: 3, total: 3, waitingUser: false, current: "qa" } } : {}),
+    });
+    // 已关闭 2：一件做完了、一件放弃了
+    const tExportMonth = topic({
+      id: "t-export-month",
+      name: "导出加按月筛选",
+      createdAt: at(14, 10, 0),
+      closedAt: at(3, 16, 0),
+      closeNote: "4 条验收标准都过了，已上线",
+      last: { at: at(3, 16, 0), speaker: "po", text: "4 条验收标准都过了，已上线" },
+      ...(software ? { project: { id: "p-t-export-month", title: "导出加按月筛选", stage: "done" as const, done: 1, total: 1, waitingUser: false } } : {}),
+    });
+    const tColorway = topic({
+      id: "t-colorway",
+      name: "首页配色改版",
+      createdAt: at(6, 11, 0),
+      closedAt: at(5, 11, 0),
+      closeNote: "你说先不做了，原因记在事项里",
+      last: { at: at(5, 11, 0), speaker: "po", text: "先不动配色，等下个版本一起改。" },
+      ...(software ? { project: { id: "p-t-colorway", title: "首页配色改版", stage: "dropped" as const, done: 0, total: 0, waitingUser: false } } : {}),
+    });
+
+    if (software) {
+      groups.push(tExport, tRemember, tUpload, tExportMonth, tColorway);
+    } else {
+      // 「无」工作方式：两个话题，没有事项，也没有阶段标签
+      const tDisk = topic({ id: "t-disk", name: "换新硬盘", createdAt: at(1, 20, 0), createdBy: "hob", last: { at: at(1, 20, 10), speaker: "hob", text: "新盘到了告诉我，迁移步骤已经在话题里列好。" } });
+      const tBackup = topic({ id: "t-backup", name: "相册备份出错", createdAt: at(0, 9, 10), createdBy: "hob", unread: 1, last: { at: at(0, 9, 10), speaker: "house", text: "补上了 312 张，有 3 张读不出来，原图可能坏了，要你看一眼。" } });
+      const tDownload = topic({ id: "t-download", name: "清理下载目录", createdAt: at(4, 21, 0), createdBy: "hob", closedAt: at(2, 22, 0), closeNote: "清出来 11 GB，安装包都删了" });
+      const tNas = topic({ id: "t-nas", name: "NAS 换盘位", createdAt: at(9, 19, 0), createdBy: "hob", closedAt: at(7, 19, 0), closeNote: "盘位换好了，拷贝校验通过" });
+      groups.push(tDisk, tBackup, tDownload, tNas);
+      topicItems[tDisk.id] = [
+        { kind: "user", id: "td-1", at: at(1, 20, 0), text: "新硬盘到了，怎么换", speaker: "user" },
+        { kind: "assistant", id: "td-2", at: at(1, 20, 10), text: "新盘到了告诉我，迁移步骤已经在话题里列好。", speaker: "hob" },
+      ];
+      topicItems[tBackup.id] = [
+        { kind: "user", id: "tb-1", at: at(0, 9, 10), text: "相册备份好像少了图片", speaker: "user" },
+        { kind: "assistant", id: "tb-2", at: at(0, 9, 10), text: "补上了 312 张，有 3 张读不出来，原图可能坏了，要你看一眼。", speaker: "house" },
+      ];
+      topicItems[tDownload.id] = [
+        { kind: "user", id: "tn-1", at: at(4, 21, 0), text: "下载目录满了", speaker: "user" },
+        { kind: "assistant", id: "tn-2", at: at(2, 22, 0), text: "清出来 11 GB，旧安装包都删了。", speaker: "server" },
+      ];
+      topicItems[tNas.id] = [
+        { kind: "user", id: "ts-1", at: at(9, 19, 0), text: "NAS 的盘位换一下", speaker: "user" },
+        { kind: "assistant", id: "ts-2", at: at(7, 19, 0), text: "盘位换好了，拷贝校验通过。", speaker: "hob" },
+      ];
+      homeItems.push(
+        { kind: "topic", id: "gh-1", at: at(1, 20, 20), topicId: tDisk.id, speaker: "hob" },
+        { kind: "topic", id: "gh-2", at: at(0, 9, 12), topicId: tBackup.id, speaker: "hob" },
+      );
+    }
+
+    topicItems[tRemember.id] = [
+      { kind: "user", id: "tr-1", at: at(0, 9, 38), text: "登录页加一个「记住我」，下周发版前要上", speaker: "user", ...(software ? { forwardedFrom: { groupId: host.id, itemId: "gt-4" } } : {}) },
+      { kind: "assistant", id: "tr-2", at: at(0, 9, 40), text: "换了设备还要记住登录吗？\n这决定 token 绑不绑设备。", speaker: "po" },
+      { kind: "assistant", id: "tr-3", at: at(0, 9, 41), text: "需求说明已完成，拆分为 4 个子任务，按顺序执行；第 4 个需要由你执行。", speaker: "po" },
+      ...(software ? [{ kind: "project" as const, id: "tr-3b", at: at(0, 9, 41), projectId: "p-t-remember", speaker: "po" }] : []),
+      ...(software ? [{ kind: "job" as const, id: "tr-4", at: at(0, 9, 43), jobId: "t-tp-1", speaker: "arch" }] : []),
+      { kind: "assistant", id: "tr-5", at: at(0, 9, 46), text: "方案定了：30 天的长效 token 放 httpOnly cookie，库里只存哈希。", speaker: "arch" },
+      ...(software ? [{ kind: "job" as const, id: "tr-6", at: at(0, 9, 47), jobId: "t-tp-2", speaker: "dev" }] : []),
+      { kind: "assistant", id: "tr-7", at: at(0, 9, 49), text: "@开发 按方案做，做完先在本地把三条验收标准跑一遍。", speaker: "po" },
+      { kind: "assistant", id: "tr-8", at: at(0, 9, 50), text: "收到，在做了，预计 20 分钟。", speaker: "dev" },
+    ];
+    topicItems[tExport.id] = [
+      { kind: "user", id: "te-1", at: at(0, 9, 30), text: "每月的报表想按月份导出", speaker: "user" },
+      { kind: "assistant", id: "te-2", at: at(0, 9, 31), text: "有两个问题要你定：按自然月还是按账期？导出 Excel 还是 CSV？", speaker: "po" },
+    ];
+    topicItems[tUpload.id] = [
+      { kind: "user", id: "tu-1", at: at(0, 9, 44), text: "上传 2 GB 的文件卡在 99%", speaker: "user" },
+      { kind: "assistant", id: "tu-2", at: at(0, 9, 45), text: "看了日志：分片传完最后一块后没有合并，是我这边的问题。修好了，3 条验收标准现在过 2 条。", speaker: "dev" },
+      { kind: "assistant", id: "tu-3", at: at(0, 9, 47), text: "3 条验收标准过了 2 条，第 3 条（断网续传）在复测。", speaker: "qa" },
+    ];
+    topicItems[tExportMonth.id] = [
+      { kind: "user", id: "tx-1", at: at(14, 10, 0), text: "导出的表格想按月份筛", speaker: "user" },
+      { kind: "assistant", id: "tx-2", at: at(3, 16, 0), text: "4 条验收标准都过了，已上线。", speaker: "po" },
+    ];
+    topicItems[tColorway.id] = [
+      { kind: "user", id: "tc-1", at: at(6, 11, 0), text: "首页的颜色换一换", speaker: "user" },
+      { kind: "assistant", id: "tc-2", at: at(5, 11, 0), text: "先不动配色，等下个版本一起改。", speaker: "po" },
+    ];
+
+    if (software) {
+      // 事项：执行中那件有完整的需求说明和子任务，验收中的那件有验收结果，关掉的两件留着结论
+      jobs["t-tp-1"] = groupJob({ id: "t-tp-1", assistantId: "arch", title: "定方案", groupId: tRemember.id, startedAt: at(0, 9, 42), endedAt: at(0, 9, 46), durationMs: 240_000 });
+      jobs["t-tp-2"] = groupJob({ id: "t-tp-2", assistantId: "dev", title: "实现「记住我」", groupId: tRemember.id, status: "running", startedAt: minsAgo(6), endedAt: undefined });
+      const acceptance = ["勾选后关掉浏览器再打开，仍是登录状态", "不勾选时，关掉浏览器要重新登录", "退出登录后，旧的记住状态失效"];
+      topicProjects[tRemember.id] = [projectOf({
+        id: "p-t-remember",
+        groupId: tRemember.id,
+        title: "登录页加「记住我」",
+        stage: "doing",
+        request: { text: "登录页加一个「记住我」，下周发版前要上", itemId: "tr-1", at: at(0, 9, 38) },
+        clarify: [{ title: "换了设备还要记住登录吗？", why: "这决定 token 绑不绑设备。", options: ["按设备记", "不绑设备"], recommended: "按设备记", answer: "不用，换设备重新登录", askedBy: "po", at: at(0, 9, 40), answeredAt: at(0, 9, 41) }],
+        requirements: { content: "# 登录页加「记住我」\n\n## 做成什么样\n- 勾选后 30 天内免登录\n- 换设备、换浏览器要重新登录\n- 退出登录后，这台设备的记住状态马上失效", acceptance, updatedAt: at(0, 9, 41) },
+        subtasks: [
+          { n: 1, title: "定方案", assignee: "arch", brief: "定下 token 存哪里、多久过期。", after: [], jobId: "t-tp-1" },
+          { n: 2, title: "实现「记住我」", assignee: "dev", brief: "按方案做出来，带上测试。", after: [1], jobId: "t-tp-2" },
+          { n: 3, title: "验收用例和回归", assignee: "qa", brief: "对照验收标准逐条验。", after: [2], check: true },
+          { n: 4, title: "上线前用手机试一次", assignee: "user", brief: "发版后用手机登录一次，勾上「记住我」。", after: [2] },
+        ],
+        startedAt: at(0, 9, 42),
+        itemId: "tr-3",
+        createdAt: at(0, 9, 38),
+        updatedAt: at(0, 9, 50),
+      })];
+      topicProjects[tExport.id] = [projectOf({
+        id: "p-t-export",
+        groupId: tExport.id,
+        title: "导出月度报表",
+        request: { text: "每月的报表想按月份导出", itemId: "te-1", at: at(0, 9, 30) },
+        clarify: [
+          { title: "按自然月还是按账期？", why: "账期跨月，两种算出来不一样。", options: ["自然月", "账期"], recommended: "自然月", askedBy: "po", at: at(0, 9, 31) },
+          { title: "导出 Excel 还是 CSV？", options: ["Excel", "CSV"], recommended: "Excel", askedBy: "po", at: at(0, 9, 31) },
+        ],
+        itemId: "te-2",
+        createdAt: at(0, 9, 30),
+        updatedAt: at(0, 9, 31),
+      })];
+      topicProjects[tUpload.id] = [projectOf({
+        id: "p-t-upload",
+        groupId: tUpload.id,
+        title: "上传大文件失败",
+        stage: "review",
+        request: { text: "上传 2 GB 的文件卡在 99%", itemId: "tu-1", at: at(0, 9, 44) },
+        requirements: { content: "# 上传大文件失败\n\n分片传完最后一块后没合并。", acceptance: ["2 GB 文件能传完", "断网后能接着传", "失败时有明确提示"], updatedAt: at(0, 9, 45) },
+        subtasks: [
+          { n: 1, title: "查日志定位", assignee: "dev", brief: "看服务端日志。", after: [], jobId: "t-tp-1" },
+          { n: 2, title: "修合并逻辑", assignee: "dev", brief: "补上最后一块的合并。", after: [1], jobId: "t-tp-2" },
+          { n: 3, title: "验收和回归", assignee: "qa", brief: "逐条验。", after: [2], check: true, doneAt: at(0, 9, 47) },
+        ],
+        startedAt: at(0, 9, 44),
+        checks: [
+          { index: 1, passed: true, evidence: "2 GB 文件传完，服务端文件完整。", jobId: "t-tp-2", at: at(0, 9, 47) },
+          { index: 2, passed: false, evidence: "拔网线 30 秒再插回，没有接着传。", jobId: "t-tp-2", at: at(0, 9, 47) },
+        ],
+        itemId: "tu-3",
+        createdAt: at(0, 9, 44),
+        updatedAt: at(0, 9, 47),
+      })];
+      topicProjects[tExportMonth.id] = [projectOf({
+        id: "p-t-export-month",
+        groupId: tExportMonth.id,
+        title: "导出加按月筛选",
+        stage: "done",
+        request: { text: "导出的表格想按月份筛", itemId: "tx-1", at: at(14, 10, 0) },
+        requirements: { content: "导出菜单里选月份，只导出那个月的记录。", acceptance: ["选二月导出，只有二月的记录"], updatedAt: at(13, 10, 0) },
+        subtasks: [{ n: 1, title: "加月份筛选", assignee: "dev", brief: "导出菜单加月份。", after: [], jobId: "t-tp-1" }],
+        startedAt: at(13, 11, 0),
+        checks: [{ index: 1, passed: true, evidence: "二月导出 218 行，全部是二月的记录。", jobId: "t-tp-1", at: at(3, 16, 0) }],
+        summary: "导出的菜单里加了月份筛选，验收通过。",
+        itemId: "tx-2",
+        createdAt: at(14, 10, 0),
+        updatedAt: at(3, 16, 0),
+        endedAt: at(3, 16, 0),
+      })];
+      topicProjects[tColorway.id] = [projectOf({
+        id: "p-t-colorway",
+        groupId: tColorway.id,
+        title: "首页配色改版",
+        stage: "dropped",
+        request: { text: "首页的颜色换一换", itemId: "tc-1", at: at(6, 11, 0) },
+        summary: "先不动配色，等下个版本一起改。",
+        itemId: "tc-2",
+        createdAt: at(6, 11, 0),
+        updatedAt: at(5, 11, 0),
+        endedAt: at(5, 11, 0),
+      })];
+
+      // 综合：闲聊 + 三张话题卡
+      topicItems[host.id] = [
+        { kind: "note", id: "gt-1", at: at(30, 10, 0), icon: "split", text: "你建了群「Hob 开发」：产品负责人、架构师、开发、测试、发布", speaker: "user" },
+        { kind: "topic", id: "gt-2", at: at(0, 9, 30), topicId: tExport.id, speaker: "po" },
+        { kind: "user", id: "gt-4", at: at(0, 9, 39), text: "今天线上好像有点慢，是不是我们昨天发的版本？", speaker: "user" },
+        { kind: "assistant", id: "gt-5", at: at(0, 9, 40), text: "@架构师 看一下线上昨天以后的响应时间，和昨天的发版对得上吗？", speaker: "po" },
+        { kind: "topic", id: "gt-6", at: at(0, 9, 41), topicId: tRemember.id, speaker: "po" },
+        { kind: "topic", id: "gt-7", at: at(0, 9, 44), topicId: tUpload.id, speaker: "po" },
+        { kind: "assistant", id: "gt-8", at: at(0, 9, 46), text: "对不上。慢的是 09:10 以后，是备份任务把磁盘占满了，和发版无关；已经告诉服务器那边。", speaker: "arch" },
+        { kind: "note", id: "gt-9", at: at(0, 9, 52), icon: "split", text: "产品负责人开了话题「登录页加「记住我」」", speaker: "po" },
+      ];
+    }
+  }
+
   return {
     assistants,
+    groups,
+    groupItems: { "g-home": homeItems, "g-dev": devItems, ...readmeTopicItems, ...topicItems },
+    projects: { "g-home": [], "g-dev": [...(remember ? [remember] : []), ...endedProjects], ...readmeTopicProjects, ...topicProjects },
     items,
     jobs,
     delegations,
@@ -995,7 +1789,7 @@ cp now.txt "$seen"`,
       revision: 1,
       settings: {
         general: {
-          theme: scene === "d-dark" || scene === "h-dark" || scene === "act-dark" || scene === "readme-dark" || scene === "card-130-dark" || scene === "routine-check-dark" || scene === "routine-once-dark" ? "dark" : "system",
+          theme: scene.endsWith("-dark") ? "dark" : "system",
           timezone: "Asia/Tokyo",
           aboutYou: { name: "小林", language: "中文", notes: "" },
         },
@@ -1225,6 +2019,22 @@ const MCP_MOCK: McpView = {
 
 export function createMock(scene: SceneId = "s1"): HobApi {
   const db = buildDb(scene);
+  const groupRules: Record<string, Rule[]> = {};
+  if (scene === "g-owns" || scene === "g-owns-dark") {
+    const group = db.groups.find((item) => item.id === "g-dev")!;
+    group.instructions = "先明确需求，再拆分任务；发布前请用户确认。";
+    const topic: GroupSummary = { ...group, id: "g-owns-topic", parentId: group.id, name: "监听项目动态", busy: [], unread: 0 };
+    db.groups.push(topic);
+    db.groupItems[topic.id] = [];
+    groupRules[group.id] = ["发布前先确认", "删除数据前先确认"].map((text, i) => ({ id: `owns-rule-${i}`, text, mode: "ask", changedAt: at(0, 9) }));
+    db.assistantSkills[group.id] = ["需求澄清", "代码审查", "发布检查"].map((title, i) => ({ name: `team-${i}`, title, description: `团队${title}的做法`, path: `/mock/groups/${group.id}/skills/team-${i}/SKILL.md`, version: 1, createdAt: at(3, 9), updatedAt: at(1, 9), uses: 0, enabled: true }));
+    for (let i = 0; i < 2; i++) db.routines.push({ id: `owns-routine-${i}`, assistantId: group.ownerId, groupId: i ? topic.id : group.id, name: i ? "监听项目动态" : "每日进度汇总", instruction: "检查进展并汇报", schedules: [i ? "*/15 * * * *" : "0 9 * * *"], active: true, createdAt: at(2, 9), runs: [{ at: at(0, 9), status: "handed" }] });
+    (db.groupItems[group.id] ??= []).push({ id: "owns-routine-note", kind: "note", icon: "routine", speaker: group.ownerId, at: at(0, 9), text: "定时任务「监听项目动态」到点了，检查到：\n问题一：登录异常\n问题二：保存失败\n问题三：加载缓慢\n问题四：显示错位\n问题五：链接失效\n问题六：通知延迟\n问题七：搜索错误" });
+    const example = Object.values(db.jobs)[0]!;
+    delete db.jobs["t-g-dev"];
+    group.busy = ["dev"];
+    for (let i = 0; i < 5; i++) { const id = `owns-job-${i}`; db.jobs[id] = { ...example, id, groupId: i % 2 ? topic.id : group.id, assistantId: i === 0 ? "dev" : group.members[i % group.members.length]!, title: ["整理需求", "确定实现方案", "完成开发", "执行验收", "检查发布准备"][i]!, status: i === 0 ? "running" : "done", createdAt: at(0, 9, i * 5), startedAt: at(0, 9, i * 5), endedAt: i === 0 ? undefined : at(0, 9, i * 5 + 4), durationMs: i === 0 ? undefined : 240000, activity: [] }; }
+  }
   let globalRules: Rule[] = scene.startsWith("readme-") ? [
     ...["删除或覆盖文件、数据和备份", "对外发送（消息、邮件、发布）、付费、充值、改计费", "停止或重启别人正在使用的服务和设备", "修改可能让你失去远程访问的设置（网络、防火墙、登录方式）"].map((text, i) => ({ id: `ask-${i}`, text, mode: "ask" as const, changedAt: at(10, 9) })),
     ...["过去的记录是线索不是现状：动手前先核实实际状态。", "改配置、改数据前先留好退路（备份或记下原值）；改完用实际效果验证，不只看命令返回。", "凭据（密码、密钥、令牌、Cookie）只在用的时候读取，不回显，不写进文件和报告，也不存起来。"].map((text, i) => ({ id: `allow-${i}`, text, mode: "allow" as const, changedAt: at(10, 9) })),
@@ -1340,6 +2150,20 @@ export function createMock(scene: SceneId = "s1"): HobApi {
     setAssistant(assistantId, { last: { text, at: new Date().toISOString() } });
   }
 
+  const assistantName = (id: string) => db.assistants.find((a) => a.id === id)?.name ?? id;
+
+  function matchesGroup(actual: string | undefined, requested: string): boolean {
+    if (requested === "none") return !actual;
+    const selected = db.groups.find((group) => group.id === requested);
+    const root = selected?.parentId ?? requested;
+    return actual === root || db.groups.some((group) => group.id === actual && group.parentId === root);
+  }
+
+  function emitGroup(groupId: string) {
+    const group = db.groups.find((g) => g.id === groupId);
+    if (group) emit({ type: "group", group: clone(group) });
+  }
+
   /** 消耗页的价格：默认价 + 设置里改过的。 */
   const usagePrices = (): UsagePrices => {
     const overrides = db.settings.settings.usage?.prices ?? {};
@@ -1351,6 +2175,30 @@ export function createMock(scene: SceneId = "s1"): HobApi {
     return { updatedAt: minsAgo(90), error: null, models };
   };
   let usageData: { timezone: string; rows: UsageRow[]; assistants: UsageAssistant[] } | undefined;
+
+  /**
+   * 话题的事项摘要（真服务端 151 也从话题里的那件事项算）：左栏话题行、综合的话题卡、话题顶上那条都用它。
+   * 话题或事项变了重算一次。
+   */
+  const syncTopicProject = (topicId: string) => {
+    const topic = db.groups.find((g) => g.id === topicId);
+    if (!topic?.parentId) return;
+    const project = (db.projects[topicId] ?? [])[0];
+    if (!project) {
+      delete topic.project;
+      return;
+    }
+    const jobOf = (subtask: Subtask) => (subtask.jobId ? db.jobs[subtask.jobId] : undefined);
+    const done = project.subtasks.filter((subtask) => subtaskStatus(project, subtask, jobOf(subtask), jobOf) === "已完成").length;
+    const waitingUser = (project.stage === "plan" && project.subtasks.length > 0) || project.subtasks.some((subtask) => subtask.assignee === "user" && subtaskStatus(project, subtask, jobOf(subtask), jobOf) === "待你执行")
+      || Object.values(db.approvals).some((approval) => approval.groupId === topicId && approval.status === "pending");
+    const current = project.stage === "doing"
+      ? project.subtasks.find((subtask) => jobOf(subtask)?.status === "running")?.assignee
+      : project.stage === "review"
+        ? project.subtasks.find((subtask) => subtask.check)?.assignee
+        : project.ownerId;
+    topic.project = { id: project.id, title: project.title, stage: project.stage, done, total: project.subtasks.length, waitingUser, ...(current ? { current } : {}) };
+  };
 
   return {
     usage: async (): Promise<UsageView> => {
@@ -1371,7 +2219,7 @@ export function createMock(scene: SceneId = "s1"): HobApi {
     },
     knowledge: async (query = {}) => {
       const q = query.q?.toLowerCase();
-      const matches = entries.filter((e) => (!query.origin || e.origin === query.origin) && (!query.collection || e.collections.includes(query.collection)) && (!query.kind || knowledgeGroup(e.kind) === query.kind) && (!query.assistantId || e.source?.assistantId === query.assistantId) && (!query.before || e.updatedAt < query.before) && (!q || `${e.name} ${e.description}`.toLowerCase().includes(q)));
+      const matches = entries.filter((e) => (!query.origin || e.origin === query.origin) && (!query.collection || e.collections.includes(query.collection)) && (!query.kind || knowledgeGroup(e.kind) === query.kind) && (!query.assistantId || e.source?.assistantId === query.assistantId) && (!query.groupId || matchesGroup(e.source?.jobId ? db.jobs[e.source.jobId]?.groupId : undefined, query.groupId)) && (!query.before || e.updatedAt < query.before) && (!q || `${e.name} ${e.description}`.toLowerCase().includes(q)));
       const limit = query.limit ?? 50;
       return { entries: clone(matches.slice(0, limit).map((e) => q ? { ...e, snippet: e.description ?? e.name } : e)), hasMore: matches.length > limit, collections: clone(collections.map((c) => ({ ...c, count: entries.filter((e) => e.collections.includes(c.id)).length, indexed: entries.filter((e) => e.collections.includes(c.id) && e.index?.state === "ready").length, failed: entries.filter((e) => e.collections.includes(c.id) && e.index?.state === "failed").length, unsupported: entries.filter((e) => e.collections.includes(c.id) && e.index?.state === "unsupported").length }))) };
     },
@@ -1547,6 +2395,7 @@ export function createMock(scene: SceneId = "s1"): HobApi {
     importSkills: async (_source, ids) => ({ imported: ids, skipped: [], errors: [] }),
     deleteSkill: async () => {},
     desktop: async () => clone(desktop),
+    desktopScreens: async () => ({ screens: desktopMockScene() === "failed" ? [] : [{ id: "hob", running: true, browserRunning: true, viewers: 0, lastActiveAt: null }], profiles: { hob: "hob" } }),
     saveDesktop: async (body) => {
       desktop = { ...desktop, revision: desktop.revision + 1, url: body.url, enabled: body.enabled, tokenConfigured: desktop.tokenConfigured || Boolean(body.token) };
       return clone(desktop);
@@ -1723,6 +2572,290 @@ export function createMock(scene: SceneId = "s1"): HobApi {
     },
     stopAssistant: async (assistantId) => setAssistant(assistantId, { busy: false }),
     markRead: async (assistantId) => setAssistant(assistantId, { unread: 0 }),
+    groupProfile: async (id) => {
+      const selected = db.groups.find((g) => g.id === id);
+      const group = db.groups.find((g) => g.id === (selected?.parentId ?? id));
+      if (!group) throw new ApiError(404, "群不存在。");
+      const models = db.settings.settings.models;
+      const memberModels = Object.fromEntries(group.members.map((aid) => {
+        const member = db.assistants.find((a) => a.id === aid);
+        const resolved = (key: "conversation" | "work") => {
+          const override = group.memberModels?.[aid]?.[key];
+          const inheritedPick = group.models?.[key] ?? member?.models?.[key] ?? models[key];
+          const inheritedSource = group.models?.[key] ? "group" as const : member?.models?.[key] ? "assistant" as const : "global" as const;
+          const pick = override ?? inheritedPick;
+          const source = override ? "member" as const : inheritedSource;
+          return { source, pick, inherited: { source: inheritedSource, pick: inheritedPick } };
+        };
+        return [aid, { conversation: resolved("conversation"), work: resolved("work") }];
+      }));
+      return clone({ group, rules: groupRules[group.id] ?? [], memberModels });
+    },
+    groupSkills: async (id) => clone(db.assistantSkills[id] ?? []),
+    patchGroupSkill: async (id, name, enabled) => {
+      const skill = db.assistantSkills[id]?.find((s) => s.name === name);
+      if (!skill) throw new ApiError(404, "技能不存在。");
+      skill.enabled = enabled;
+      return clone(skill);
+    },
+    rollbackGroupSkill: async (id, name) => {
+      const skill = db.assistantSkills[id]?.find((s) => s.name === name);
+      if (!skill || skill.version < 2) throw new ApiError(400, "没有可回退的版本。");
+      skill.version--;
+      return clone(skill);
+    },
+    deleteGroupSkill: async (id, name) => { db.assistantSkills[id] = (db.assistantSkills[id] ?? []).filter((s) => s.name !== name); return { ok: true }; },
+    deleteGroupRule: async (id, ruleId) => { groupRules[id] = (groupRules[id] ?? []).filter((rule) => rule.id !== ruleId); },
+    groups: async () => clone(db.groups),
+    createGroup: async (body) => {
+      const members = [...new Set(body.members)];
+      if (!body.name.trim()) throw new ApiError(400, "群名不能为空。");
+      if (members.length < 1) throw new ApiError(400, "群里至少要有一个助手。");
+      if (!members.includes(body.ownerId)) throw new ApiError(400, "群主必须是群里的一员。");
+      if (body.workflow && body.workflow !== "software") throw new ApiError(400, "没有这种工作方式。");
+      const group: Group = {
+        id: `g-${Date.now().toString(36)}`,
+        name: body.name.trim(),
+        purpose: body.purpose.trim(),
+        ownerId: body.ownerId,
+        members,
+        createdAt: new Date().toISOString(),
+        ...(body.workflow ? { workflow: body.workflow } : {}),
+      };
+      db.groups.push({ ...group, unread: 0, busy: [] });
+      db.groupItems[group.id] = [
+        { kind: "note", id: uid("g"), at: group.createdAt, icon: "split", text: `你建了群「${group.name}」：${members.map(assistantName).join("、")}`, speaker: "user" },
+      ];
+      emitGroup(group.id);
+      return clone(group);
+    },
+    createTopic: async (groupId, body) => {
+      const group = db.groups.find((g) => g.id === groupId);
+      if (!group) throw new ApiError(404, "群不存在。");
+      if (group.parentId) throw new ApiError(400, "话题里不能再开话题。");
+      const title = body.title.trim();
+      if (!title) throw new ApiError(400, "话题名不能为空。");
+      if (title.length > 40) throw new ApiError(400, "话题名最多 40 个字。");
+      const now = new Date().toISOString();
+      const topic: Group = {
+        id: `g-${Date.now().toString(36)}`,
+        name: title,
+        purpose: group.purpose,
+        ownerId: group.ownerId,
+        members: [...group.members],
+        createdAt: now,
+        parentId: group.id,
+        createdBy: "user",
+        ...(group.workflow ? { workflow: group.workflow } : {}),
+      };
+      db.groups.push({ ...topic, unread: 0, busy: [] });
+      db.groupItems[topic.id] = [];
+      // 综合里落一张话题卡
+      const card: GroupItem = { kind: "topic", id: uid("g"), at: now, topicId: topic.id, speaker: "user" };
+      (db.groupItems[group.id] ??= []).push(card);
+      group.last = { at: now, speaker: "user", text: `开了话题「${title}」` };
+      emit({ type: "group-item", groupId: group.id, item: clone(card) });
+      emitGroup(group.id);
+      emitGroup(topic.id);
+      return clone(topic);
+    },
+    closeTopic: async (topicId, body) => {
+      const topic = db.groups.find((g) => g.id === topicId);
+      if (!topic?.parentId) throw new ApiError(404, "话题不存在。");
+      if (topic.closedAt) throw new ApiError(400, "这个话题已经关闭了。");
+      const now = new Date().toISOString();
+      topic.closedAt = now;
+      if (body?.note?.trim()) topic.closeNote = body.note.trim();
+      topic.busy = [];
+      // 话题里没结束的事项按放弃处理
+      for (const project of db.projects[topicId] ?? []) {
+        if (project.stage === "done" || project.stage === "dropped") continue;
+        project.stage = "dropped";
+        project.summary = "用户关闭了这个话题";
+        project.updatedAt = now;
+        project.endedAt = now;
+      }
+      syncTopicProject(topicId);
+      emitGroup(topicId);
+      emitGroup(topic.parentId);
+      return clone(topic);
+    },
+    reopenTopic: async (topicId) => {
+      const topic = db.groups.find((g) => g.id === topicId);
+      if (!topic?.parentId) throw new ApiError(404, "话题不存在。");
+      delete topic.closedAt;
+      delete topic.closeNote;
+      syncTopicProject(topicId);
+      emitGroup(topicId);
+      emitGroup(topic.parentId);
+      return clone(topic);
+    },
+    patchGroup: async (groupId, patch) => {
+      const group = db.groups.find((g) => g.id === groupId);
+      if (!group) throw new ApiError(404, "群不存在。");
+      if (patch.rule) {
+        const rules = groupRules[group.id] ??= [];
+        const existing = rules.find((r) => r.id === patch.rule?.id);
+        if (existing) Object.assign(existing, patch.rule, { changedAt: new Date().toISOString() });
+        else if (patch.rule.text && patch.rule.mode) rules.push({ id: `rule-${Date.now()}`, text: patch.rule.text, mode: patch.rule.mode, changedAt: new Date().toISOString() });
+      }
+      // 话题只能改名字：成员、群主、工作方式都取所属的群
+      if (group.parentId && (patch.workflow !== undefined || patch.members || patch.ownerId || patch.purpose !== undefined)) {
+        throw new ApiError(400, "话题只能改名字。");
+      }
+      if (patch.workflow !== undefined) {
+        if (patch.workflow !== null && patch.workflow !== "software") throw new ApiError(400, "没有这种工作方式。");
+        if (patch.workflow === null) {
+          const topics = db.groups.filter((g) => g.parentId === groupId).map((g) => g.id);
+          const open = [groupId, ...topics].some((id) => (db.projects[id] ?? []).some((project) => project.stage !== "done" && project.stage !== "dropped"));
+          if (open) throw new ApiError(400, "群里还有没结束的事项，不能把工作方式改成无。");
+        }
+        if (patch.workflow) group.workflow = patch.workflow;
+        else delete group.workflow;
+      }
+      if (patch.members) {
+        const members = [...new Set(patch.members)];
+        if (members.length < 1) throw new ApiError(400, "群里至少要留一个成员。");
+        if (!members.includes(patch.ownerId ?? group.ownerId)) throw new ApiError(400, "群主必须留在群里。");
+        group.members = members;
+        // 话题的成员跟着群走
+        for (const topic of db.groups.filter((g) => g.parentId === groupId)) topic.members = [...members];
+      }
+      if (patch.ownerId) {
+        if (!group.members.includes(patch.ownerId)) throw new ApiError(400, "群主必须是群里的一员。");
+        group.ownerId = patch.ownerId;
+        for (const topic of db.groups.filter((g) => g.parentId === groupId)) topic.ownerId = patch.ownerId;
+      }
+      if (patch.instructions !== undefined) group.instructions = patch.instructions;
+      if (patch.models !== undefined) {
+        const models = { ...group.models };
+        for (const key of ["conversation", "work"] as const) {
+          if (patch.models[key] === null) delete models[key];
+          else if (patch.models[key]) models[key] = patch.models[key];
+        }
+        group.models = models;
+      }
+      if (patch.name !== undefined) group.name = patch.name.trim() || group.name;
+      if (patch.purpose !== undefined) {
+        group.purpose = patch.purpose;
+        for (const topic of db.groups.filter((g) => g.parentId === groupId)) topic.purpose = patch.purpose;
+      }
+      emitGroup(groupId);
+      return clone(group);
+    },
+    patchGroupMemberModels: async (groupId, assistantId, patch) => {
+      const selected = db.groups.find((g) => g.id === groupId);
+      const group = db.groups.find((g) => g.id === (selected?.parentId ?? groupId));
+      if (!group) throw new ApiError(404, "群不存在。");
+      if (!group.members.includes(assistantId)) throw new ApiError(400, "助手不是这个群的成员。");
+      const models = { ...group.memberModels?.[assistantId] };
+      for (const key of ["conversation", "work"] as const) {
+        if (patch[key] === null) delete models[key];
+        else if (patch[key]) models[key] = patch[key];
+      }
+      group.memberModels = { ...group.memberModels, [assistantId]: models };
+      for (const topic of db.groups.filter((g) => g.parentId === group.id)) { topic.memberModels = group.memberModels; emitGroup(topic.id); }
+      emitGroup(group.id);
+      return clone(group);
+    },
+    archiveGroup: async (groupId) => {
+      if (!db.groups.some((g) => g.id === groupId)) throw new ApiError(404, "群不存在。");
+      const topics = db.groups.filter((g) => g.parentId === groupId).map((g) => g.id);
+      db.groups = db.groups.filter((g) => g.id !== groupId);
+      emit({ type: "group_removed", id: groupId });
+      // 群归档，话题跟着归档：每个话题各发一个 group_removed
+      for (const id of topics) emit({ type: "group_removed", id });
+    },
+    groupItems: async (groupId): Promise<GroupItemsPage> => ({
+      items: clone(db.groupItems[groupId] ?? []),
+      approvals: clone(Object.values(db.approvals).filter((a) => a.groupId === groupId)),
+      jobs: clone(Object.values(db.jobs).filter((j) => j.groupId === groupId)),
+      hasMore: false,
+    }),
+    projects: async (groupId) => clone(db.projects[groupId] ?? []),
+    project: async (groupId, projectId) => {
+      const found = (db.projects[groupId] ?? []).find((item) => item.id === projectId);
+      if (!found) throw new ApiError(404, "事项不存在。");
+      return clone(found);
+    },
+    // 演示：点「开始执行」和「已完成」直接改演示数据（真服务端走 start_subtasks 和 doneAt）
+    startProject: async (groupId, projectId) => {
+      const found = (db.projects[groupId] ?? []).find((item) => item.id === projectId);
+      if (!found) throw new ApiError(404, "事项不存在。");
+      const now = new Date().toISOString();
+      found.stage = "doing";
+      found.startedAt = now;
+      found.updatedAt = now;
+      syncTopicProject(groupId);
+      return clone(found);
+    },
+    doneSubtask: async (groupId, projectId, n) => {
+      const found = (db.projects[groupId] ?? []).find((item) => item.id === projectId);
+      if (!found) throw new ApiError(404, "事项不存在。");
+      const subtask = found.subtasks.find((item) => item.n === n);
+      if (!subtask) throw new ApiError(404, `没有子任务 ${n}。`);
+      const now = new Date().toISOString();
+      subtask.doneAt = now;
+      found.updatedAt = now;
+      syncTopicProject(groupId);
+      return clone(found);
+    },
+    sendGroupMessage: async (groupId, body) => {
+      const group = db.groups.find((g) => g.id === groupId);
+      if (!group) throw new ApiError(404, "群不存在。");
+      if (group.closedAt) throw new ApiError(400, "这个话题已关闭，重新打开后才能发消息");
+      if (body.text === "模拟发送失败") throw new Error("网络连接已断开");
+      const time = new Date().toISOString();
+      const list = (db.groupItems[groupId] ??= []);
+      const item: GroupItem = {
+        kind: "user",
+        id: uid("g"),
+        at: time,
+        text: body.text,
+        ...(body.quote ? { quote: body.quote } : {}),
+        ...(body.files?.length ? { files: body.files } : {}),
+        speaker: "user",
+      };
+      list.push(item);
+      emit({ type: "group-item", groupId, item: clone(item) });
+      // 谁接：@ 了谁就是谁，没点名是群主
+      const named = group.members.find((id) => {
+        const name = assistantName(id);
+        return name !== id && body.text.includes(`@${name}`);
+      });
+      const speaker = named ?? group.ownerId;
+      group.last = { at: time, speaker: "user", text: body.text };
+      group.busy = [speaker];
+      emitGroup(groupId);
+      emit({ type: "group-activity", groupId, speaker, activity: { state: "thinking", label: "正在想…" } });
+      setTimeout(() => {
+        const reply: GroupItem = { kind: "assistant", id: uid("g"), at: new Date().toISOString(), text: `收到，我看一下。`, speaker };
+        list.push(reply);
+        emit({ type: "group-item", groupId, item: clone(reply) });
+        group.last = { at: reply.at, speaker, text: reply.text };
+        group.busy = [];
+        emitGroup(groupId);
+        emit({ type: "group-activity", groupId, speaker, activity: null });
+      }, 700);
+      return { item };
+    },
+    markGroupRead: async (groupId) => {
+      const group = db.groups.find((g) => g.id === groupId);
+      if (!group || !group.unread) return;
+      group.unread = 0;
+      emitGroup(groupId);
+    },
+    stopGroup: async (groupId) => {
+      const group = db.groups.find((g) => g.id === groupId);
+      if (!group) throw new ApiError(404, "群不存在。");
+      const stopped = group.busy;
+      group.busy = [];
+      emitGroup(groupId);
+      const note: GroupItem = { kind: "note", id: uid("g"), at: new Date().toISOString(), icon: "info", text: "你叫停了群里的发言", speaker: "user" };
+      (db.groupItems[groupId] ??= []).push(note);
+      emit({ type: "group-item", groupId, item: clone(note) });
+      for (const speaker of stopped) emit({ type: "group-activity", groupId, speaker, activity: null });
+    },
     patchAssistant: async (assistantId, patch) => {
       if (!assistant(assistantId)) throw new ApiError(404, "助手不存在。");
       if (patch.rule) {
@@ -1763,7 +2896,10 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       const ap = db.approvals[approvalId];
       if (!ap || ap.status !== "pending") return;
       ap.status = "answered";
-      if (answer.key) ap.chosen = answer.key;
+      if (ap.questions?.length) {
+        ap.answers = answer.answers ?? [];
+        if (answer.text?.trim()) ap.answerText = answer.text.trim();
+      } else if (answer.key) ap.chosen = answer.key;
       else ap.answerText = (answer.text ?? "").trim();
       ap.answeredAt = new Date().toISOString();
       const option = ap.options.find((o) => o.key === answer.key);
@@ -1823,17 +2959,19 @@ export function createMock(scene: SceneId = "s1"): HobApi {
     createRoutine: async (body) => {
       const r: Routine = {
         ...body,
+        assistantId: body.groupId ? db.groups.find((group) => group.id === body.groupId)?.ownerId ?? body.assistantId : body.assistantId,
         id: uid("r"),
         createdAt: new Date().toISOString(),
         runs: [],
       };
       db.routines.push(r);
       emit({ type: "routine", routine: clone(r) });
-      return clone(r);
+      return { routine: clone(r) };
     },
     patchRoutine: async (routineId, patch) => {
       const r = db.routines.find((x) => x.id === routineId);
       if (!r) return;
+      if (r.groupId && patch.assistantId !== undefined) throw new Error("群的定时由群主处理");
       const { skill, ...rest } = patch;
       Object.assign(r, rest);
       if (skill === null) delete r.skill;
@@ -1848,6 +2986,16 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       const r = db.routines.find((x) => x.id === routineId);
       if (!r) return;
       const time = new Date().toISOString();
+      if (r.groupId) {
+        const group = db.groups.find((item) => item.id === r.groupId);
+        if (!group) throw new Error("群不存在");
+        const item: GroupItem = { kind: "note", icon: "routine", id: uid("g-"), at: time, speaker: group.ownerId, text: `定时任务「${r.name}」到点了` };
+        (db.groupItems[group.id] ??= []).push(item);
+        r.runs = [{ at: time, status: "handed" as const }, ...r.runs].slice(0, 20);
+        emit({ type: "group-item", groupId: group.id, item });
+        emit({ type: "routine", routine: clone(r) });
+        return { outcome: "handed" as const };
+      }
       const job: Job = {
         id: uid("t-"),
         assistantId: r.assistantId,
@@ -1887,6 +3035,7 @@ export function createMock(scene: SceneId = "s1"): HobApi {
     jobs: async (query = {}) => {
       let list = Object.values(db.jobs).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       if (query.assistantId) list = list.filter((job) => job.assistantId === query.assistantId);
+      if (query.groupId) list = list.filter((job) => matchesGroup(job.groupId, query.groupId!));
       if (query.status) list = list.filter((job) => job.status === query.status);
       if (query.before) {
         const index = list.findIndex((job) => job.id === query.before);

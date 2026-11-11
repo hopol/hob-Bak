@@ -3,19 +3,20 @@
 // 两边的头部（我的 / 搜索框 / 新建）各自保留。
 import { useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { AssistantSummary, Job } from "../../../shared/types.ts";
+import type { AssistantSummary, GroupSummary, Job } from "../../../shared/types.ts";
 import { plainText } from "../../../shared/plain-text.ts";
 import { homeGroups } from "../home.ts";
 import { assistantStatus } from "../sidebar-data.ts";
 import { Icon } from "../icons.tsx";
 import { Avatar, type AvatarMark } from "../sprites.tsx";
-import { closePanelPages, openJob, openJobs, openRoutine, select, useApp } from "../store.ts";
+import { closePanelPages, getState, openJob, openJobs, openProject, openRoutine, select, selectGroup, useApp } from "../store.ts";
 import { cronText, fmtElapsed, fmtList } from "../util.ts";
 import { useAssistantMenu } from "./AssistantMenu.tsx";
 import { useRowToPin, type PinDragTarget } from "./PinDrag.ts";
-import { JOB_STATUS, StatusTag } from "./status-meta.tsx";
+import { JOB_STATUS, StatusTag, jobStatusMeta } from "./status-meta.tsx";
 import { Empty } from "./Empty.tsx";
 import { activityParts } from "./Panel.tsx";
+import { GroupRow } from "./Groups.tsx";
 
 /**
  * 首页头像动不动：在忙的助手进页面时看一圈，之后每 30 秒再看一圈，几个在忙的轮流看、不同时动；一个助手只在一处动，免得桌面左栏加对话页满屏都在动。
@@ -167,20 +168,31 @@ export function AssistantRow({
   );
 }
 
-/** 进行中的任务：哪个助手的，正在做哪一步（最近一行活动）。 */
-function liveText(job: Job, owner: AssistantSummary | undefined): string {
+/** 群里派的任务在哪：「群名」，话题里的是「群名 · 话题名」；群已经不在了就不写。 */
+function placeOf(groups: GroupSummary[], gid: string | undefined): string {
+  const place = gid ? groups.find((g) => g.id === gid) : undefined;
+  if (!place) return "";
+  const parent = place.parentId ? groups.find((g) => g.id === place.parentId) : undefined;
+  return parent ? `${parent.name} · ${place.name}` : place.name;
+}
+
+/** 进行中的任务：哪个助手的、在哪个群（话题），正在做哪一步（最近一行活动）。 */
+function liveText(job: Job, owner: AssistantSummary | undefined, groups: GroupSummary[]): string {
   const last = job.activity.at(-1);
-  return [owner?.name, last ? activityParts(last).join(" ") : ""].filter(Boolean).join(" · ");
+  return [owner?.name, placeOf(groups, job.groupId), last ? activityParts(last).join(" ") : ""].filter(Boolean).join(" · ");
 }
 
 /**
- * 点首页的任务行：先进这个任务的助手的对话（手机上就是对话页），再展开任务详情。
- * 助手已经归档 / 不在了就只开详情。
+ * 点首页的任务行：先进这个任务所在的地方——群里派的进那个群（话题），否则进助手的对话，
+ * 手机上就是对话页；再展开任务详情。都不在了就只开详情。
  */
-function openJobRow(job: Job, owner: AssistantSummary | undefined) {
+function openJobRow(job: Job, owner: AssistantSummary | undefined, groups: GroupSummary[]) {
+  const before = getState();
+  const switching = (job.groupId ?? job.assistantId) !== (before.gsel ?? before.sel);
   closePanelPages();
-  if (owner) void select(job.assistantId);
-  openJob(job.id);
+  if (job.groupId && groups.some((g) => g.id === job.groupId)) void selectGroup(job.groupId, true, false, true);
+  else if (owner) void select(job.assistantId);
+  openJob(job.id, undefined, switching);
 }
 
 /**
@@ -204,13 +216,14 @@ function JobRow({
   size: number;
   onClick: () => void;
 }) {
+  const s = useApp();
   return (
     <button className="list-row home-row job" onClick={onClick}>
       <Face owner={owner} size={size} moving={moving} />
       <span className="nm">{job.routineId ? <Icon name="clock" size={14} /> : null}{job.title}</span>
       <span className="tm">{time}</span>
       <span className="pv">{plainText(text)}</span>
-      <StatusTag meta={JOB_STATUS[job.status]} />
+      <StatusTag meta={jobStatusMeta(job, s.jobs)} />
     </button>
   );
 }
@@ -265,17 +278,36 @@ export function HomeSections({ size = 42, markSel = false }: { size?: number; ma
 
   return (
     <>
-      {g.asks.length ? (
+      {g.asks.length || g.mine.length ? (
         <Section title="等你确认">
+          {g.mine.map(({ project, subtask }) => {
+            const who = owner(project.ownerId);
+            return (
+              <button className="list-row home-row" key={`${project.id}#${subtask.n}`} onClick={() => openProject(project.groupId, project.id)}>
+                <Face owner={who} size={size} />
+                <div className="main">
+                  <div className="l1">
+                    <span className="nm">待你执行：{subtask.title}</span>
+                    <span className="tm">{fmtList(project.updatedAt)}</span>
+                  </div>
+                  <div className="pv">{project.title}{who ? ` · ${who.name}` : ""}</div>
+                </div>
+              </button>
+            );
+          })}
           {g.asks.map((ap) => (
-            <button className="list-row home-row" key={ap.id} onClick={() => void select(ap.assistantId)}>
+            <button
+              className="list-row home-row"
+              key={ap.id}
+              onClick={() => (ap.groupId ? void selectGroup(ap.groupId) : void select(ap.assistantId))}
+            >
               <Face owner={owner(ap.assistantId)} size={size} />
               <div className="main">
                 <div className="l1">
                   <span className="nm">{ap.title}</span>
                   <span className="tm">{fmtList(ap.createdAt)}</span>
                 </div>
-                <div className="pv">{owner(ap.assistantId)?.name ?? ""} · 等待你的选择</div>
+                <div className="pv">{owner(ap.assistantId)?.name ?? ""} · 等待你的回答</div>
               </div>
             </button>
           ))}
@@ -291,19 +323,23 @@ export function HomeSections({ size = 42, markSel = false }: { size?: number; ma
               owner={owner(job.assistantId)}
               moving={movingJob(job)}
               time={fmtElapsed(job.startedAt ?? job.createdAt)}
-              text={liveText(job, owner(job.assistantId))}
+              text={liveText(job, owner(job.assistantId), s.groups)}
               size={size}
-              onClick={() => openJobRow(job, owner(job.assistantId))}
+              onClick={() => openJobRow(job, owner(job.assistantId), s.groups)}
             />
           ))}
         </Section>
       ) : null}
 
       {g.rows.length || g.hidden.length ? (
-        <Section title="日常">
-          {g.rows.map((a) => (
-            <AssistantRow key={a.id} a={a} size={size} sel={markSel && a.id === s.sel} />
-          ))}
+        <Section title="对话">
+          {g.rows.map((row) =>
+            row.kind === "assistant" ? (
+              <AssistantRow key={row.id} a={row.a} size={size} sel={markSel && row.id === s.sel} />
+            ) : (
+              <GroupRow key={row.id} g={row.g} size={size} sel={markSel && row.id === s.gsel} />
+            ),
+          )}
           {g.hidden.length && !g.searching ? (
             <button className="fold" onClick={() => setFolded((v) => !v)}>
               <span>收起的助手</span>
@@ -338,7 +374,7 @@ export function HomeSections({ size = 42, markSel = false }: { size?: number; ma
               time={fmtList(job.endedAt ?? job.createdAt)}
               text={job.summary || job.statusReason || ""}
               size={size}
-              onClick={() => openJobRow(job, owner(job.assistantId))}
+              onClick={() => openJobRow(job, owner(job.assistantId), s.groups)}
             />
           ))}
         </Section>
@@ -354,7 +390,8 @@ export function HomeSections({ size = 42, markSel = false }: { size?: number; ma
                 key={r.id}
                 onClick={() => {
                   closePanelPages();
-                  void select(r.assistantId);
+                  if (r.groupId && s.groups.some((group) => group.id === r.groupId)) void selectGroup(r.groupId, true, false, true);
+                  else void select(r.assistantId);
                   openRoutine(r.id);
                 }}
               >
@@ -365,7 +402,7 @@ export function HomeSections({ size = 42, markSel = false }: { size?: number; ma
                     <span className="tm">{cronText(r.schedules[0] ?? "")}</span>
                   </div>
                   <div className="pv">
-                    {run ? <>上次运行 {fmtList(run.at)} · <StatusTag meta={JOB_STATUS[run.status]} /></> : "尚未运行"}
+                    {run ? <>上次运行 {fmtList(run.at)} · {run.status === "handed" ? "交给群主" : <StatusTag meta={JOB_STATUS[run.status]} />}</> : "尚未运行"}
                   </div>
                 </div>
               </button>

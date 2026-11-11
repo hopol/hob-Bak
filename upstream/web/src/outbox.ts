@@ -13,7 +13,9 @@ export interface Attachment {
 
 export interface PendingMessage {
   localId: string;
-  assistantId: string;
+  /** 发到哪：助手 id；群消息时是群 id */
+  to: string;
+  group?: true;
   at: string;
   text: string;
   quote?: { itemId: string; text: string };

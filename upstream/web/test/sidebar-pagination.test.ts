@@ -11,12 +11,24 @@ const job = (id: string) => ({ id, assistantId: "paging", createdAt: id }) as Jo
 const file = (id: string) => ({ id, updatedAt: id }) as KnowledgeEntry;
 
 describe("右栏分页缓存", () => {
+  it("知识库事件后重新读取目录，不覆盖文件分页", async () => {
+    const result = (name: string) => ({ entries: [], hasMore: false, collections: [{ id: "c", name }], total: 0 }) as never;
+    const fetch = vi.spyOn(realApi, "knowledge").mockResolvedValueOnce(result("旧名")).mockResolvedValueOnce(result("新名"));
+    const store = await import("../src/store.ts");
+    Object.assign(store.getState(), { page: "main" });
+    await store.loadSidebarCollections();
+    store.applyEvent({ type: "knowledge" });
+    await store.loadSidebarCollections();
+    expect(store.getState().knowledge.collections[0]?.name).toBe("新名");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    fetch.mockRestore();
+  });
   it("任务按 id 翻页，刷新和切助手时保留已读取的条目", async () => {
     const fetch = vi.spyOn(realApi, "jobs").mockResolvedValueOnce({ jobs: [job("3"), job("2")], hasMore: true }).mockResolvedValueOnce({ jobs: [job("1")], hasMore: false });
     const { loadSidebarJobs, getState } = await import("../src/store.ts");
     await loadSidebarJobs("paging");
     await loadSidebarJobs("paging", true);
-    expect(fetch).toHaveBeenLastCalledWith({ assistantId: "paging", before: "2", limit: 20 });
+    expect(fetch).toHaveBeenLastCalledWith({ assistantId: "paging", groupId: "none", before: "2", limit: 20 });
     expect(getState().sidebarJobs.paging?.items.map((j) => j.id)).toEqual(["3", "2", "1"]);
     let finish!: (value: { jobs: Job[]; hasMore: boolean }) => void;
     fetch.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
@@ -37,7 +49,7 @@ describe("右栏分页缓存", () => {
     const { loadSidebarFiles, getState } = await import("../src/store.ts");
     await loadSidebarFiles("paging");
     await loadSidebarFiles("paging", true);
-    expect(fetch).toHaveBeenLastCalledWith({ origin: "output", assistantId: "paging", before: "2", limit: 30 });
+    expect(fetch).toHaveBeenLastCalledWith({ origin: "output", assistantId: "paging", groupId: "none", before: "2", limit: 30 });
     let finish!: (value: ReturnType<typeof result>) => void;
     fetch.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const refresh = loadSidebarFiles("paging");

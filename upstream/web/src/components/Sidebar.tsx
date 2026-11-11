@@ -1,20 +1,19 @@
-// 左栏：搜索 + 置顶助手 + 首页各组（待确认 / 进行中 / 日常 / 最近任务 / 定时任务）+ 底部设置。
+// 左栏：搜索和回首页 + 置顶助手和群 + 首页各组（待确认 / 进行中 / 对话 / 最近任务 / 定时任务）+ 底部设置。
 // 置顶跟着整栏一起滚，「设置」固定在底部；置顶头像可以按住拖着换位置。
-import type { AssistantSummary } from "../../../shared/types.ts";
-import { pinList } from "../home.ts";
+import { conversations, pinList } from "../home.ts";
 import { Icon } from "../icons.tsx";
 import { useRows } from "../motion.ts";
-import { newAssistant, openKnowledge, openSettings, setQuery, useApp } from "../store.ts";
+import { goHome, openKnowledge, openSettings, setQuery, useApp } from "../store.ts";
 import { HomeSections, pinLayout, Pin } from "./HomeSections.tsx";
+import { GroupPin } from "./Groups.tsx";
+import { PlusButton } from "./GroupCreate.tsx";
 import { usePinDrag } from "./PinDrag.ts";
-
-const assistantKey = (a: AssistantSummary) => a.id;
 
 export function Sidebar() {
   const s = useApp();
-  const pins = pinList(s.assistants, s.query);
+  const pins = pinList(conversations(s.assistants, s.groups, s.groupPrefs), s.query);
   const drag = usePinDrag(pins, s.query.trim().length > 0);
-  const pinRows = useRows(drag.order, assistantKey);
+  const pinRows = useRows(drag.order, (row) => row.id);
   const layout = pinLayout(pins.length);
 
   return (
@@ -24,9 +23,10 @@ export function Sidebar() {
           <Icon name="search" size={15} />
           <input value={s.query} placeholder="搜索助手" onChange={(e) => setQuery(e.target.value)} />
         </div>
-        <button className="hob-icon-btn" title="创建专属助手" onClick={newAssistant}>
-          <Icon name="plus" size={18} />
+        <button className={`hob-icon-btn side-home${!s.sel && !s.gsel ? " on" : ""}`} title="首页" onClick={goHome}>
+          <Icon name="home" size={18} />
         </button>
+        <PlusButton />
       </div>
       <div className="side-scroll">
         <div className={`pins${layout.cls}${drag.locked ? " locked" : ""}`} ref={drag.grid}>
@@ -37,7 +37,11 @@ export function Sidebar() {
               data-pin={row.key}
             >
               <div className="srowclip">
-                <Pin a={row.item} sel={row.item.id === s.sel} size={layout.size} drag={drag.target(row.item.id)} />
+                {row.item.kind === "assistant" ? (
+                  <Pin a={row.item.a} sel={row.item.id === s.sel} size={layout.size} drag={drag.target(row.item.id)} />
+                ) : (
+                  <GroupPin g={row.item.g} sel={row.item.id === s.gsel} size={layout.size} drag={drag.target(row.item.id)} />
+                )}
               </div>
             </div>
           ))}

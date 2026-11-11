@@ -12,6 +12,7 @@ import type {
   Iso,
   Item,
   ItemsPage,
+  NoteIcon,
   PageLive,
   Profile,
   SendMessageBody,
@@ -19,38 +20,68 @@ import type {
 } from "../../shared/types.ts";
 import type { HobRuntime } from "./runtime.ts";
 import { refreshSystemPrompt } from "./pi.ts";
-import { conversationPick, defaultWorkRef, jobModel, nameOf, noteOf, thinkingForPick, thinkingLevelsOf, fitThinking, usableRefs, NO_MODEL_NOTE, NoModelError } from "./models.ts";
+import { conversationPick, assistantInGroup, defaultWorkRef, jobModel, nameOf, noteOf, thinkingForPick, thinkingLevelsOf, fitThinking, usableRefs, NO_MODEL_NOTE, NoModelError } from "./models.ts";
 import { buildRouterTools } from "./router-tools.ts";
 import { isInPagesDir } from "./files.ts";
 import { boundKnowledge, formatKnowledge, KNOWLEDGE_INTRO } from "./knowledge-tools.ts";
-import { MEMORY_WRITE_TOOLS, memoryNoteText } from "./memory.ts";
+import { MEMORY_TOOL_PATTERNS, MEMORY_WRITE_TOOLS, memoryNoteText } from "./memory.ts";
 import { buildSystemPrompt, type PromptModel } from "./prompt.ts";
 import { availableSkills } from "./skills.ts";
-import { usableAssistantSkills } from "./assistant-skills.ts";
+import { groupSkills, groupSkillsDir, usableAssistantSkills } from "./assistant-skills.ts";
 import { activityLabel, thinkingLine } from "./router-activity.ts";
 import { imageContents } from "./jobs.ts";
 import { nowBlock } from "./now.ts";
 import { monthDayTimeText } from "./time.ts";
 import { DesktopToolSession } from "./desktop-tools.ts";
+import { textOfContent } from "./transcript.ts";
 
 export const ITEM_TYPE = "hob.item";
 export const ITEM_UPDATE_TYPE = "hob.item.update";
 export const USER_TYPE = "hob.user";
 export const EVENT_TYPE = "hob.event";
+/** 只给助手知道、不开一轮的事（用户直接对任务说的话）。 */
+const CONTEXT_TYPE = "hob.context";
 
 /** 会话条目的 id 和 at 由会话文件给出，写卡片时不用传。 */
 /** 事件附带的信息，落在会话的事件条目上：routine 给回复挂「⏱ 名字」，cont 见 walk。 */
 export interface EventDetails {
   routine?: { id: string; name: string; jobId?: string };
   cont?: true;
+  returnedDelegationId?: string;
   delegationId?: string;
   sourceUserId?: string;
 }
 
 export type NewItem = Item extends infer T ? (T extends Item ? Omit<T, "id" | "at"> : never) : never;
 
+/**
+ * 群里给做事、沟通和管理本群规则、定时、技能的工具；页面按助手存，进群要另做。
+ */
+const GROUP_TOOL_NAMES = new Set([
+  "read", "check_job", "start_job", "reply_job", "stop_job", "ask_user", "send_file", "save_job_as_skill", "set_rule", "remove_rule", "create_routine", "update_routine", "delete_routine", "edit_skill", "delete_skill",
+  "find_knowledge", "search_knowledge", "web_search", "web_fetch", "generate_image",
+  "open_topic", "close_topic",
+  "open_project", "write_requirements", "plan_subtasks", "start_subtasks", "close_project",
+]);
+
+/**
+ * 群里另外只给主助手的：管助手、群和话题的工具。
+ * 别的成员在群里还是拿不到它们。
+ */
+const GROUP_PRIMARY_TOOL_NAMES = new Set([
+  "show_assistant", "show_group", "create_assistant", "update_assistant", "create_group", "update_group", "manage_topic",
+]);
+
+function groupTool(name: string, primary: boolean): boolean {
+  return GROUP_TOOL_NAMES.has(name) || (primary && GROUP_PRIMARY_TOOL_NAMES.has(name)) || name.startsWith("browser_") ||
+    Object.values(MEMORY_TOOL_PATTERNS).flat().some((pattern) => pattern.endsWith("*") ? name.startsWith(pattern.slice(0, -1)) : name === pattern);
+}
+
 interface RouterState {
+  /** 会话键：单聊就是 assistantId，群会话是 `<assistantId>@<gid>` */
+  key: string;
   assistantId: string;
+  groupId?: string;
   session?: AgentSession;
   manager?: SessionManager;
   opening?: Promise<void>;
@@ -98,14 +129,17 @@ function readEntries(file: string): SessionEntry[] {
   return out;
 }
 
+/**
+ * 有的服务商出错时把报错原文写进回复内容（如「API Error: Connection dropped」）：这条不是助手说的话，
+ * 只留「回复失败」那行。断流前已经写出来的正文照常保留。
+ */
+function errorEcho(message: { stopReason?: string; errorMessage?: string; content: unknown }): boolean {
+  const error = message.errorMessage?.trim();
+  return (message.stopReason === "error" || message.stopReason === "aborted") && !!error && messageText(message.content).includes(error);
+}
+
 function messageText(content: unknown): string {
-  if (typeof content === "string") return content.trim();
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((block): block is { type: "text"; text: string } => Boolean(block) && block.type === "text")
-    .map((block) => block.text)
-    .join("")
-    .trim();
+  return textOfContent(content).trim();
 }
 
 /** 模型服务的报错压成一句：「my-proxy API error (429): {"message":"…"}」→「模型服务返回 429：…」。 */
@@ -168,6 +202,7 @@ function walk(entries: SessionEntry[]): { items: Item[]; lead: boolean } {
     }
     if (entry.type === "message" && entry.message.role === "assistant") {
       assistantIndex += 1;
+      if (errorEcho(entry.message)) continue;
       const text = messageText(entry.message.content);
       if (!text) continue;
       push({
@@ -192,6 +227,8 @@ export class RouterManager {
   private itemCache = new Map<string, { manager?: SessionManager; version: string; result: ReturnType<typeof walk>; positions: Map<string, number>; assistantTimes: string[]; last?: { text: string; at: Iso } }>();
   private livePages = new Map<string, Map<string, { page: PageLive; timer?: NodeJS.Timeout; last: number }>>();
   private liveJson = new Map<string, string>();
+  /** 云桌面：一个助手一个，单聊和群会话共用 */
+  private desktops = new Map<string, { session: DesktopToolSession; refs: number }>();
 
   private liveUpdate(assistantId: string, callId: string, args: Record<string, unknown>, flush = false): void {
     let pages = this.livePages.get(assistantId);
@@ -285,34 +322,78 @@ export class RouterManager {
     return next;
   }
 
-  async ensure(assistantId: string): Promise<RouterState> {
+  async ensure(assistantId: string, groupId?: string): Promise<RouterState> {
     const assistant = this.assistant(assistantId);
-    let state = this.routers.get(assistantId);
+    const key = this.keyOf(assistantId, groupId);
+    let state = this.routers.get(key);
     if (!state) {
-      state = { assistantId, running: 0, lastEventAt: Date.now(), stalled: false, memoryWriteArgs: new Map() };
-      this.routers.set(assistantId, state);
+      state = { key, assistantId, ...(groupId ? { groupId } : {}), running: 0, lastEventAt: Date.now(), stalled: false, memoryWriteArgs: new Map() };
+      this.routers.set(key, state);
     }
     if (state.session) return state;
     state.opening ??= this.openSession(state, assistant).catch((error: unknown) => {
       state!.opening = undefined;
+      if (state!.desktop && !state!.session) {
+        this.releaseDesktop(assistantId);
+        state!.desktop = undefined;
+      }
       throw error;
     });
     await state.opening;
     return state;
   }
 
+  /** 会话键：单聊是 assistantId，群会话是 `<assistantId>@<gid>`。 */
+  private keyOf(assistantId: string, groupId?: string): string {
+    return groupId ? `${assistantId}@${groupId}` : assistantId;
+  }
+
+  /** 这个会话的文件：群会话在 groups/<gid>/members/ 下，单聊还是 router.jsonl。 */
+  private sessionFile(state: RouterState): string {
+    return state.groupId ? this.store.groupMemberFile(state.groupId, state.assistantId) : this.store.routerFile(state.assistantId);
+  }
+
+  /**
+   * 云桌面一个助手只有一个屏幕：单聊和它的群会话共用一个 DesktopToolSession，
+   * 按引用计数关：最后一个会话释放时才断开连接。
+   */
+  private desktopFor(assistantId: string): DesktopToolSession {
+    let entry = this.desktops.get(assistantId);
+    if (!entry) {
+      const shared = { refs: 0 } as { session: DesktopToolSession; refs: number };
+      shared.session = new DesktopToolSession(this.runtime, assistantId, false, undefined, true);
+      entry = shared;
+      this.desktops.set(assistantId, entry);
+    }
+    entry.refs += 1;
+    return entry.session;
+  }
+
+  private releaseDesktop(assistantId: string): void {
+    const entry = this.desktops.get(assistantId);
+    if (!entry) return;
+    entry.refs -= 1;
+    if (entry.refs > 0) return;
+    this.desktops.delete(assistantId);
+    void entry.session.dispose();
+  }
+
   private async openSession(state: RouterState, assistant: Assistant): Promise<void> {
     // 提示词里要写模型的显示名和定位，所以先把注册表拉一遍
     await this.runtime.models.get();
-    const pick = conversationPick(this.runtime.settings.settings.models, assistant);
+    const effectiveAssistant = assistantInGroup(assistant, state.groupId ? this.store.group(state.groupId) : undefined, this.runtime.models, this.runtime.settings.settings.models);
+    const pick = conversationPick(this.runtime.settings.settings.models, effectiveAssistant);
     state.knowledgeNames = (await boundKnowledge(this.runtime, assistant.id)).map((collection) => collection.name);
-    state.desktop = new DesktopToolSession(this.runtime, assistant.id, () => !!state.session?.model?.input.includes("image"), undefined, true);
-    const tools = [...buildRouterTools(this.runtime, assistant.id), ...state.desktop.tools().filter((tool) => tool.name.startsWith("browser_"))];
+    state.desktop = this.desktopFor(assistant.id);
+    const available = [...buildRouterTools(this.runtime, assistant.id, state.groupId), ...state.desktop.tools(() => !!state.session?.model?.input.includes("image")).filter((tool) => tool.name.startsWith("browser_"))];
+    const tools = state.groupId ? available.filter((tool) => groupTool(tool.name, assistant.primary)) : available;
+    const file = this.sessionFile(state);
+    const groupId = state.groupId;
     const desktop = this.runtime.desktop.view();
     const enabled = desktop.enabled && !!desktop.url && desktop.tokenConfigured;
     const opened = await this.runtime.pi.open({
-      file: this.store.routerFile(assistant.id),
-      spillDir: join(dirname(this.store.routerFile(assistant.id)), "spill"),
+      file,
+      spillDir: state.groupId ? join(dirname(file), `${assistant.id}-spill`) : join(dirname(file), "spill"),
       cwd: this.store.home,
       model: pick.ref,
       thinking: thinkingForPick(pick, this.runtime.models),
@@ -320,6 +401,8 @@ export class RouterManager {
       systemPrompt: () => {
         const { timezone, aboutYou } = this.runtime.settings.settings.general;
         const desktop = this.runtime.desktop.view();
+        // 群名、成员、负责什么改了下一条消息就用新的
+        const group = groupId ? this.store.group(groupId) : undefined;
         return buildSystemPrompt(this.store, assistant.id, {
           timezone,
           aboutYou,
@@ -329,12 +412,15 @@ export class RouterManager {
           showPageEnabled: tools.some((tool) => tool.name === "show_page"),
           desktopEnabled: desktop.enabled && !!desktop.url && desktop.tokenConfigured,
           publicDesktop: desktop.publicAssistants.includes(assistant.id),
-          models: this.promptModels(assistant.id),
+          models: this.promptModels(assistant.id, groupId),
           skills: availableSkills(this.runtime.home, undefined, this.runtime.settings.settings.skills?.disabled, this.runtime.settings.memory().provider === "lore" ? this.runtime.pi.loreSkillPaths : []),
           assistantSkills: usableAssistantSkills(this.runtime.home, assistant.id),
+          ...(group ? { groupSkills: groupSkills(this.runtime.home, group), groupSkillsDir: groupSkillsDir(this.runtime.home, group.parentId ?? group.id) } : {}),
           assistantSkillsDir: resolve(this.runtime.home, "assistants", assistant.id, "skills"),
           thinkingChoice: this.runtime.settings.settings.models.thinkingChoice,
           knowledgeNames: state.knowledgeNames,
+          ...(group ? { group } : {}),
+          ...(group ? { projects: this.runtime.projects.list(group.id) } : {}),
         });
       },
       tools: tools.filter((tool) => enabled || !tool.name.startsWith("browser_")).map((tool) => tool.name),
@@ -345,12 +431,13 @@ export class RouterManager {
     state.manager = opened.manager;
     state.opening = undefined;
     opened.session.subscribe((event) => this.onSessionEvent(state, assistant.id, event));
-    this.touch(assistant.id);
+    this.touch(state);
   }
 
   private async refreshTools(state: RouterState): Promise<void> {
     state.knowledgeNames = (await boundKnowledge(this.runtime, state.assistantId)).map((collection) => collection.name);
-    const names = state.session!.getActiveToolNames().filter((name) => name !== "search_knowledge" && !name.startsWith("browser_"));
+    const primary = this.store.assistant(state.assistantId)?.primary === true;
+    const names = state.session!.getActiveToolNames().filter((name) => name !== "search_knowledge" && !name.startsWith("browser_") && (!state.groupId || groupTool(name, primary)));
     if (state.knowledgeNames.length) names.push("search_knowledge");
     const desktop = this.runtime.desktop.view();
     if (desktop.enabled && desktop.url && desktop.tokenConfigured) names.push(...state.desktop!.tools().filter((tool) => tool.name.startsWith("browser_")).map((tool) => tool.name));
@@ -378,9 +465,10 @@ export class RouterManager {
   }
 
   /** 这个助手能派、当前可用的模型（提示词里那一节）。 */
-  private promptModels(assistantId: string): PromptModel[] {
-    const assistant = this.store.assistant(assistantId);
-    if (!assistant) return [];
+  private promptModels(assistantId: string, groupId?: string): PromptModel[] {
+    const found = this.store.assistant(assistantId);
+    if (!found) return [];
+    const assistant = assistantInGroup(found, groupId ? this.store.group(groupId) : undefined, this.runtime.models, this.runtime.settings.settings.models);
     const settings = this.runtime.settings.settings.models;
     const catalog = this.runtime.models;
     const def = defaultWorkRef(settings, assistant, catalog);
@@ -400,7 +488,7 @@ export class RouterManager {
   /** 换了对话模型或思考档：下一轮生效，不重建会话（上下文保留）。 */
   private async applyConversationModel(state: RouterState): Promise<void> {
     if (!state.session) return;
-    const assistant = this.assistant(state.assistantId);
+    const assistant = assistantInGroup(this.assistant(state.assistantId), state.groupId ? this.store.group(state.groupId) : undefined, this.runtime.models, this.runtime.settings.settings.models);
     const pick = conversationPick(this.runtime.settings.settings.models, assistant);
     const model = await this.runtime.pi.model(pick.ref);
     // 用拿到的模型本身算档：换服务商后名单缓存是空的，按缓存查会把思考档收成 off
@@ -431,6 +519,10 @@ export class RouterManager {
         state.activityLast = Date.now();
       }
     }
+    // 工具跑完、整理上下文时不再挂着上一个工具的名字
+    if (event.type === "turn_end" && state.activity?.state === "tool") this.setActivity(state, { state: "thinking", label: "正在想…" });
+    if (event.type === "compaction_start" && state.running > 0) this.setActivity(state, { state: "thinking", label: "正在整理前面的对话…" });
+    if (event.type === "compaction_end" && state.running > 0) this.setActivity(state, { state: "thinking", label: "正在想…" });
     if (event.type === "agent_end" || (event.type === "message_end" && event.message.role === "assistant" && ["error", "aborted"].includes(event.message.stopReason))) this.setActivity(state, null);
     if (event.type === "message_start" && event.message.role === "user") {
       const prompt = messageText(event.message.content);
@@ -473,10 +565,12 @@ export class RouterManager {
       if (state.currentDelegationId && (event.result as { terminate?: boolean } | undefined)?.terminate) state.terminatingTools?.add(event.toolCallId);
       const args = state.memoryWriteArgs.get(event.toolCallId);
       state.memoryWriteArgs.delete(event.toolCallId);
-      void this.onMemoryWrite(assistantId, event, args);
+      void this.onMemoryWrite(state, event, args);
       return;
     }
     if (event.type === "message_start" && event.message.role === "assistant") {
+      // 群会话的条目 id 和时间线由 GroupManager 管，这里只把文字转过去
+      if (state.groupId) return;
       state.streaming = { itemId: `a-${this.assistantCount(assistantId) + 1}`, shown: false };
       return;
     }
@@ -505,6 +599,10 @@ export class RouterManager {
     }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       this.setActivity(state, null);
+      if (state.groupId) {
+        this.runtime.groups?.delta(state.groupId, state.assistantId, event.assistantMessageEvent.delta);
+        return;
+      }
       state.streaming ??= { itemId: `a-${this.assistantCount(assistantId) + 1}`, shown: false };
       const streaming = state.streaming;
       if (!streaming.shown) {
@@ -526,10 +624,17 @@ export class RouterManager {
       return;
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
+      const text = errorEcho(event.message) ? "" : messageText(event.message.content).trim();
+      if (state.groupId) {
+        this.runtime.groups?.settle(state.groupId, state.assistantId, text);
+        return;
+      }
       const streaming = state.streaming;
       state.streaming = undefined;
-      const text = messageText(event.message.content).trim();
-      if (!text) return;
+      if (!text) {
+        if (streaming?.shown) this.bus.emit({ type: "item", assistantId, item: { kind: "assistant", id: streaming.itemId, at: new Date().toISOString(), text: "" } });
+        return;
+      }
       // pi 在 message_end 之后才把消息写进会话文件，等一拍再按条目发，内容和 id 才和刷新后一致
       setTimeout(() => this.emitSettledAssistant(assistantId, text, streaming?.itemId), 0);
     }
@@ -537,7 +642,7 @@ export class RouterManager {
 
   /** 记忆插件写成功了 → 对话里出一行「记忆已更新 · …」。 */
   private async onMemoryWrite(
-    assistantId: string,
+    state: RouterState,
     event: { toolName: string; result?: unknown; isError?: boolean },
     args: Record<string, unknown> | undefined,
   ): Promise<void> {
@@ -545,14 +650,24 @@ export class RouterManager {
     const details = (event.result as { details?: { ok?: boolean } } | undefined)?.details;
     if (details?.ok === false) return;
     const text = memoryNoteText(args);
-    await this.addItem(assistantId, { kind: "note", icon: "memory", text: text ? `记忆已更新 · ${text}` : "记忆已更新" });
+    await this.note(state, "memory", text ? `记忆已更新 · ${text}` : "记忆已更新");
+  }
+
+  /** 一条系统提示：单聊进对话，群会话进群的时间线（发言人是这个成员）。 */
+  private async note(state: RouterState, icon: NoteIcon, text: string): Promise<void> {
+    if (state.groupId) {
+      this.runtime.groups?.note(state.groupId, state.assistantId, text, icon);
+      return;
+    }
+    await this.addItem(state.assistantId, { kind: "note", icon, text });
   }
 
   private emitSettledAssistant(assistantId: string, text: string, expectedId?: string): void {
     const list = this.derived(assistantId).result.items.filter((item) => item.kind === "assistant");
     const item = list.find((entry) => entry.id === expectedId) ?? list.filter((entry) => entry.text === text).pop();
     if (item) this.bus.emit({ type: "item", assistantId, item });
-    this.touch(assistantId);
+    const state = this.routers.get(assistantId);
+    if (state) this.touch(state);
   }
 
   private assistantCount(assistantId: string): number {
@@ -564,7 +679,8 @@ export class RouterManager {
   private setActivity(state: RouterState, activity: RouterActivity | null): void {
     if (state.activity?.state === activity?.state && state.activity?.label === activity?.label) return;
     state.activity = activity;
-    this.bus.emit({ type: "router-activity", assistantId: state.assistantId, activity });
+    if (state.groupId) this.bus.emit({ type: "group-activity", groupId: state.groupId, speaker: state.assistantId, activity });
+    else this.bus.emit({ type: "router-activity", assistantId: state.assistantId, activity });
   }
 
   /** 一轮开始了：清掉上一轮的“已停”标记并起看门狗。 */
@@ -604,17 +720,12 @@ export class RouterManager {
     // 不 await：模型的那次请求可能收不了尾，但这行提示必须先出来
     void state.session?.abort().catch(() => undefined);
     const assistant = this.store.assistant(state.assistantId);
-    await this.addItem(state.assistantId, {
-      kind: "note",
-      icon: "info",
-      text: `${assistant?.name ?? state.assistantId} 无响应，已停止，可重新发送`,
-    });
+    await this.note(state, "info", `${assistant?.name ?? state.assistantId} 无响应，已停止，可重新发送`);
   }
 
-  /** 空闲 30 分钟释放 Router 内存，下次用再打开 router.jsonl。 */
-  private touch(assistantId: string): void {
-    const state = this.routers.get(assistantId);
-    if (!state?.session) return;
+  /** 空闲 30 分钟释放 Router 内存，下次用再打开会话文件。 */
+  private touch(state: RouterState): void {
+    if (!state.session) return;
     if (state.idleTimer) clearTimeout(state.idleTimer);
     state.idleTimer = setTimeout(() => {
       if (!state.session || state.session.isStreaming) return;
@@ -627,7 +738,7 @@ export class RouterManager {
     if (state.idleTimer) clearTimeout(state.idleTimer);
     state.idleTimer = undefined;
     state.session?.dispose();
-    void state.desktop?.dispose();
+    if (state.desktop) this.releaseDesktop(state.assistantId);
     state.desktop = undefined;
     state.session = undefined;
     state.manager = undefined;
@@ -645,13 +756,41 @@ export class RouterManager {
     }
   }
 
-  /** 助手没了（归档）：关掉它的会话，内存里也不留 —— 它的目录随后会被移进归档。 */
+  releaseGroupMemberSessions(assistantId: string, groupIds: string[]): void {
+    for (const groupId of groupIds) {
+      const state = this.routers.get(this.keyOf(assistantId, groupId));
+      if (!state) continue;
+      state.releaseAfterTurn = true;
+      this.maybeRelease(state);
+    }
+  }
+
+  /** 助手没了（归档）：关掉它的会话（含它所在的群会话），内存里也不留 —— 它的目录随后会被移进归档。 */
   forget(assistantId: string): void {
     this.itemCache.delete(assistantId);
-    const state = this.routers.get(assistantId);
+    for (const [key, state] of [...this.routers]) {
+      if (state.assistantId !== assistantId) continue;
+      this.close(state);
+      this.routers.delete(key);
+    }
+  }
+
+  /** 关掉一个会话（助手被移出群时用）。 */
+  forgetSession(assistantId: string, groupId?: string): void {
+    const key = this.keyOf(assistantId, groupId);
+    const state = this.routers.get(key);
     if (!state) return;
     this.close(state);
-    this.routers.delete(assistantId);
+    this.routers.delete(key);
+  }
+
+  /** 群归档了：关掉这个群里所有成员的会话。 */
+  forgetGroup(groupId: string): void {
+    for (const [key, state] of [...this.routers]) {
+      if (state.groupId !== groupId) continue;
+      this.close(state);
+      this.routers.delete(key);
+    }
   }
 
   private maybeRelease(state: RouterState): void {
@@ -667,36 +806,75 @@ export class RouterManager {
   }
 
   // ---------- 事件与条目 ----------
-  async addItem(assistantId: string, item: NewItem): Promise<Item> {
-    const state = await this.ensure(assistantId);
-    const lead = this.derived(assistantId).result.lead;
-    const id = state.manager!.appendCustomEntry(ITEM_TYPE, item);
-    const full = { ...item, ...(lead ? { lead: true } : {}), id, at: this.entryAt(state, id) } as Item;
-    this.bus.emit({ type: "item", assistantId, item: full });
+  /** 这个群还在、这个助手也还在群里：卡片进群的时间线，事件进它的群会话。 */
+  private groupFor(assistantId: string, groupId?: string): { id: string; name: string } | undefined {
+    if (!groupId) return undefined;
+    const group = this.store.group(groupId);
+    if (!group || !group.members.includes(assistantId)) return undefined;
+    return group;
+  }
+
+  /**
+   * 卡片进对话：在群里就进群的时间线（speaker 是这个助手），否则照旧进单聊。
+   * 群已归档、成员已被移出时落回单聊，前端照常能看到，东西不丢。
+   */
+  async addItem(assistantId: string, item: NewItem, groupId?: string): Promise<Item> {
+    const group = this.groupFor(assistantId, groupId);
+    let full: Item;
+    if (group) {
+      full = this.runtime.groups.appendItem(group.id, assistantId, item);
+    } else {
+      const state = await this.ensure(assistantId);
+      const lead = this.derived(assistantId).result.lead;
+      const id = state.manager!.appendCustomEntry(ITEM_TYPE, item);
+      full = { ...item, ...(lead ? { lead: true } : {}), id, at: this.entryAt(state, id) } as Item;
+      this.bus.emit({ type: "item", assistantId, item: full });
+    }
     if (full.kind === "file") {
       const page = isInPagesDir(relative(this.runtime.home, resolve(full.path)));
-      void this.runtime.knowledge.collect({ origin: "output", path: full.path, assistantId, itemId: id, ...(page ? { name: full.name, description: full.meta } : {}) }).catch((error) => console.error("知识库收集失败：", error));
+      void this.runtime.knowledge.collect({ origin: "output", path: full.path, assistantId, itemId: full.id, ...(page ? { name: full.name, description: full.meta } : {}) }).catch((error) => console.error("知识库收集失败：", error));
     }
     return full;
   }
 
-  async updateImage(assistantId: string, id: string, update: { status: "done" | "failed"; path?: string; error?: string }): Promise<void> {
+  async updateImage(
+    assistantId: string,
+    id: string,
+    update: { status: "done" | "failed"; path?: string; error?: string },
+    groupId?: string,
+  ): Promise<void> {
+    const group = this.groupFor(assistantId, groupId);
+    if (group) {
+      const item = this.runtime.groups.updateImageItem(group.id, id, update);
+      if (!item) throw new Error(`图片条目不存在：${id}`);
+      this.collectGeneratedImage(item, assistantId, update);
+      return;
+    }
     const state = await this.ensure(assistantId);
     const item = this.derived(assistantId).result.items.find((entry) => entry.id === id && entry.kind === "image");
     if (!item) throw new Error(`图片条目不存在：${id}`);
     state.manager!.appendCustomEntry(ITEM_UPDATE_TYPE, { id, ...update });
     this.bus.emit({ type: "item", assistantId, item: { ...item, ...update } });
+    this.collectGeneratedImage(item, assistantId, update);
+  }
+
+  private collectGeneratedImage(item: Item, assistantId: string, update: { status: "done" | "failed"; path?: string }): void {
     if (item.kind === "image" && update.status === "done" && update.path) {
-      void this.runtime.knowledge.collect({ origin: "output", path: update.path, description: item.prompt, assistantId, itemId: id }).catch((error) => console.error("知识库收集失败：", error));
+      void this.runtime.knowledge.collect({ origin: "output", path: update.path, description: item.prompt, assistantId, itemId: item.id }).catch((error) => console.error("知识库收集失败：", error));
     }
   }
 
-  currentDelegation(assistantId: string): string | undefined {
-    return this.routers.get(assistantId)?.currentDelegationId;
+  currentDelegation(assistantId: string, groupId?: string): string | undefined {
+    return groupId ? undefined : this.routers.get(assistantId)?.currentDelegationId;
   }
 
-  /** 取当前回合来源及其之前的可见对话；事件取最近用户消息。 */
-  originalWords(assistantId: string, note?: string, recent = false, extraFiles: string[] = []): { text: string; files: string[] } {
+  /**
+   * 取当前回合来源及其之前的可见对话；事件取最近用户消息。
+   * 在群里派任务时，用户原话取自群的时间线（单聊里没有这段话）。
+   */
+  originalWords(assistantId: string, note?: string, recent = false, extraFiles: string[] = [], groupId?: string): { text: string; files: string[] } {
+    const group = this.groupFor(assistantId, groupId);
+    if (group) return this.groupOriginalWords(assistantId, group.id, note, recent, extraFiles);
     const items = this.derived(assistantId).result.items;
     const state = this.routers.get(assistantId);
     const source = items.find((item) => item.kind === "user" && item.id === state?.currentUserId)
@@ -737,9 +915,24 @@ export class RouterManager {
     return item;
   }
 
-  async event(assistantId: string, text: string, details?: EventDetails): Promise<void> {
+  async event(assistantId: string, text: string, details?: EventDetails, groupId?: string): Promise<void> {
+    const group = this.groupFor(assistantId, groupId);
+    if (group) {
+      // 进它的群会话，并且让 GroupManager 开一轮：它说的话才写得到时间线上
+      void this.runtime.groups.deliverEvent(group.id, assistantId, text).catch((error) => console.error("群事件投递失败：", error));
+      return;
+    }
     await this.ensure(assistantId);
     void this.pushEvent(assistantId, text, details).catch(() => undefined);
+  }
+
+  /** 将转交结果送进接收会话；会话条目是去重依据。 */
+  async delegationResult(assistantId: string, id: string, text: string): Promise<boolean> {
+    const state = await this.ensure(assistantId);
+    const received = () => state.manager!.getEntries().some((entry) => entry.type === "custom_message" && entry.customType === EVENT_TYPE && (entry.details as EventDetails | undefined)?.returnedDelegationId === id);
+    if (received()) return true;
+    await this.pushEvent(assistantId, text, { returnedDelegationId: id });
+    return received();
   }
 
   /** 事件进 Router 上下文（custom message，不进气泡）；这一轮跑完才返回。 */
@@ -751,7 +944,7 @@ export class RouterManager {
   ): Promise<boolean> {
     const state = await this.ensure(assistantId);
     const session = state.session!;
-    this.touch(assistantId);
+    this.touch(state);
     state.running += 1;
     this.armStall(state);
     this.publishBusy(state);
@@ -777,31 +970,36 @@ export class RouterManager {
       this.clearStall(state);
       this.publishBusy(state);
       this.maybeRelease(state);
-      this.touch(assistantId);
+      this.touch(state);
     }
   }
 
   /** 忙闲变了告诉前端（“正在想”要看它）。 */
   private publishBusy(state: RouterState): void {
+    if (state.groupId) {
+      this.runtime.groups?.publish(state.groupId);
+      return;
+    }
     const assistant = this.store.assistant(state.assistantId);
     if (assistant) this.bus.emit({ type: "assistant", assistant: this.summary(assistant) });
   }
 
   /**
-   * 模型出错（限流、额度、网络）引擎不抛异常，只在最后一条助手消息上记 stopReason=error，重试完就停。
-   * 不说一声的话对话里什么都没有，看着像助手不理人：这里补一行灰字。
+   * 模型出错或断流时引擎可能只在助手消息上记错误，补一行说明。
    */
   private async reportTurnError(state: RouterState): Promise<void> {
     const last = state.session?.messages.findLast((message) => message.role === "assistant");
     // 停下的那一轮：有的服务商（Claude 订阅桥）把停止报成 error，不是回复失败
-    if (state.stalled || !last || last.role !== "assistant" || last.stopReason !== "error") return;
-    await this.addItem(state.assistantId, { kind: "note", icon: "info", text: `回复失败：${briefModelError(last.errorMessage)}。发送任意消息即可重试。` });
+    if (state.stalled || !last || last.role !== "assistant" || (last.stopReason !== "error" && !(last.stopReason === "aborted" && last.errorMessage))) return;
+    // 群里不 @ 的话交给群主，要 @ 出错的那个成员才会重试它
+    const retry = state.groupId ? `@${this.store.assistant(state.assistantId)?.name ?? state.assistantId} 说一句即可重试` : "发送任意消息即可重试";
+    await this.note(state, "info", `回复失败：${briefModelError(last.errorMessage)}。${retry}。`);
   }
 
   private async fail(state: RouterState, error: unknown): Promise<void> {
     if (state.stalled) return;
     const message = error instanceof Error ? error.message : String(error);
-    await this.addItem(state.assistantId, { kind: "note", icon: "info", text: `发生错误：${message}` });
+    await this.note(state, "info", `发生错误：${message}`);
   }
 
   // ---------- 对话操作 ----------
@@ -855,7 +1053,7 @@ export class RouterManager {
   async send(assistantId: string, body: SendMessageBody): Promise<Item> {
     this.runtime.delegations.takeOver(assistantId);
     for (const approval of this.store.approvals()) {
-      if (approval.assistantId !== assistantId || approval.source !== "router" || approval.status !== "pending") continue;
+      if (approval.assistantId !== assistantId || approval.groupId || approval.source !== "router" || approval.status !== "pending") continue;
       const expired = { ...approval, status: "expired" as const };
       this.store.saveApproval(expired);
       this.bus.emit({ type: "approval", approval: expired });
@@ -884,49 +1082,104 @@ export class RouterManager {
     if (body.quote) lines.unshift(`（引用我之前的话：「${body.quote.text}」）`);
     if (body.files?.length) lines.push(`附件：${body.files.join("、")}`);
     const basePrompt = `${nowBlock(this.runtime, assistantId)}\n\n${lines.filter(Boolean).join("\n")}`;
+    void this.deliver(state, basePrompt, { itemId: id, ...(body.files?.length ? { files: body.files } : {}), knowledgeQuery: body.text });
+    return item;
+  }
+
+  /** 群会话里的一轮：GroupManager 按时间线拼好输入，走同一条发消息路径（排队、看门狗、忙闲）。 */
+  /**
+   * 记进助手的会话但不开一轮：正在回复就等这一轮说完再记。
+   * 用户在任务卡上直接对任务说的话走这里，之后任务来问、交结果时助手知道用户说过什么。
+   */
+  async remember(assistantId: string, text: string, groupId?: string): Promise<void> {
+    const state = await this.ensure(assistantId, this.groupFor(assistantId, groupId)?.id);
+    await state.session!.sendCustomMessage({ customType: CONTEXT_TYPE, content: `${nowBlock(this.runtime, assistantId)}\n\n[hob-event] ${text}`, display: false }, { triggerTurn: false });
+  }
+
+  async deliverMember(groupId: string, assistantId: string, text: string, received?: () => void, files?: string[]): Promise<void> {
+    const state = await this.ensure(assistantId, groupId);
+    await this.deliver(state, text, { received, files });
+  }
+
+  /**
+   * 用户在这个群里又说话了，而这个成员正在这个群里说一轮：用 steer 插进那一轮（和单聊一样）。
+   * 会话这时没在流式（刚好跑完、还没开始）→ 返回 false，由调用方照原来的路子排队。
+   */
+  private onUserReceived(state: RouterState, text: string, received?: () => void): () => void {
+    if (!received) return () => {};
+    const unsubscribe = state.session!.subscribe((event) => {
+      if (event.type === "message_end" && event.message.role === "user" && messageText(event.message.content) === text.trim()) {
+        unsubscribe();
+        queueMicrotask(received);
+      } else if (event.type === "agent_end") unsubscribe();
+    });
+    return unsubscribe;
+  }
+
+  async steerMember(groupId: string, assistantId: string, text: string, files: string[] = [], received?: () => void): Promise<boolean> {
+    const state = this.routers.get(this.keyOf(assistantId, groupId));
+    if (!state?.session?.isStreaming) return false;
+    const images = state.session.model?.input.includes("image") ? imageContents(files) : [];
+    const unsubscribe = this.onUserReceived(state, text, received);
+    try { await state.session.steer(text, images.length ? images : undefined); }
+    catch (error) { unsubscribe(); throw error; }
+    return true;
+  }
+
+  /**
+   * 把一段话送进这个会话（单聊和群共用）：同一会话里的话排队，前一段送出去才轮到下一段；
+   * 正在流式回复时用 steer 插进去。这一轮跑完才返回。
+   */
+  private async deliver(
+    state: RouterState,
+    text: string,
+    options: { itemId?: string; files?: string[]; knowledgeQuery?: string; received?: () => void } = {},
+  ): Promise<void> {
     const previousDelivery = state.pendingDelivery;
     let releaseDelivery!: () => void;
     const delivery = new Promise<void>((resolve) => { releaseDelivery = resolve; });
     state.pendingDelivery = delivery;
 
-    this.touch(assistantId);
+    this.touch(state);
     state.running += 1;
     this.armStall(state);
     this.publishBusy(state);
-    void (async () => {
-      try {
-        const promptText = basePrompt + await this.automaticKnowledge(state, body.text);
-        await previousDelivery;
-        (state.pendingUsers ??= []).push({ prompt: promptText, id });
-        await this.applyConversationModel(state);
-        await this.refreshTools(state);
-        // 对话模型能看图就把图片直接给它（路径照样写在「附件」里，派任务时还能交出去）；看不了图就只有路径
-        const images = state.session!.model?.input.includes("image") ? imageContents(body.files) : [];
-        if (state.session!.isStreaming) {
-          await state.session!.steer(promptText, images.length ? images : undefined);
-          releaseDelivery();
-        } else {
-          await state.session!.prompt(promptText, { ...(images.length ? { images } : {}), preflightResult: releaseDelivery });
-          await this.reportTurnError(state);
-        }
-      } catch (error) {
-        await this.fail(state, error);
-      } finally {
+    let unsubscribeReceived = () => {};
+    let queued = false;
+    try {
+      const promptText = options.knowledgeQuery === undefined ? text : text + await this.automaticKnowledge(state, options.knowledgeQuery);
+      await previousDelivery;
+      if (options.itemId) (state.pendingUsers ??= []).push({ prompt: promptText, id: options.itemId });
+      await this.applyConversationModel(state);
+      await this.refreshTools(state);
+      // 对话模型能看图就把图片直接给它（路径照样写在「附件」里，派任务时还能交出去）；看不了图就只有路径
+      const images = options.files?.length && state.session!.model?.input.includes("image") ? imageContents(options.files) : [];
+      unsubscribeReceived = this.onUserReceived(state, promptText, options.received);
+      if (state.session!.isStreaming) {
+        await state.session!.steer(promptText, images.length ? images : undefined);
+        queued = true;
         releaseDelivery();
-        if (state.pendingDelivery === delivery) state.pendingDelivery = undefined;
-        state.running = Math.max(0, state.running - 1);
-        if (!state.running) this.setActivity(state, null);
-        this.clearStall(state);
-        this.publishBusy(state);
-        this.maybeRelease(state);
-        this.touch(assistantId);
+      } else {
+        await state.session!.prompt(promptText, { ...(images.length ? { images } : {}), preflightResult: releaseDelivery });
+        await this.reportTurnError(state);
       }
-    })();
-    return item;
+    } catch (error) {
+      await this.fail(state, error);
+    } finally {
+      if (!queued) unsubscribeReceived();
+      releaseDelivery();
+      if (state.pendingDelivery === delivery) state.pendingDelivery = undefined;
+      state.running = Math.max(0, state.running - 1);
+      if (!state.running) this.setActivity(state, null);
+      this.clearStall(state);
+      this.publishBusy(state);
+      this.maybeRelease(state);
+      this.touch(state);
+    }
   }
 
-  async stop(assistantId: string): Promise<void> {
-    const state = this.routers.get(assistantId);
+  async stop(assistantId: string, groupId?: string): Promise<void> {
+    const state = this.routers.get(this.keyOf(assistantId, groupId));
     if (state) {
       state.stalled = true;
       this.setActivity(state, null);
@@ -934,20 +1187,30 @@ export class RouterManager {
     if (state?.session) await state.session.abort();
   }
 
-  isBusy(assistantId: string): boolean {
-    const state = this.routers.get(assistantId);
+  isBusy(assistantId: string, groupId?: string): boolean {
+    const state = this.routers.get(this.keyOf(assistantId, groupId));
     // 只看助手自己在不在回复：任务不阻塞对话，任务的进度在任务卡上，不再算进来（不然任务跑多久「…」就挂多久）
     return (state?.running ?? 0) > 0 || (state?.session?.isStreaming ?? false);
   }
 
+  /** 这个群里正在说话的成员（左栏小橙点、群状态行用）。 */
+  busyMembers(groupId: string): string[] {
+    const busy: string[] = [];
+    for (const state of this.routers.values()) {
+      if (state.groupId !== groupId) continue;
+      if ((state.running ?? 0) > 0 || state.session?.isStreaming) busy.push(state.assistantId);
+    }
+    return busy;
+  }
+
   /** 等到这个助手没有在跑的回复，并且会话条目已经落定（测试和冒烟用）。 */
-  async waitIdle(assistantId: string, timeoutMs = 15_000): Promise<void> {
+  async waitIdle(assistantId: string, timeoutMs = 15_000, groupId?: string): Promise<void> {
     const started = Date.now();
     let stable = 0;
     let lastCount = -1;
     await new Promise((resolve) => setTimeout(resolve, 20));
     while (Date.now() - started < timeoutMs) {
-      const state = this.routers.get(assistantId);
+      const state = this.routers.get(this.keyOf(assistantId, groupId));
       const busy = (state?.running ?? 0) > 0 || (state?.session?.isStreaming ?? false);
       const count = state?.manager?.getEntryCount() ?? -1;
       if (!busy) {
@@ -1058,6 +1321,8 @@ export class RouterManager {
     for (const state of this.routers.values()) this.close(state);
     this.routers.clear();
     this.itemCache.clear();
+    for (const entry of this.desktops.values()) void entry.session.dispose();
+    this.desktops.clear();
   }
 
   /** 直接走事件的 followUp 队列，实际收到这条消息时才开始关联任务。 */
@@ -1069,8 +1334,38 @@ export class RouterManager {
     }
   }
 
-  /** 审批答案回到 Router（router 来源的审批，答案作为事件进入上下文）。 */
-  async answerEvent(assistantId: string, text: string): Promise<void> {
-    await this.event(assistantId, text);
+  /** 审批答案回到 Router（router 来源的审批，答案作为事件进入上下文；群里提的问题回群会话）。 */
+  async answerEvent(assistantId: string, text: string, groupId?: string): Promise<void> {
+    await this.event(assistantId, text, undefined, groupId);
+  }
+
+  /** 群里的用户原话：时间线上最近一条用户消息，和它前面几句。 */
+  private groupOriginalWords(assistantId: string, groupId: string, note?: string, recent = false, extraFiles: string[] = []): { text: string; files: string[] } {
+    const group = this.store.group(groupId);
+    const items = group ? this.runtime.groups.timeline(groupId) : [];
+    const user = items.findLast((item) => item.kind === "user");
+    const files = [...new Set([...(user?.kind === "user" ? user.files ?? [] : []), ...extraFiles])];
+    const timezone = this.runtime.settings.settings.general.timezone;
+    const name = this.assistant(assistantId).name;
+    const sections: string[] = [];
+    if (user?.kind === "user") {
+      const lines = [`用户原话（${monthDayTimeText(timezone, new Date(user.at))}，在群「${group?.name ?? groupId}」里）：`, user.text];
+      if (user.quote) lines.push(`（引用：「${user.quote.text}」）`);
+      sections.push(lines.filter(Boolean).join("\n"));
+      if (recent) {
+        const previous = items.slice(0, items.indexOf(user)).filter((item) => item.kind === "user" || item.kind === "assistant").slice(-6);
+        if (previous.length) sections.push(`最近的对话：\n${previous.map((item) => {
+          if (item.kind !== "user" && item.kind !== "assistant") return "";
+          const clock = new Intl.DateTimeFormat("sv-SE", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(item.at));
+          const characters = [...item.text];
+          const text = characters.length > 1500 ? `${characters.slice(0, 1500).join("")}…` : item.text;
+          const who = item.kind === "user" ? "用户" : this.store.assistant(item.speaker)?.name ?? item.speaker;
+          return `${who}（${clock}）：${text}`;
+        }).join("\n")}`);
+      }
+    }
+    if (files.length) sections.push(`附件：${files.join("、")}`);
+    if (note) sections.push(`${name} 的备注：${note}`);
+    return { text: sections.join("\n\n"), files };
   }
 }

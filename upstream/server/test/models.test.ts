@@ -282,7 +282,7 @@ describe("提示词", () => {
         expect(text).not.toContain("填 thinking");
       }
       const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "start_job")!;
-      expect(tool.parameters.properties.thinking.description).toBe("当前设置为固定思考档，此参数会被忽略，不要填。");
+      expect(tool.parameters.properties).not.toHaveProperty("thinking");
       expect(tool.parameters.properties.model.description).toContain("hob-faux/smart（默认）");
       expect(tool.parameters.properties.model.description).toContain("思考档 high");
       hob.runtime.settings.patch(hob.runtime.settings.get().revision, { models: { thinkingChoice: "auto" } });
@@ -297,8 +297,8 @@ describe("提示词", () => {
       const cookie = await signIn(app);
       const before = await hob.runtime.router.ensure("hob");
       const firstSession = before.session!;
-      const description = (session: typeof firstSession) => session.agent.state.tools.find((tool) => tool.name === "start_job")!.parameters.properties.thinking.description;
-      expect(description(firstSession)).toContain("可选");
+      const properties = (session: typeof firstSession) => session.agent.state.tools.find((tool) => tool.name === "start_job")!.parameters.properties;
+      expect(properties(firstSession).thinking.description).toContain("可选");
       const result = await app.request("/api/settings", {
         method: "PUT", headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({ revision: hob.runtime.settings.get().revision, patch: { models: { thinkingChoice: "fixed" } } }),
@@ -306,7 +306,7 @@ describe("提示词", () => {
       expect(result.status).toBe(200);
       const after = await hob.runtime.router.ensure("hob");
       expect(after.session).not.toBe(firstSession);
-      expect(description(after.session!)).toContain("此参数会被忽略");
+      expect(properties(after.session!)).not.toHaveProperty("thinking");
     } finally { hob.close(); }
   });
   it("start_job 列出每个模型的评分、能力和思考档", async () => {

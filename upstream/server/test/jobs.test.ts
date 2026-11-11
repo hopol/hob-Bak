@@ -20,6 +20,22 @@ function isRunning(pid: number): boolean {
 }
 
 describe("任务", () => {
+  it("非主助手开一个不填 cwd 的任务：工作目录在它自己的任务目录下", async () => {
+    const hob = makeHob();
+    try {
+      hob.runtime.store.saveAssistant({ ...hob.runtime.store.assistant("hob")!, id: "ops", name: "服务器", primary: false });
+      hob.faux.setResponses([call("report", { outcome: "done", result: "收拾好了" }), text("交给后台了")]);
+      hob.faux.appendResponses([text("做完了。")]);
+      const job = await hob.runtime.jobs.start("ops", { title: "收拾目录", instruction: "把目录收拾一下" });
+
+      expect(job.cwd).toBe(join(hob.home, "assistants", "ops", "jobs", job.id, "work"));
+      expect(existsSync(join(hob.home, "assistants", "hob", "jobs", job.id))).toBe(false);
+
+      await hob.runtime.jobs.waitIdle();
+      expect(hob.runtime.store.job(job.id)).toMatchObject({ status: "done", cwd: job.cwd });
+    } finally { hob.close(); }
+  });
+
   it("任务事件按完整结果长度分段，缺结果说明原因", () => {
     const job = { id: "t-1", assistantId: "hob", title: "测试", instruction: "", status: "done" as const, createdAt: "", stats: { reads: 0, commands: 0, edits: 0 }, activity: [], reportPath: "/tmp/report.md" };
     expect(jobResultEvent({ ...job, summary: "短结果" })).toBe("任务「测试」（t-1）已完成。\n过程：动手 0 次，没用技能。\n结果：\n短结果");

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gonePages, layerList, popPage, pushPage, removeMissingLivePages, replacePage, selectPanelStack, type PanelPage } from "../src/panel-stack.ts";
+import { gonePages, layerList, popPage, pushPage, removeMissingLivePages, replacePage, selectPanelStack, panelAssistant, type PanelPage } from "../src/panel-stack.ts";
 
 describe("右栏页面栈", () => {
   it("退回时退掉的页盖在最上面滑出去，换掉栈顶时旧页垫在新页下面", () => {
@@ -36,5 +36,15 @@ describe("右栏页面栈", () => {
   it("只移除消失的实时预览", () => {
     const stack: PanelPage[] = [{ kind: "file", path: "", full: false, liveId: "gone" }, { kind: "file", path: "", full: false, liveId: "here" }];
     expect(removeMissingLivePages(stack, { here: {} })).toEqual([stack[1]]);
+  });
+});
+
+describe("右栏讲的是哪个助手", () => {
+  it("栈里有群成员页就是那个成员（往下推的编辑页也跟着它），返回到群信息后回到选中的助手", () => {
+    const member = pushPage([], { kind: "member", id: "ops" });
+    expect(panelAssistant(member, null)).toBe("ops");
+    expect(panelAssistant(pushPage(member, { kind: "assistant" }), null)).toBe("ops");
+    expect(panelAssistant(popPage(member), null)).toBe("hob");
+    expect(panelAssistant([], "write")).toBe("write");
   });
 });

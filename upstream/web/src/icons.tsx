@@ -3,7 +3,10 @@ import type { CSSProperties } from "react";
 
 const I = {
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  hash: '<path d="M9.5 4 7.5 20M16.5 4l-2 16M4 9.5h16M3 15h16"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  home: '<path d="m3.5 11 8.5-7 8.5 7"/><path d="M6 9.5V19a1 1 0 0 0 1 1h3.5v-5h3v5H17a1 1 0 0 0 1-1V9.5"/>',
+  minus: '<path d="M5 12h14"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
   gear: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
   dbl: '<path d="m6 17 5-5-5-5M13 17l5-5-5-5"/>',

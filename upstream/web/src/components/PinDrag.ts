@@ -2,9 +2,8 @@
 // 换位置的算法在 ../pin-drag.ts，这里只管指针、拖动中的预览和落盘。
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
-import type { AssistantSummary } from "../../../shared/types.ts";
 import { dropIndex, reorderAt, type Box } from "../pin-drag.ts";
-import { closeAssistantMenu, patchAssistant, savePinOrder, useApp } from "../store.ts";
+import { closeAssistantMenu, pinConversation, savePinOrder, useApp } from "../store.ts";
 
 /** 按住后移动超过这么多像素才算在拖：点一下照旧打开对话，长按照旧弹菜单。 */
 const SLOP = 6;
@@ -19,13 +18,13 @@ export interface PinDragTarget {
   takeMoved: () => boolean;
 }
 
-export interface PinDrag {
+export interface PinDrag<T> {
   /** 包住头像那一层：从这里往下找带 data-pin 的头像格子 */
   grid: RefObject<HTMLDivElement | null>;
   /** 这一排是不是不让拖（搜索时只显示筛出来的几位，这时候排位置会把别的助手的挤掉） */
   locked: boolean;
   /** 拖动中的先后；没在拖就是传进来的先后 */
-  order: AssistantSummary[];
+  order: T[];
   /** 正拖着的那一个助手 */
   lifted: string | null;
   /** 每个头像接的指针事件 */
@@ -55,7 +54,7 @@ function measure(el: HTMLElement, plain = false): Box {
   return { left: r.left, top: r.top, width: r.width, height: r.height };
 }
 
-export function usePinDrag(pins: AssistantSummary[], locked = false): PinDrag {
+export function usePinDrag<T extends { id: string }>(pins: T[], locked = false): PinDrag<T> {
   const menuOpen = useApp().menu !== null;
   const grid = useRef<HTMLDivElement | null>(null);
   /** 拖动中的先后（只存 id）；松手就清掉，跟着保存后的先后走 */
@@ -68,7 +67,7 @@ export function usePinDrag(pins: AssistantSummary[], locked = false): PinDrag {
   const order = useMemo(() => {
     if (!orderIds) return pins;
     const byId = new Map(pins.map((a) => [a.id, a]));
-    const out = orderIds.map((id) => byId.get(id)).filter((a): a is AssistantSummary => Boolean(a));
+    const out = orderIds.map((id) => byId.get(id)).filter((a): a is T => Boolean(a));
     // 拖动的同时别处加减了置顶：新来的接在后面
     for (const a of pins) if (!orderIds.includes(a.id)) out.push(a);
     return out;
@@ -176,7 +175,8 @@ export function usePinDrag(pins: AssistantSummary[], locked = false): PinDrag {
  * 日常里的助手按住拖：拖进置顶区就置顶，落在哪一格就排在哪；在日常里上下拖就换先后（先后也存在 pinOrder，
  * 只和同一组的比）。只接鼠标：触摸在列表上是滚动，长按留给菜单。
  */
-export function useRowToPin(a: AssistantSummary) {
+/** 会话行（助手或群）要拖的东西：往置顶区拖就置顶，在行里上下拖就换先后。 */
+export function useRowToPin(item: { id: string; pinned: boolean; hidden: boolean }) {
   const app = useApp();
   const menuOpen = app.menu !== null;
   // 搜索时日常只显示筛出来的几位，换先后会把别的挤乱：只许拖进置顶
@@ -233,12 +233,12 @@ export function useRowToPin(a: AssistantSummary) {
       if (!press.active) return;
       if (!root || !over(e.clientX, e.clientY)) {
         const at = slot(e.clientX, e.clientY);
-        if (!at || a.hidden) return;
+        if (!at || item.hidden) return;
         const ids = rows().map((el) => el.dataset.row ?? "");
-        const from = ids.indexOf(a.id);
+        const from = ids.indexOf(item.id);
         if (from < 0) return;
-        const next = ids.filter((id) => id !== a.id);
-        next.splice(at.index > from ? at.index - 1 : at.index, 0, a.id);
+        const next = ids.filter((id) => id !== item.id);
+        next.splice(at.index > from ? at.index - 1 : at.index, 0, item.id);
         void savePinOrder(next);
         return;
       }
@@ -249,8 +249,8 @@ export function useRowToPin(a: AssistantSummary) {
       const r = at < 0 ? null : cells[at].getBoundingClientRect();
       const index = at < 0 ? ids.length : e.clientX > r!.left + r!.width / 2 ? at + 1 : at;
       void (async () => {
-        if (await patchAssistant(a.id, a.hidden ? { pinned: true, hidden: false } : { pinned: true })) return;
-        await savePinOrder([...ids.slice(0, index), a.id, ...ids.slice(index)]);
+        if (await pinConversation(item.id)) return;
+        await savePinOrder([...ids.slice(0, index), item.id, ...ids.slice(index)]);
       })();
     };
     window.addEventListener("pointermove", onMove);
@@ -261,7 +261,7 @@ export function useRowToPin(a: AssistantSummary) {
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [press, a.id, a.hidden, searching]);
+  }, [press, item.id, item.hidden, searching]);
 
   return {
     onPointerDown(e: ReactPointerEvent) {

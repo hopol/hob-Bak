@@ -1,13 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { archiveAssistantsDir, assistantDir, assistantJobsDir } from "./config.ts";
+import { archiveAssistantsDir, archiveGroupsDir, assistantDir, assistantJobsDir, groupDir, groupFilesDir, groupsDir, groupProjectsDir, projectRecordPath } from "./config.ts";
 import { newId } from "./ids.ts";
 import type {
   Approval,
   Assistant,
   Delegation,
   Draft,
+  Group,
+  GroupItem,
   Job,
+  Project,
   Routine,
   Rule,
   WorklogEntry,
@@ -21,12 +24,18 @@ function writeJsonAtomic(path: string, value: unknown): void {
 }
 
 function readJson<T>(path: string, fallback: T): T {
-  if (!existsSync(path)) return fallback;
   try {
     return JSON.parse(readFileSync(path, "utf8")) as T;
-  } catch {
-    return fallback;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return fallback;
+    throw new Error(`读取 ${path} 失败：${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
+}
+
+type StoredRecord<T> = T & { _hobRevision?: number };
+function withoutRevision<T>(item: StoredRecord<T>): T {
+  const { _hobRevision: _revision, ...value } = item;
+  return value as T;
 }
 
 function readJsonl<T>(path: string): T[] {
@@ -36,16 +45,28 @@ function readJsonl<T>(path: string): T[] {
     if (!line.trim()) continue;
     try {
       out.push(JSON.parse(line) as T);
-    } catch {
-      // 半行（进程被杀）直接跳过，不污染整份日志
+    } catch (error) {
+      console.error(`跳过 ${path} 中损坏的记录：`, error);
     }
   }
   return out;
 }
 
+export type StoredDelegation = Delegation & { pendingResult?: string };
+export function publicDelegation(record: StoredDelegation): Delegation {
+  const { pendingResult: _pending, ...visible } = record;
+  return visible;
+}
+
 /** 助手的本地状态（不属于前后端契约，只存未读位置）。 */
 export interface AssistantState {
   readAt?: string;
+}
+
+/** 群的本地状态：已读到哪条；每个成员上一轮给到时间线的哪一条（assistantId → 条目 id）。 */
+export interface GroupState {
+  readAt?: string;
+  seen?: Record<string, string>;
 }
 
 /**
@@ -72,11 +93,38 @@ export class Store {
     }
   }
 
+  /** 启动时先检查系统数据；单条任务、事项和日志记录在各自列表中跳过并记录。 */
+  validate(): void {
+    this.globalRules();
+    for (const file of ["config.json", "settings.json", "secrets.json", "push.json", "seeded.json", "moves.json"]) {
+      readJson(join(this.home, "system", file), null);
+    }
+    for (const path of ["knowledge/entries.json", "knowledge/collections.json", "system/lore/config.json", "system/engine/mcp.json"]) readJson(join(this.home, path), null);
+    for (const root of [join(this.home, "assistants"), archiveAssistantsDir(this.home)]) {
+      if (existsSync(root)) for (const id of readdirSync(root)) {
+        for (const name of ["profile.json", "rules.json", "state.json", "approvals.json", "routines.json", "memories.json", "drafts.json", "delegations.json"]) {
+          readJson(join(root, id, name), null);
+        }
+      }
+    }
+    const archivedGroups = archiveGroupsDir(this.home);
+    if (existsSync(archivedGroups)) for (const folder of readdirSync(archivedGroups)) {
+      const dir = join(archivedGroups, folder);
+      for (const name of ["group.json", "rules.json", "state.json", "routines.json"]) readJson(join(dir, name), null);
+      const topics = join(dir, "topics");
+      if (existsSync(topics)) for (const topic of readdirSync(topics)) {
+        for (const name of ["group.json", "state.json"]) readJson(join(topics, topic, name), null);
+      }
+    }
+    for (const id of this.groupIds()) {
+      for (const name of ["group.json", "rules.json", "state.json", "routines.json"]) readJson(join(groupDir(this.home, id), name), null);
+    }
+  }
+
   globalRules(): Rule[] {
     const path = join(this.home, "rules.json");
-    if (!existsSync(path)) return [];
-    const rules = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    if (!Array.isArray(rules)) throw new Error("全局规则文件格式无效");
+    const rules = readJson<unknown>(path, []);
+    if (!Array.isArray(rules)) throw new Error(`全局规则文件格式无效：${path}`);
     return rules as Rule[];
   }
 
@@ -97,7 +145,8 @@ export class Store {
       const profile = this.assistant(id);
       if (profile) out.push(profile);
     }
-    return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    // 主助手永远在最前：新装时自带的助手和它同一毫秒建出来，按时间排会被目录顺序排到前面
+    return out.sort((a, b) => Number(Boolean(b.primary)) - Number(Boolean(a.primary)) || a.createdAt.localeCompare(b.createdAt));
   }
 
   assistant(id: string): Assistant | undefined {
@@ -149,6 +198,25 @@ export class Store {
     writeJsonAtomic(join(this.assistantDir(id), "rules.json"), rules);
   }
 
+  groupMatches(filter: string, groupId?: string): boolean {
+    if (filter === "none") return !groupId;
+    if (!groupId) return false;
+    const target = this.group(filter), actual = this.group(groupId);
+    return !!target && !!actual && (target.parentId ?? target.id) === (actual.parentId ?? actual.id);
+  }
+
+  groupRules(id: string): Rule[] {
+    const group = this.group(id);
+    if (!group) throw new Error("群不存在");
+    return readJson<Rule[]>(join(groupDir(this.home, group.parentId ?? group.id), "rules.json"), []);
+  }
+
+  saveGroupRules(id: string, rules: Rule[]): void {
+    const group = this.group(id);
+    if (!group) throw new Error("群不存在");
+    writeJsonAtomic(join(groupDir(this.home, group.parentId ?? group.id), "rules.json"), rules);
+  }
+
   worklog(id: string, limit = 30): WorklogEntry[] {
     return readJsonl<WorklogEntry>(join(this.assistantDir(id), "worklog.jsonl")).slice(-limit).reverse();
   }
@@ -157,6 +225,166 @@ export class Store {
     const dir = this.assistantDir(id);
     mkdirSync(dir, { recursive: true });
     appendFileSync(join(dir, "worklog.jsonl"), `${JSON.stringify(entry)}\n`);
+  }
+
+  // ---------- 群 ----------
+  /** 群目录名（只认有 group.json 的）。 */
+  private groupIds(): string[] {
+    const root = groupsDir(this.home);
+    if (!existsSync(root)) return [];
+    return readdirSync(root).filter((id) => existsSync(join(root, id, "group.json")));
+  }
+
+  groups(): Group[] {
+    return this.groupIds()
+      .flatMap((id) => { const group = this.group(id); return group ? [group] : []; })
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  /**
+   * 读一个群。话题带 parentId，读出来时补上所属群的成员、群主、负责什么和工作方式：
+   * 这些只在群上存一份，群改了，话题读到的跟着变。
+   */
+  group(id: string): Group | undefined {
+    const own = readJson<Group | null>(join(groupDir(this.home, id), "group.json"), null);
+    if (!own) return undefined;
+    if (!own.parentId) return own;
+    const parent = readJson<Group | null>(join(groupDir(this.home, own.parentId), "group.json"), null);
+    // 所属的群不在了（目录坏了）：当这个话题不存在，别处拿不到缺成员、缺群主的数据
+    if (!parent) return undefined;
+    return {
+      id: own.id,
+      name: own.name,
+      purpose: parent.purpose,
+      ...(parent.instructions !== undefined ? { instructions: parent.instructions } : {}),
+      ownerId: parent.ownerId,
+      members: parent.members,
+      ...(parent.models ? { models: parent.models } : {}),
+      ...(parent.memberModels ? { memberModels: parent.memberModels } : {}),
+      createdAt: own.createdAt,
+      parentId: own.parentId,
+      ...(parent.workflow ? { workflow: parent.workflow } : {}),
+      ...(own.createdBy ? { createdBy: own.createdBy } : {}),
+      ...(own.closedAt ? { closedAt: own.closedAt } : {}),
+      ...(own.closeNote ? { closeNote: own.closeNote } : {}),
+    };
+  }
+
+  /** 存一个群。话题只写自己的字段，成员、群主、负责什么和工作方式留在所属的群上。 */
+  saveGroup(group: Group): void {
+    const path = join(groupDir(this.home, group.id), "group.json");
+    if (!group.parentId) {
+      writeJsonAtomic(path, group);
+      return;
+    }
+    writeJsonAtomic(path, {
+      id: group.id,
+      parentId: group.parentId,
+      name: group.name,
+      createdAt: group.createdAt,
+      ...(group.createdBy ? { createdBy: group.createdBy } : {}),
+      ...(group.closedAt ? { closedAt: group.closedAt } : {}),
+      ...(group.closeNote ? { closeNote: group.closeNote } : {}),
+    });
+  }
+
+  /**
+   * 归档群：整个群目录（时间线、成员会话、文件）同盘 rename 进 archive/groups/<gid>-<时间>/，
+   * 话题跟着放进去，各自一个目录。
+   */
+  archiveGroup(id: string, name: string, topics: string[] = []): string {
+    const target = join(archiveGroupsDir(this.home), name);
+    mkdirSync(dirname(target), { recursive: true });
+    renameSync(groupDir(this.home, id), target);
+    if (topics.length) {
+      const root = join(target, "topics");
+      mkdirSync(root, { recursive: true });
+      for (const topic of topics) renameSync(groupDir(this.home, topic), join(root, topic));
+    }
+    return target;
+  }
+
+  groupState(id: string): GroupState {
+    return readJson<GroupState>(join(groupDir(this.home, id), "state.json"), {});
+  }
+
+  /** 只改给出的字段，别的照旧。 */
+  saveGroupState(id: string, patch: GroupState): void {
+    writeJsonAtomic(join(groupDir(this.home, id), "state.json"), { ...this.groupState(id), ...patch });
+  }
+
+  groupTimelineFile(id: string): string {
+    return join(groupDir(this.home, id), "timeline.jsonl");
+  }
+
+  /** 一个成员在这个群里的会话文件。 */
+  groupMemberFile(id: string, assistantId: string): string {
+    return join(groupDir(this.home, id), "members", `${assistantId}.jsonl`);
+  }
+
+  /** 这个群里所有成员的会话文件。 */
+  groupMemberFiles(id: string): { assistantId: string; file: string }[] {
+    const root = join(groupDir(this.home, id), "members");
+    if (!existsSync(root)) return [];
+    return readdirSync(root)
+      .filter((name) => name.endsWith(".jsonl"))
+      .sort()
+      .map((name) => ({ assistantId: name.slice(0, -".jsonl".length), file: join(root, name) }));
+  }
+
+  groupFiles(id: string, kind?: "uploads" | "images"): string {
+    return groupFilesDir(this.home, id, kind);
+  }
+
+  /**
+   * 群的时间线：追加写，同 id 后写的覆盖前面的（条目更新），顺序按第一次出现的先后。
+   */
+  groupItems(id: string): GroupItem[] {
+    const items = new Map<string, GroupItem>();
+    for (const line of readJsonl<GroupItem>(this.groupTimelineFile(id))) {
+      if (typeof line?.id !== "string" || !line.id) continue;
+      items.set(line.id, line);
+    }
+    return [...items.values()];
+  }
+
+  appendGroupItem(id: string, item: GroupItem): void {
+    const file = this.groupTimelineFile(id);
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, `${JSON.stringify(item)}\n`);
+  }
+
+  // ---------- 事项：跟着群 ----------
+  /** 这个群的事项（新的在前）。 */
+  projects(gid: string): Project[] {
+    const root = groupProjectsDir(this.home, gid);
+    if (!existsSync(root)) return [];
+    return readdirSync(root)
+      .filter((name) => name.endsWith(".json"))
+      .flatMap((name) => {
+        try {
+          const project = readJson<Project | null>(join(root, name), null);
+          return project ? [project] : [];
+        } catch (error) { console.error(error); return []; }
+      })
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  project(gid: string, pid: string): Project | undefined {
+    return readJson<Project | null>(join(groupProjectsDir(this.home, gid), `${pid}.json`), null) ?? undefined;
+  }
+
+  saveProject(project: Project): void {
+    writeJsonAtomic(join(groupProjectsDir(this.home, project.groupId), `${project.id}.json`), project);
+  }
+
+  /** 事项的记录（给成员和任务读的那份 md）。 */
+  saveProjectRecord(gid: string, pid: string, markdown: string): void {
+    const path = projectRecordPath(this.home, gid, pid);
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+    writeFileSync(tmp, markdown);
+    renameSync(tmp, path);
   }
 
   // ---------- 定时和审批：跟着所属助手 ----------
@@ -197,7 +425,17 @@ export class Store {
   }
 
   routines(): Routine[] {
-    return this.recordFiles("routines.json", false).flatMap((file) => readJson<Routine[]>(file, []));
+    const files = [...this.recordFiles("routines.json", false), ...this.groupIds().flatMap((id) => {
+      const group = this.group(id);
+      return group && !group.parentId ? [join(groupDir(this.home, id), "routines.json")] : [];
+    })];
+    const found = new Map<string, { item: StoredRecord<Routine>; modified: bigint }>();
+    for (const file of files) for (const item of readJson<StoredRecord<Routine>[]>(file, [])) {
+      const modified = statSync(file, { bigint: true }).mtimeNs;
+      const old = found.get(item.id);
+      if (!old || (item._hobRevision ?? 0) > (old.item._hobRevision ?? 0) || ((item._hobRevision ?? 0) === (old.item._hobRevision ?? 0) && modified > old.modified)) found.set(item.id, { item, modified });
+    }
+    return [...found.values()].map(({ item }) => withoutRevision(item));
   }
 
   routine(id: string): Routine | undefined {
@@ -205,20 +443,25 @@ export class Store {
   }
 
   saveRoutine(routine: Routine): void {
-    const target = this.ownerFile(routine.assistantId, "routines.json");
-    for (const file of this.recordFiles("routines.json", true)) {
-      const list = readJson<Routine[]>(file, []);
-      const next = list.filter((r) => r.id !== routine.id);
-      if (next.length !== list.length) writeJsonAtomic(file, next);
-    }
-    const list = readJson<Routine[]>(target, []).filter((r) => r.id !== routine.id);
-    list.push(routine);
+    const group = routine.groupId ? this.group(routine.groupId) : undefined;
+    if (routine.groupId && !group) throw new Error("群不存在");
+    const target = group ? join(groupDir(this.home, group.parentId ?? group.id), "routines.json") : this.ownerFile(routine.assistantId, "routines.json");
+    const files = [...new Set([target, ...this.recordFiles("routines.json", true), ...this.groupIds().map((id) => join(groupDir(this.home, id), "routines.json"))])];
+    const records = files.map((file) => ({ file, list: readJson<StoredRecord<Routine>[]>(file, []) }));
+    const revision = 1 + Math.max(0, ...records.flatMap(({ list }) => list.filter((item) => item.id === routine.id).map((item) => item._hobRevision ?? 0)));
+    const list = records.find(({ file }) => file === target)!.list.filter((r) => r.id !== routine.id);
+    list.push({ ...routine, _hobRevision: revision });
     writeJsonAtomic(target, list);
+    for (const { file, list: old } of records) {
+      if (file === target) continue;
+      const next = old.filter((r) => r.id !== routine.id);
+      if (next.length !== old.length) writeJsonAtomic(file, next);
+    }
   }
 
   /** 只从还在的助手里拿掉；归档目录里那份是历史，留着。 */
   deleteRoutine(id: string): void {
-    for (const file of this.recordFiles("routines.json", false)) {
+    for (const file of [...this.recordFiles("routines.json", false), ...this.groupIds().map((gid) => join(groupDir(this.home, gid), "routines.json"))]) {
       const list = readJson<Routine[]>(file, []);
       const next = list.filter((r) => r.id !== id);
       if (next.length !== list.length) writeJsonAtomic(file, next);
@@ -227,7 +470,13 @@ export class Store {
 
   // ---------- 审批 ----------
   approvals(): Approval[] {
-    return this.recordFiles("approvals.json", true).flatMap((file) => readJson<Approval[]>(file, []));
+    const found = new Map<string, { item: StoredRecord<Approval>; modified: bigint }>();
+    for (const file of this.recordFiles("approvals.json", true)) for (const item of readJson<StoredRecord<Approval>[]>(file, [])) {
+      const modified = statSync(file, { bigint: true }).mtimeNs;
+      const old = found.get(item.id);
+      if (!old || (item._hobRevision ?? 0) > (old.item._hobRevision ?? 0) || ((item._hobRevision ?? 0) === (old.item._hobRevision ?? 0) && modified > old.modified)) found.set(item.id, { item, modified });
+    }
+    return [...found.values()].map(({ item }) => withoutRevision(item));
   }
 
   approval(id: string): Approval | undefined {
@@ -236,14 +485,17 @@ export class Store {
 
   saveApproval(approval: Approval): void {
     const target = this.ownerFile(approval.assistantId, "approvals.json");
-    for (const file of this.recordFiles("approvals.json", true)) {
-      const list = readJson<Approval[]>(file, []);
-      const next = list.filter((a) => a.id !== approval.id);
-      if (next.length !== list.length) writeJsonAtomic(file, next);
-    }
-    const list = readJson<Approval[]>(target, []).filter((a) => a.id !== approval.id);
-    list.push(approval);
+    const files = [...new Set([target, ...this.recordFiles("approvals.json", true)])];
+    const records = files.map((file) => ({ file, list: readJson<StoredRecord<Approval>[]>(file, []) }));
+    const revision = 1 + Math.max(0, ...records.flatMap(({ list }) => list.filter((item) => item.id === approval.id).map((item) => item._hobRevision ?? 0)));
+    const list = records.find(({ file }) => file === target)!.list.filter((a) => a.id !== approval.id);
+    list.push({ ...approval, _hobRevision: revision });
     writeJsonAtomic(target, list);
+    for (const { file, list: old } of records) {
+      if (file === target) continue;
+      const next = old.filter((a) => a.id !== approval.id);
+      if (next.length !== old.length) writeJsonAtomic(file, next);
+    }
   }
 
   // ---------- 委派 ----------
@@ -251,16 +503,24 @@ export class Store {
     return join(this.assistantDir("hob"), name);
   }
 
+  internalDelegations(): StoredDelegation[] {
+    return readJson<StoredDelegation[]>(this.hobFile("delegations.json"), []);
+  }
+
   delegations(): Delegation[] {
-    return readJson<Delegation[]>(this.hobFile("delegations.json"), []);
+    return this.internalDelegations().map(publicDelegation);
   }
 
   delegation(id: string): Delegation | undefined {
     return this.delegations().find((item) => item.id === id);
   }
 
-  saveDelegation(delegation: Delegation): void {
-    const all = this.delegations().filter((item) => item.id !== delegation.id);
+  internalDelegation(id: string): StoredDelegation | undefined {
+    return this.internalDelegations().find((item) => item.id === id);
+  }
+
+  saveDelegation(delegation: StoredDelegation): void {
+    const all = this.internalDelegations().filter((item) => item.id !== delegation.id);
     all.push(delegation);
     writeJsonAtomic(this.hobFile("delegations.json"), all);
   }
@@ -316,8 +576,12 @@ export class Store {
   jobs(): Job[] {
     const out: Job[] = [];
     for (const dir of this.rebuildJobIndex().values()) {
-      const job = readJson<Job | null>(join(dir, "job.json"), null);
-      if (job) out.push(job);
+      try {
+        const job = readJson<Job | null>(join(dir, "job.json"), null);
+        if (job) out.push(job);
+      } catch (error) {
+        console.error(error);
+      }
     }
     return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
@@ -355,9 +619,12 @@ export class Store {
     return path;
   }
 
-  /** 本机任务的默认工作目录：产出文件只能落在这里。 */
-  workDir(jobId: string): string {
-    const path = join(this.jobDir(jobId), "work");
+  /**
+   * 本机任务的默认工作目录：产出文件只能落在这里。
+   * 建任务时 job.json 还没写，任务目录还找不到，用 assistantId 定归属（不然会落到主助手名下）。
+   */
+  workDir(jobId: string, assistantId = "hob"): string {
+    const path = join(this.findJobDir(jobId) ?? join(assistantJobsDir(this.home, assistantId), jobId), "work");
     mkdirSync(path, { recursive: true });
     return path;
   }
@@ -372,10 +639,10 @@ export class Store {
     if (drafts.some((draft) => !Array.isArray(draft.instructions))) {
       writeJsonAtomic(
         this.hobFile("drafts.json"),
-        drafts.map(({ memories, carry: { memories: _carried, ...carry }, ...draft }) => ({
+        drafts.map(({ memories, carry, ...draft }) => ({
           ...draft,
           instructions: draft.instructions ?? memories ?? [],
-          carry,
+          ...(carry ? { carry: { ...(carry.conversations !== undefined ? { conversations: carry.conversations } : {}) } } : {}),
         })),
       );
     }
@@ -388,6 +655,7 @@ export class Store {
         .map((memory) => (memory?.text ?? "").trim())
         .filter(Boolean);
       const assistant = this.assistant(id);
+      if (!assistant && lines.length) throw new Error(`迁移 ${file} 失败：助手 ${id} 不存在`);
       if (assistant && lines.length) {
         const current = assistant.instructions.trim();
         this.saveAssistant({ ...assistant, instructions: [current, ...lines].filter(Boolean).join("\n") });

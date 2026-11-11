@@ -31,6 +31,18 @@ export function monthDayTimeText(timezone: string, at: Date = new Date()): strin
   return `${monthDayText(timezone, at)} ${clock}`;
 }
 
+/** "11-08 09:41"：配置时区下的月日和时刻，不带年份（事项列表用）。 */
+export function monthDayClockText(timezone: string, at: Date = new Date()): string {
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: timezone,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(at);
+}
+
 /** 时区名不合法就直接报错，不悄悄退回系统时区。 */
 export function checkTimezone(timezone: string): string {
   try {

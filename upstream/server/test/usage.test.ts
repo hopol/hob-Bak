@@ -131,6 +131,22 @@ describe("消耗统计", () => {
     }
   });
 
+  it("沉淀会话开头抄的任务会话不重复算，只算沉淀那段", async () => {
+    const hob = makeHob({}, { fetchImpl: fakePrices() });
+    try {
+      addJob(hob, "t-1", "hob");
+      const dir = join(hob.home, "assistants", "hob", "jobs", "t-1");
+      const first = assistantLine("2026-11-06T03:00:00.000Z", { input: 5000, output: 500 });
+      writeSession(join(dir, "worker.jsonl"), [first]);
+      writeSession(join(dir, "sediment", `${Date.parse("2026-11-06T04:00:00.000Z")}.jsonl`), [first, assistantLine("2026-11-06T04:01:00.000Z", { input: 800, output: 80 })]);
+      const rows = (await hob.runtime.usage.view()).rows.filter((row) => row.source === "job");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ requests: 2, input: 5800, output: 580 });
+    } finally {
+      hob.close();
+    }
+  });
+
   it("文件没变时不重读，追加后只把新的一段算进来，变短时整份重读", async () => {
     const hob = makeHob({}, { fetchImpl: fakePrices() });
     try {

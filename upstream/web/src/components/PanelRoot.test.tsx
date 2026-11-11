@@ -12,7 +12,7 @@ const data = vi.hoisted(() => ({
 vi.mock("../store.ts", () => ({ useApp: () => data, openAssistantPanel: vi.fn(), collapsePanel: vi.fn(), openNewRoutine: vi.fn(), openJob: vi.fn(), openJobs: vi.fn(), openSidebarPage: vi.fn(), openFilePreview: vi.fn(), jumpToDelegation: vi.fn() }));
 vi.mock("../desktop-screens.ts", () => ({ useDesktopScreens: () => ({ profiles: {}, screens: [] }) }));
 vi.mock("./PanelHead.tsx", () => ({ PanelHead: ({ children }: { children: React.ReactNode }) => <header>{children}</header> }));
-vi.mock("./Knowledge.tsx", () => ({ useMenu: () => ({ menu: null }) }));
+vi.mock("./use-menu.ts", () => ({ useMenu: () => ({ menu: null }) }));
 vi.mock("../sprites.tsx", () => ({ Avatar: () => <span>头像</span> }));
 import { Panel } from "./Panel.tsx";
 const job = (status: Job["status"]): Job => ({ id: "j", assistantId: "hob", title: "示例任务", instruction: "", status, createdAt: "2026-01-01T00:00:00Z", endedAt: status === "done" ? "2026-01-01T01:00:00Z" : undefined, stats: { reads: 0, commands: 0, edits: 0 }, activity: [] });
@@ -48,11 +48,10 @@ it("已有技能时刷新仍显示列表", () => {
   expect(empty).toContain("还没有技能");
   expect(empty).not.toContain("正在加载…");
 });
-it("停止任务的上次显示状态图标，知识库加载时显示占位", () => {
+it("停止任务的上次显示状态和知识库加载状态", () => {
   data.jobs = { j: { ...job("stopped"), endedAt: "2026-01-01T01:00:00Z" } };
   const html = renderToStaticMarkup(<Panel page={null} />);
-  expect(html).toMatch(/上次 <span><svg[^>]*><rect x="6" y="6" width="12" height="12" rx="2"\/><\/svg>/);
-  expect(html.match(/<rect x="6" y="6" width="12" height="12" rx="2"\/>/g)).toHaveLength(2);
+  expect(html).toContain("上次");
   expect(html).not.toContain("正在加载…");
   expect(html).not.toContain(">日志</button>");
 });

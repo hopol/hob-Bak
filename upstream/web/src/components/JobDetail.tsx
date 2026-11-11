@@ -1,5 +1,7 @@
 // 任务详情（桌面右侧宽抽屉 / 手机全屏）和任务记录（全部任务）。
+import { Select } from "./Select.tsx";
 import { DelayedText, Empty } from "./Empty.tsx";
+import { ReplyInput } from "./ReplyInput.tsx";
 import { Suspense, lazy, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Job, JobFilesView, JobStatus, JobStep, ModelInfo } from "../../../shared/types.ts";
 import { Icon, type IconName } from "../icons.tsx";
@@ -12,13 +14,17 @@ import {
   fetchFileMeta,
   loadJobFiles,
   loadModels,
+  loadProjects,
   loadWorklog,
   moreWorklog,
   openFilePreview,
   openJob,
+  openProject,
   replyJob,
   select,
+  selectGroup,
   sedimentJob,
+  togglePreviewFull,
   stopJob,
   useApp,
   type PanelPage,
@@ -26,7 +32,8 @@ import {
 import { fmtBytes, fmtDuration, fmtElapsed, fmtTokens, fmtWhen } from "../util.ts";
 import { Markdown } from "./Markdown.tsx";
 import { PanelHead } from "./PanelHead.tsx";
-import { JOB_STATUS, StatusTag, sedimentText } from "./status-meta.tsx";
+import { useDesktopScreens } from "../desktop-screens.ts";
+import { JOB_STATUS, StatusTag, jobStatusIcon, jobStatusMeta, sedimentText } from "./status-meta.tsx";
 const DesktopScreen = lazy(() => import("./DesktopView.tsx").then((module) => ({ default: module.DesktopView })));
 
 
@@ -62,6 +69,23 @@ function active(job: Job): boolean {
   return job.status === "running" || job.status === "queued" || job.status === "waiting";
 }
 
+/** 子任务的任务：写事项名和序号，点了打开事项页（事项还没拉到时先只写序号）。 */
+function SubtaskTag({ groupId, projectId, n }: { groupId: string; projectId: string; n: number }) {
+  const s = useApp();
+  const project = (s.projects[groupId] ?? []).find((item) => item.id === projectId);
+  useEffect(() => {
+    if (!s.projects[groupId]) void loadProjects(groupId, true);
+  }, [groupId, s.projects]);
+  const text = project ? `事项「${project.title}」· 子任务 ${n}` : `子任务 ${n}`;
+  return project ? (
+    <button className="jd-subtask" onClick={() => openProject(groupId, project.id)}>
+      {text}
+    </button>
+  ) : (
+    <span>{text}</span>
+  );
+}
+
 /** 桌面主界面嵌入右栏；手机和设置页保留全屏 / 覆盖层。 */
 export function JobOverlay({ embedded = false, page }: { embedded?: boolean; page?: PanelPage }) {
   const s = useApp();
@@ -91,6 +115,8 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
   const pinned = useRef(round === undefined && (job ? active(job) : true));
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [showDesktop, setShowDesktop] = useState(false);
+  // 看桌面看的是这个任务所属助手的那块屏幕，不是默认的主助手
+  const desktop = useDesktopScreens();
   // 续做过的任务：看第几轮。没点过就跟着最新一轮；从对话里第 N 张卡点进来就是第 N 轮
   const [picked, setPicked] = useState(round);
 
@@ -129,28 +155,36 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
   }
 
   const owner = s.assistants.find((a) => a.id === job.assistantId);
+  const group = job.groupId ? s.groups.find((g) => g.id === job.groupId) : undefined;
   const modelName = job.model ? (models?.find((model) => model.ref === job.model)?.name ?? job.model) : "";
   const started = job.startedAt ?? job.createdAt;
   const elapsed = job.durationMs ?? (active(job) ? Date.now() - new Date(started).getTime() : undefined);
   const usage = job.usage;
   const reason = jobReason(job);
+  const top = s.panelStack.at(-1);
+  const full = top?.kind === "job" && Boolean(top.full);
 
   return (
     <>
       <PanelHead className="jdhead" title={<span className="t">任务</span>} close>
         {job.status === "done" ? <button className="hob-btn hob-btn-compact" disabled={job.sediment?.status === "running"} onClick={() => { void sedimentJob(job.id); }}><Icon name="mem" size={14} />{job.sediment?.status === "running" ? "正在沉淀…" : "沉淀成技能"}</button> : null}
         {steps?.some((step) => step.name?.startsWith("browser_") || step.name?.startsWith("desktop_")) ? <button className="hob-btn hob-btn-compact" onClick={() => setShowDesktop(true)}><Icon name="pointer" size={14} />看桌面</button> : null}
+        <button className="hob-icon-btn fp-act fp-wide-btn" title="切换全宽" onClick={togglePreviewFull}>
+          <Icon name={full ? "shrink" : "expand"} size={17} />
+        </button>
       </PanelHead>
       <div className="jdbody" ref={body}>
         <div className="jd-title">{job.title}</div>
         <div className="jd-meta">
-          <StatusTag meta={JOB_STATUS[job.status]} />
+          <StatusTag meta={jobStatusMeta(job, s.jobs)} />
           {owner || job.assistantName ? (
             <span className="jd-owner">
               {owner ? <Avatar sprite={owner.sprite} prop={owner.prop} size={16} /> : null}
               {owner?.name ?? job.assistantName}
             </span>
           ) : null}
+          {job.groupId ? <span>{group ? `来自「${group.name}」` : "来自已结束的群"}</span> : null}
+          {job.project && job.groupId ? <SubtaskTag groupId={job.groupId} projectId={job.project.id} n={job.project.n} /> : null}
           <span>{fmtWhen(started)}</span>
           {elapsed !== undefined ? <span>用时 {fmtDuration(elapsed)}</span> : null}
         </div>
@@ -172,14 +206,18 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
           </div>
         ) : null}
         {reason ? <div className="jd-reason">{reason}</div> : null}
+        {job.after?.length ? <AfterList ids={job.after} /> : null}
         {job.rounds?.length ? (() => {
           const parts = jobDetailRounds(job, steps);
           const current = Math.min(picked ?? parts.length - 1, parts.length - 1);
+          // 轮次多了「第 N 轮」一排放不下：超过 4 轮只写数字，上面一行写「轮次」
+          const compact = parts.length > 4;
           return <>
-            <div className="seg jd-rounds" role="tablist" style={{ "--seg-count": parts.length, "--seg-index": current } as CSSProperties}>
+            {compact ? <div className="lbl">轮次</div> : null}
+            <div className={`seg jd-rounds${compact ? " compact" : ""}`} role="tablist" style={{ "--seg-count": parts.length, "--seg-index": current } as CSSProperties}>
               {parts.map((_, index) => (
-                <button key={index} role="tab" aria-selected={index === current} className={index === current ? "on" : undefined} onClick={() => setPicked(index)}>
-                  第 {index + 1} 轮
+                <button key={index} role="tab" aria-selected={index === current} aria-label={`第 ${index + 1} 轮`} className={index === current ? "on" : undefined} onClick={() => setPicked(index)}>
+                  {compact ? index + 1 : `第 ${index + 1} 轮`}
                 </button>
               ))}
             </div>
@@ -192,9 +230,27 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
       </div>
 
       <ReplyBox job={job} />
-      {showDesktop ? <Suspense fallback={<div>正在打开云桌面…</div>}><DesktopScreen onClose={() => setShowDesktop(false)} /></Suspense> : null}
+      {showDesktop ? <Suspense fallback={<div>正在打开云桌面…</div>}><DesktopScreen initialScreen={desktop.profiles[job.assistantId] ?? job.assistantId} onClose={() => setShowDesktop(false)} /></Suspense> : null}
     </>
   );
+}
+
+/** 前置任务：等谁做完才开始，点了打开那一个。 */
+function AfterList({ ids }: { ids: string[] }) {
+  const s = useApp();
+  return <>
+    <div className="lbl">前置任务</div>
+    <div className="jd-files">
+      {ids.map((id) => {
+        const before = s.jobs[id];
+        return <button className="jd-file-row" key={id} onClick={() => openJob(id)}>
+          {before ? jobStatusIcon(before.status, 14) : <Icon name="doc" size={14} />}
+          <span>{before?.title ?? id}</span>
+          <small>{before ? JOB_STATUS[before.status].text : "找不到"}</small>
+        </button>;
+      })}
+    </div>
+  </>;
 }
 
 /** 一轮的内容：前面几轮写明那一轮的状态和用时（最后一轮就是头部那个状态）；工作目录只跟在最后一轮下面。 */
@@ -225,7 +281,7 @@ function RoundBody({ part, last, index }: { part: { job: Job; instruction?: stri
           {timeline.thinking ? <ThinkingLive text={timeline.thinking} /> : null}
         </> : <Empty>还没有执行步骤。</Empty>}
       </div>
-      {sediment || (last && part.job.sediment) ? <><div className="lbl">沉淀技能{last && part.job.sediment ? ` · ${sedimentText(part.job.sediment)}` : ""}</div><div className="jd-timeline">{sediment?.rows.map((step) => <Step key={step.id} step={step} cwd={part.job.cwd} />)}{sediment?.thinking ? <ThinkingLive text={sediment.thinking} /> : null}</div></> : null}
+      {sediment || part.job.sediment ? <><div className="lbl">沉淀技能{part.job.sediment ? ` · ${sedimentText(part.job.sediment)}` : ""}</div><div className="jd-timeline">{sediment?.rows.map((step) => <Step key={step.id} step={step} cwd={part.job.cwd} />)}{sediment?.thinking ? <ThinkingLive text={sediment.thinking} /> : null}</div></> : null}
       {last ? <Directory jobId={part.job.id} /> : null}
     </>
   );
@@ -243,17 +299,7 @@ function ReplyBox({ job }: { job: Job }) {
   };
   return (
     <div className="jd-foot">
-      <input
-        value={text}
-        placeholder={active(job) ? "补充说明或更正方向" : "接着说…"}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.nativeEvent.isComposing) submit();
-        }}
-      />
-      <button className="hob-btn hob-btn-primary" disabled={!sendable} onClick={submit}>
-        发送
-      </button>
+      <ReplyInput value={text} onChange={setText} sending={false} placeholder={active(job) ? "补充说明或更正方向" : "接着说…"} onSend={submit} />
       {job.status === "running" ? (
         <button className="hob-btn" onClick={() => void stopJob(job.id)}>
           停止
@@ -536,6 +582,12 @@ function DirectoryFolder({ jobId, entry }: { jobId: string; entry: Extract<JobFi
   </div>;
 }
 
+export function openWorklogJob(job: Job, hasGroup: boolean, hasOwner: boolean) {
+  if (hasGroup && job.groupId) void selectGroup(job.groupId, true, true, true);
+  else if (hasOwner) void select(job.assistantId, true, true);
+  openJob(job.id);
+}
+
 function WorklogPage() {
   const s = useApp();
   const log = s.worklog;
@@ -545,30 +597,8 @@ function WorklogPage() {
   return (
     <div className="jdbody" onScroll={(event) => { const el = event.currentTarget; if (log?.hasMore && !log.loading && el.scrollHeight - el.scrollTop - el.clientHeight < 100) void moreWorklog(); }}>
       <div className="jd-filters">
-        <select
-          className="pick"
-          value={assistantId ?? ""}
-          onChange={(event) => void loadWorklog({ assistantId: event.target.value || null, status })}
-        >
-          <option value="">全部助手</option>
-          {s.assistants.map((assistant) => (
-            <option key={assistant.id} value={assistant.id}>
-              {assistant.name}
-            </option>
-          ))}
-        </select>
-        <select
-          className="pick"
-          value={status ?? ""}
-          onChange={(event) => void loadWorklog({ assistantId, status: (event.target.value || null) as JobStatus | null })}
-        >
-          <option value="">全部状态</option>
-          {FILTER_STATUS.map((value) => (
-            <option key={value} value={value}>
-              {JOB_STATUS[value].text}
-            </option>
-          ))}
-        </select>
+        <Select value={assistantId ?? ""} onChange={(value) => void loadWorklog({ assistantId: value || null, status })} options={[{ value: "", label: "全部助手" }, ...s.assistants.map((assistant) => ({ value: assistant.id, label: assistant.name }))]} />
+        <Select value={status ?? ""} onChange={(value) => void loadWorklog({ assistantId, status: (value || null) as JobStatus | null })} options={[{ value: "", label: "全部状态" }, ...FILTER_STATUS.map((value) => ({ value, label: JOB_STATUS[value].text }))]} />
         <span className="sp" />
         {log ? <span className="dim">{log.jobs.length} 个</span> : null}
       </div>
@@ -580,20 +610,19 @@ function WorklogPage() {
           {log.jobs.map((row) => {
             const job = s.jobs[row.id] ?? row;
             const owner = s.assistants.find((assistant) => assistant.id === job.assistantId);
+            const group = job.groupId ? s.groups.find((g) => g.id === job.groupId) : undefined;
             return (
               <button
                 className="list-row history-row"
                 key={job.id}
                 onClick={() => {
-                  // 和首页一样：先进这个任务的助手的对话，再展开详情
-                  if (owner) void select(job.assistantId, true, true);
-                  openJob(job.id);
+                  openWorklogJob(job, !!group, !!owner);
                 }}
               >
                 {owner ? <Avatar sprite={owner.sprite} prop={owner.prop} size={26} /> : <span style={{ width: 26 }} />}
                 <span className="history-content">
                   <span className="n">{job.title}</span>
-                  <span className="tm">{fmtWhen(job.startedAt ?? job.createdAt)}{job.durationMs !== undefined ? ` · ${fmtDuration(job.durationMs)}` : active(job) ? ` · ${fmtElapsed(job.startedAt ?? job.createdAt)}` : ""}</span>
+                  <span className="tm">{fmtWhen(job.startedAt ?? job.createdAt)}{job.durationMs !== undefined ? ` · ${fmtDuration(job.durationMs)}` : active(job) ? ` · ${fmtElapsed(job.startedAt ?? job.createdAt)}` : ""}{group ? ` · ${group.name}` : ""}</span>
                 </span>
                 <StatusTag meta={JOB_STATUS[job.status]} />
               </button>

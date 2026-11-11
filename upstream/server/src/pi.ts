@@ -319,10 +319,7 @@ export class PiHost {
     mkdirSync(dirname(options.file), { recursive: true });
     const model = await this.model(options.model);
     const manager = SessionManager.open(options.file, dirname(options.file), options.cwd);
-    const modelOverrides = options.spillDir ? Object.fromEntries((await this.runtime()).getAllModels().filter((item) => "contextWindow" in item).map((item) => [
-      `${item.provider}/${item.id}`, { reserveTokens: Math.max(16_384, item.contextWindow - 100_000) },
-    ])) : undefined;
-    const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true, ...(modelOverrides ? { modelOverrides } : {}) }, retry: { enabled: true } });
+    const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true } });
     const resourceLoader = await this.resourceLoader(options, settingsManager);
     const memoryTools = MEMORY_TOOL_PATTERNS[options.memory ?? "off"];
     const { session } = await createAgentSession({

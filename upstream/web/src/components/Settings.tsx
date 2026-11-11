@@ -1,5 +1,7 @@
 // 设置整页：桌面左侧分栏导航 + 右侧内容，手机先列表再进入。
+import { Select } from "./Select.tsx";
 import { DelayedText, Empty } from "./Empty.tsx";
+import { SaveMessage, useSaveMessage } from "./SaveMessage.tsx";
 import { Fragment, Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   AboutInfo,
@@ -132,13 +134,8 @@ function SaveRow({
 }
 
 function useSaveFeedback() {
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useSaveMessage();
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (message !== "已保存") return;
-    const timer = setTimeout(() => setMessage(null), 3000);
-    return () => clearTimeout(timer);
-  }, [message]);
   const save = async (patch: SettingsPatch | ((settings: SettingsFile["settings"]) => SettingsPatch)) => {
     setBusy(true);
     const ok = await saveSettings(patch);
@@ -151,7 +148,7 @@ function useSaveFeedback() {
 
 /** toast：整页级的保存提示浮在右上角，出现和消失都不把页面内容顶下去。 */
 function SaveFeedback({ message, toast = false }: { message: string | null; toast?: boolean }) {
-  return message ? <span className={`${message === "已保存" ? "okline" : "badline"}${toast ? " savetoast" : ""}`} role="status">{message}</span> : null;
+  return message ? <SaveMessage message={message} toast={toast} /> : null;
 }
 
 function AutoField({ value, placeholder, multiline, onSave }: { value: string; placeholder?: string; multiline?: boolean; onSave: (value: string) => Promise<boolean> }) {
@@ -683,13 +680,7 @@ function ValuePick<V extends string>({
   return (
     <span className="ctl">
       {icon ? <Icon name={icon} size={14} /> : null}
-      <select className="pick" aria-label={label} value={value} onChange={(e) => onChange(e.target.value as V)}>
-        {options.map((item) => (
-          <option key={item.value} value={item.value}>
-            {item.text}
-          </option>
-        ))}
-      </select>
+      <Select aria-label={label} value={value} onChange={(next) => onChange(next as V)} options={options.map((item) => ({ value: item.value, label: item.text }))} />
     </span>
   );
 }
@@ -824,20 +815,7 @@ function ThinkingLevels({
             ))}
           </div>
           <div className="ctl" style={{ gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-            <select
-              className="pick"
-              value={pick}
-              onChange={(e) => setPick(e.target.value as ThinkingLevel | "")}
-              disabled={busy || disabled || !rest.length}
-              aria-label="添加思考档"
-            >
-              <option value="">{rest.length ? "选择档位" : "七个档都用上了"}</option>
-              {rest.map((level) => (
-                <option key={level} value={level}>
-                  {THINKING_TEXT[level]}
-                </option>
-              ))}
-            </select>
+            <Select value={pick} onChange={(value) => setPick(value as ThinkingLevel | "")} disabled={busy || disabled || !rest.length} aria-label="添加思考档" options={[{ value: "", label: rest.length ? "选择档位" : "七个档都用上了" }, ...rest.map((level) => ({ value: level, label: THINKING_TEXT[level] }))]} />
             <button
               className="hob-btn"
               onClick={() => {
@@ -1081,7 +1059,7 @@ function ClaudeProviderCard() {
       </div>
       {status?.found && !status.loggedIn ? <div className="note">请在终端执行 <code>claude auth login</code>，然后重新检测。</div> : null}
       <div className="lbl sub">套餐</div>
-      <select className="pick" value={draft.plan} disabled={busy || !view} onChange={(e) => setDraft({ ...draft, plan: e.target.value as "pro" | "max" })}><option value="pro">Pro</option><option value="max">Max</option></select>
+      <Select value={draft.plan} disabled={busy || !view} onChange={(value) => setDraft({ ...draft, plan: value as "pro" | "max" })} options={[{ value: "pro", label: "Pro" }, { value: "max", label: "Max" }]} />
       <div className="lbl sub">Claude Code 程序路径</div>
       <div className="field"><input value={draft.executable} disabled={busy || !view} onChange={(e) => setDraft({ ...draft, executable: e.target.value })} placeholder={status?.executable || "留空时自动查找"} /></div>
       <div className="note">用量计入你的 Claude 订阅额度，与 Claude Code 共用。Docker 镜像不支持此功能。</div>
@@ -1612,19 +1590,7 @@ function ProviderForm({
           <div className="lbl">连接</div><div className="formcard">
           <div className="lbl sub">服务商</div>
           <div className="ctl">
-            <select
-              className="pick grow"
-              value={draft.id}
-              onChange={(e) => patch({ id: e.target.value })}
-              disabled
-            >
-              {view.builtin.filter((item) => !draft.isNew || !configured.has(item.id)).map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                  {configured.has(item.id) ? "（已配置）" : ""}
-                </option>
-              ))}
-            </select>
+            <Select className="grow" value={draft.id} onChange={(value) => patch({ id: value })} disabled options={view.builtin.filter((item) => !draft.isNew || !configured.has(item.id)).map((item) => ({ value: item.id, label: `${item.name}${configured.has(item.id) ? "（已配置）" : ""}` }))} />
           </div>
           <div className="lbl sub">API Key</div>
           {!changingKey ? <div className="ctl"><span className="note">已保存</span><button className="hob-btn" onClick={() => setChangingKey(true)}>更换</button></div> : <div className="field">
@@ -1675,18 +1641,7 @@ function ProviderForm({
             )}
             <div className="lbl sub">协议</div>
             <div className="ctl">
-              <select
-                className="pick grow"
-                value={draft.api}
-                onChange={(e) => patch({ api: e.target.value as ProviderApi })}
-                disabled={busy}
-              >
-                {PROVIDER_APIS.map((item) => (
-                  <option key={item.key} value={item.key}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
+              <Select className="grow" value={draft.api} onChange={(value) => patch({ api: value as ProviderApi })} disabled={busy} options={PROVIDER_APIS.map((item) => ({ value: item.key, label: item.label }))} />
             </div>
             <div className="lbl sub">服务地址</div>
             <div className="field">
@@ -2248,18 +2203,7 @@ function WorkSection() {
       <Group>
         <div className="lbl">最大并行任务数</div>
         <div className="ctl">
-          <select
-            className="pick"
-            value={work.maxJobs}
-            disabled={feedback.busy}
-            onChange={(e) => void save({ maxJobs: Number(e.target.value) })}
-          >
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
+          <Select value={String(work.maxJobs)} disabled={feedback.busy} onChange={(value) => void save({ maxJobs: Number(value) })} options={[1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ value: String(n), label: String(n) }))} />
         </div>
         <div className="note">同时运行的最大任务数，超出后排队。</div>
         <SaveFeedback message={feedback.message} />
@@ -2674,7 +2618,7 @@ function MemorySection() {
               <div className="field">
                 <input
                   value={baseUrl}
-                  placeholder="http://192.168.1.10:18901"
+                  placeholder="http://127.0.0.1:18901"
                   onChange={(e) => edit(() => setBaseUrl(e.target.value))}
                   disabled={busy}
                 />
@@ -2736,7 +2680,6 @@ const IMAGE_SOURCES: { key: ImageSettings["source"]; label: string }[] = [
 /** 默认尺寸：不指定就交给服务自己定。 */
 const IMAGE_SIZES = ["1024x1024", "1536x1024", "1024x1536", "512x512"];
 
-const trimBase = (value: string) => value.trim().replace(/\/+$/, "");
 
 /** 设置 → 图像生成：关闭或 OpenAI 兼容接口，并提供生成测试图片。 */
 function KnowledgeSection() {
@@ -2750,7 +2693,7 @@ function KnowledgeSection() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   useEffect(() => { void loadEmbeddingKey().then((value) => setConfigured(value.keyConfigured)).catch((e: unknown) => setMessage({ ok: false, text: `读取设置失败：${e instanceof Error ? e.message : String(e)}` })); }, []);
-  const form: EmbeddingSettings = source === "off" ? { source: "off" } : { source: "openai", baseUrl: trimBase(baseUrl), model: model.trim() };
+  const form: EmbeddingSettings = source === "off" ? { source: "off" } : { source: "openai", baseUrl: normalizeBase(baseUrl), model: model.trim() };
   const run = async (save: boolean) => {
     setBusy(true); setMessage(null);
     try {
@@ -2809,7 +2752,7 @@ function ImageSection() {
     source === "openai"
       ? {
           source: "openai",
-          baseUrl: trimBase(baseUrl),
+          baseUrl: normalizeBase(baseUrl),
           model: model.trim(),
           ...(size ? { size } : {}),
         }
@@ -2926,14 +2869,7 @@ function ImageSection() {
           </div>
           <div className="lbl">默认尺寸</div>
           <div className="ctl">
-            <select className="pick grow" value={size} onChange={(e) => setSize(e.target.value)} disabled={busy}>
-              <option value="">不指定，使用接口默认值</option>
-              {IMAGE_SIZES.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
+            <Select className="grow" value={size} onChange={setSize} disabled={busy} options={[{ value: "", label: "不指定，使用接口默认值" }, ...IMAGE_SIZES.map((item) => ({ value: item, label: item }))]} />
           </div>
           <div className="lbl">API Key</div>
           <div className="field">
@@ -3456,13 +3392,12 @@ function McpDetail({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [hidden, setHidden] = useState<string[] | null>(null);
   useEffect(() => {
     if (!server) closeSub();
   }, [server]);
   if (!server) return null;
 
-  const hiddenTools = hidden ?? server.hiddenTools ?? [];
+  const hiddenTools = server.hiddenTools ?? [];
   const tools = probe?.state === "connected" ? (probe.tools ?? []) : undefined;
 
   const patchServer = async (patch: { enabled?: boolean; exposure?: "direct" | "deferred"; hiddenTools?: string[] }) => {
@@ -3558,7 +3493,6 @@ function McpDetail({
                         <button className={`tog${off ? " off" : ""}`} aria-label={`${tool.name}启用`} aria-pressed={!off} disabled={busy}
                           onClick={() => {
                             const next = off ? hiddenTools.filter((item) => item !== tool.name) : [...hiddenTools, tool.name];
-                            setHidden(next);
                             void patchServer({ hiddenTools: next });
                           }} />
                       </div>

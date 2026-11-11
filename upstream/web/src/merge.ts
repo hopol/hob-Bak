@@ -21,8 +21,14 @@ export function mergeItems(current: Item[], incoming: Item | Item[], limit = ITE
   const merged = current.slice();
   const index = new Map<string, number>();
   merged.forEach((item, i) => index.set(item.id, i));
+  const removed = new Set<string>();
   for (const item of list) {
     const at = index.get(item.id);
+    if (at !== undefined && merged[at].kind === "assistant" && merged[at].streaming && item.kind === "assistant" && !item.streaming && !item.text.trim()) {
+      removed.add(item.id);
+    } else {
+      removed.delete(item.id);
+    }
     if (at === undefined) {
       index.set(item.id, merged.length);
       merged.push(item);
@@ -30,8 +36,9 @@ export function mergeItems(current: Item[], incoming: Item | Item[], limit = ITE
       merged[at] = item;
     }
   }
-  merged.sort(byAt);
-  return merged.length > limit ? merged.slice(-limit) : merged;
+  const visible = merged.filter((item) => !removed.has(item.id));
+  visible.sort(byAt);
+  return visible.length > limit ? visible.slice(-limit) : visible;
 }
 
 /** 流式追加：条目不存在（或不是助手消息）就原样返回。 */

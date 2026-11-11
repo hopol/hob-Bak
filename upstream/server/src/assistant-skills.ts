@@ -1,17 +1,27 @@
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { loadSkillsFromDir, type Skill } from "@earendil-works/pi-coding-agent";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { loadSkillsFromDir, parseFrontmatter, type Skill } from "@earendil-works/pi-coding-agent";
 import type { AssistantSkill } from "../../shared/skills.ts";
+import type { Group } from "../../shared/types.ts";
 
 type Metadata = Omit<AssistantSkill, "name" | "description" | "path">;
 export interface SkillInput { name: string; title: string; description: string; content: string; files?: { path: string; content: string }[] }
 
-function checkedDir(home: string, assistantId: string): string {
+/** 这个助手的技能目录（绝对路径）。 */
+export function assistantSkillsDir(home: string, assistantId: string): string {
+  return checkedDir(home, "assistants", assistantId);
+}
+
+export function groupSkillsDir(home: string, groupId: string): string {
+  return checkedDir(home, "groups", groupId);
+}
+
+function checkedDir(home: string, owner: "assistants" | "groups", assistantId: string): string {
   if (!/^[a-zA-Z0-9_-]+$/.test(assistantId)) throw new Error("助手名称无效");
   const root = resolve(home);
-  const dir = join(root, "assistants", assistantId, "skills");
+  const dir = join(root, owner, assistantId, "skills");
   let current = root;
-  for (const part of ["assistants", assistantId, "skills"]) {
+  for (const part of [owner, assistantId, "skills"]) {
     current = join(current, part);
     if (isLink(current)) throw new Error("技能路径不能包含符号链接");
   }
@@ -41,10 +51,27 @@ function saveMetadata(dir: string, data: Record<string, Metadata>): void {
   writeFileSync(temp, JSON.stringify(data, null, 2));
   renameSync(temp, join(dir, "skills.json"));
 }
+/** 写 skills.json（沉淀对账时用）。 */
+export function saveAssistantSkillsIndex(dir: string, data: Record<string, Metadata>): void {
+  saveMetadata(dir, data);
+}
+
+/** SKILL.md 开头的几项：name、description、metadata.title。照 pi 读技能的办法解析（带不带引号都认），开头写错时抛 yaml 的原话。 */
+export interface SkillHead { name?: string; description?: string; title?: string }
+
+export function skillHead(text: string): SkillHead {
+  const { frontmatter } = parseFrontmatter<Record<string, unknown>>(text);
+  const value = (raw: unknown) => (typeof raw === "string" && raw.trim() ? raw.trim() : undefined);
+  const metadata = frontmatter.metadata && typeof frontmatter.metadata === "object" ? (frontmatter.metadata as Record<string, unknown>) : {};
+  return { name: value(frontmatter.name), description: value(frontmatter.description), title: value(metadata.title) };
+}
+
 function description(file: string): string {
-  const line = readFileSync(file, "utf8").split("\n").find((item) => item.startsWith("description: "));
-  if (!line) throw new Error("技能说明缺失");
-  return JSON.parse(line.slice("description: ".length));
+  let value: string | undefined;
+  try { value = skillHead(readFileSync(file, "utf8")).description; }
+  catch { throw new Error("技能说明缺失"); }
+  if (!value) throw new Error("技能说明缺失");
+  return value;
 }
 export function readAssistantSkillBody(path: string): string {
   const text = readFileSync(path, "utf8");
@@ -57,50 +84,54 @@ export function skillInstruction(titles: string[], instruction: string): string 
   return `按技能${titles.map((title) => `「${title}」`).join("")}做（先读${titles.length === 1 ? "它" : "它们"}的 SKILL.md）。\n${instruction}`;
 }
 
-export function listAssistantSkills(home: string, assistantId: string): AssistantSkill[] {
-  const dir = checkedDir(home, assistantId);
-  return Object.entries(metadata(dir)).map(([name, data]) => {
-    validName(name);
-    const skillDir = join(dir, name);
-    safeTree(skillDir);
-    const path = join(skillDir, "SKILL.md");
-    return { name, ...data, description: description(path), path };
+function readSkill(dir: string, name: string, data: Metadata): AssistantSkill {
+  validName(name);
+  const skillDir = join(dir, name);
+  safeTree(skillDir);
+  const path = join(skillDir, "SKILL.md");
+  return { name, ...data, description: description(path), path };
+}
+
+/**
+ * 助手的技能：一份读不了就只跳过那一份并记日志。
+ * 沉淀直接改技能文件，改到一半时别处要列技能，不能因此把整个助手的技能都当成没有。
+ */
+export function listSkills(dir: string): AssistantSkill[] {
+  return Object.entries(metadata(dir)).flatMap(([name, data]) => {
+    try { return [readSkill(dir, name, data)]; }
+    catch (error) { console.error(`跳过读不了的技能「${name}」：`, error); return []; }
   });
 }
-/** 给对话、任务和定时用的已启用技能：读不了就当没有并记日志，一个坏掉的技能不能让整个助手开不了会话。 */
+export function listAssistantSkills(home: string, assistantId: string): AssistantSkill[] {
+  return listSkills(assistantSkillsDir(home, assistantId));
+}
+
+/** 给对话、任务和定时用的已启用技能。 */
 export function usableAssistantSkills(home: string, assistantId: string): AssistantSkill[] {
   try { return listAssistantSkills(home, assistantId).filter((skill) => skill.enabled); }
   catch (error) { console.error(`读取「${assistantId}」的技能失败：`, error); return []; }
 }
-export function enabledAssistantSkills(home: string, assistantId: string): Skill[] {
-  return usableAssistantSkills(home, assistantId).flatMap((skill) =>
+export function usableSkills(dir: string): AssistantSkill[] {
+  try { return listSkills(dir).filter((skill) => skill.enabled); }
+  catch (error) { console.error("读取技能失败：", error); return []; }
+}
+export function groupSkills(home: string, group: Group | undefined): AssistantSkill[] {
+  return group ? usableSkills(groupSkillsDir(home, group.parentId ?? group.id)) : [];
+}
+export function combinedSkills(home: string, assistantId: string, group?: Group, includeDisabledOwn = false): AssistantSkill[] {
+  const groupItems = groupSkills(home, group);
+  const names = new Set(groupItems.map((item) => item.name));
+  const own = includeDisabledOwn ? listAssistantSkills(home, assistantId) : usableAssistantSkills(home, assistantId);
+  return [...groupItems, ...own.filter((item) => !names.has(item.name))];
+}
+export function resolveSkill(home: string, assistantId: string, name: string, group?: Group): AssistantSkill | undefined {
+  return combinedSkills(home, assistantId, group, true).find((skill) => skill.name === name);
+}
+export function loadedSkills(skills: AssistantSkill[]): Skill[] {
+  return skills.flatMap((skill) =>
     loadSkillsFromDir({ dir: dirname(skill.path), source: "assistant" }).skills.filter((item) => item.filePath === skill.path));
 }
-/** save_skill 的附件可以不抄全文，只给工作目录里的文件（from），这里读出来；不能跳出工作目录。 */
-export function readSkillFiles(cwd: string, files: unknown): SkillInput["files"] {
-  if (files === undefined) return undefined;
-  if (!Array.isArray(files)) throw new Error("技能附件无效");
-  let root: string | undefined;
-  return files.map((file) => {
-    const { path, content, from } = (file ?? {}) as { path?: unknown; content?: unknown; from?: unknown };
-    // 有的模型会把每个字段都填上，没用的那个给空串：空串当没给
-    const hasFrom = from !== undefined && from !== "";
-    const hasContent = content !== undefined && !(hasFrom && content === "");
-    if (hasContent === hasFrom) throw new Error("附件要给 content 或 from，只给一个");
-    if (!hasFrom) return { path, content } as { path: string; content: string };
-    if (typeof from !== "string" || !from.trim()) throw new Error("附件的 from 无效");
-    let real: string;
-    try { root ??= realpathSync(cwd); real = realpathSync(resolve(root, from)); }
-    catch { throw new Error(`找不到 from 指向的文件：${from}`); }
-    const rel = relative(root, real);
-    if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("from 只能是工作目录里的文件");
-    const stat = statSync(real);
-    if (!stat.isFile()) throw new Error(`from 不是文件：${from}`);
-    if (stat.size > 200 * 1024) throw new Error("技能附件超过 200 KB");
-    return { path, content: readFileSync(real, "utf8") } as { path: string; content: string };
-  });
-}
-export function saveAssistantSkill(home: string, assistantId: string, input: SkillInput, jobId?: string, replaceFiles = false, options?: { overwriteVersion?: boolean }): AssistantSkill {
+export function saveSkill(dir: string, input: SkillInput, jobId?: string, replaceFiles = false, options?: { overwriteVersion?: boolean }): AssistantSkill {
   validName(input.name);
   if (typeof input.title !== "string" || !input.title.trim() || typeof input.description !== "string" || !input.description.trim() || [...input.description].length > 120 || typeof input.content !== "string") throw new Error("技能内容无效");
   const body = `---\nname: ${JSON.stringify(input.name)}\ndescription: ${JSON.stringify(input.description)}\nmetadata:\n  title: ${JSON.stringify(input.title)}\n---\n\n${input.content}`;
@@ -115,7 +146,6 @@ export function saveAssistantSkill(home: string, assistantId: string, input: Ski
     if (names.has(file.path)) throw new Error("附件路径重复");
     names.add(file.path);
   }
-  const dir = checkedDir(home, assistantId);
   mkdirSync(dir, { recursive: true });
   const all = metadata(dir);
   const target = join(dir, input.name);
@@ -158,20 +188,26 @@ export function saveAssistantSkill(home: string, assistantId: string, input: Ski
   const now = new Date().toISOString();
   all[input.name] = { title: input.title, version: old && options?.overwriteVersion ? old.version : (old?.version ?? 0) + 1, createdAt: old?.createdAt ?? now, updatedAt: now, ...(jobId ? { fromJobId: jobId } : old?.fromJobId ? { fromJobId: old.fromJobId } : {}), uses: old?.uses ?? 0, ...(old?.lastUsedAt ? { lastUsedAt: old.lastUsedAt } : {}), enabled: old?.enabled ?? true };
   saveMetadata(dir, all);
-  return listAssistantSkills(home, assistantId).find((skill) => skill.name === input.name)!;
+  return listSkills(dir).find((skill) => skill.name === input.name)!;
 }
-export function setAssistantSkillEnabled(home: string, assistantId: string, name: string, enabled: boolean): AssistantSkill {
+export function saveAssistantSkill(home: string, assistantId: string, input: SkillInput, jobId?: string, replaceFiles = false, options?: { overwriteVersion?: boolean }): AssistantSkill {
+  return saveSkill(assistantSkillsDir(home, assistantId), input, jobId, replaceFiles, options);
+}
+export function setSkillEnabled(dir: string, name: string, enabled: boolean): AssistantSkill {
   validName(name);
-  const dir = checkedDir(home, assistantId), all = metadata(dir);
+  const all = metadata(dir);
   if (!all[name]) throw new Error("技能不存在");
   safeTree(join(dir, name));
   all[name].enabled = enabled;
   saveMetadata(dir, all);
-  return listAssistantSkills(home, assistantId).find((skill) => skill.name === name)!;
+  return listSkills(dir).find((skill) => skill.name === name)!;
 }
-export function archiveAssistantSkill(home: string, assistantId: string, name: string): void {
+export function setAssistantSkillEnabled(home: string, assistantId: string, name: string, enabled: boolean): AssistantSkill {
+  return setSkillEnabled(assistantSkillsDir(home, assistantId), name, enabled);
+}
+export function archiveSkill(dir: string, name: string): void {
   validName(name);
-  const dir = checkedDir(home, assistantId), all = metadata(dir), target = join(dir, name);
+  const all = metadata(dir), target = join(dir, name);
   if (!all[name]) throw new Error("技能不存在");
   safeTree(target);
   const archive = join(dir, ".archive");
@@ -181,17 +217,23 @@ export function archiveAssistantSkill(home: string, assistantId: string, name: s
   delete all[name];
   saveMetadata(dir, all);
 }
-export function recordAssistantSkillUse(home: string, assistantId: string, name: string): void {
+export function archiveAssistantSkill(home: string, assistantId: string, name: string): void {
+  archiveSkill(assistantSkillsDir(home, assistantId), name);
+}
+export function recordSkillUse(dir: string, name: string): void {
   validName(name);
-  const dir = checkedDir(home, assistantId), all = metadata(dir);
+  const all = metadata(dir);
   if (!all[name]) throw new Error("技能不存在");
   all[name].uses++;
   all[name].lastUsedAt = new Date().toISOString();
   saveMetadata(dir, all);
 }
-export function rollbackAssistantSkill(home: string, assistantId: string, name: string): AssistantSkill {
+export function recordAssistantSkillUse(home: string, assistantId: string, name: string): void {
+  recordSkillUse(assistantSkillsDir(home, assistantId), name);
+}
+export function rollbackSkill(dir: string, name: string): AssistantSkill {
   validName(name);
-  const dir = checkedDir(home, assistantId), all = metadata(dir), target = join(dir, name);
+  const all = metadata(dir), target = join(dir, name);
   if (!all[name]) throw new Error("技能不存在");
   safeTree(target);
   const history = join(target, ".history");
@@ -199,8 +241,7 @@ export function rollbackAssistantSkill(home: string, assistantId: string, name: 
   if (!versions.length) throw new Error("没有上一版");
   const previous = join(history, String(versions[0]));
   const body = readFileSync(join(previous, "SKILL.md"), "utf8");
-  const titleLine = body.split("\n").find((line) => line.startsWith("  title: "));
-  const title = titleLine ? JSON.parse(titleLine.slice("  title: ".length)) : all[name].title;
+  const title = skillHead(body).title ?? all[name].title;
   const files: { path: string; content: string }[] = [];
   function collect(dirPath: string, rel: string): void {
     if (!existsSync(dirPath)) return;
@@ -211,5 +252,8 @@ export function rollbackAssistantSkill(home: string, assistantId: string, name: 
     }
   }
   collect(join(previous, "scripts"), "scripts"); collect(join(previous, "references"), "references");
-  return saveAssistantSkill(home, assistantId, { name, title, description: description(join(previous, "SKILL.md")), content: body.slice(body.indexOf("\n---\n") + 5).replace(/^\n/, ""), files }, undefined, true);
+  return saveSkill(dir, { name, title, description: description(join(previous, "SKILL.md")), content: body.slice(body.indexOf("\n---\n") + 5).replace(/^\n/, ""), files }, undefined, true);
+}
+export function rollbackAssistantSkill(home: string, assistantId: string, name: string): AssistantSkill {
+  return rollbackSkill(assistantSkillsDir(home, assistantId), name);
 }

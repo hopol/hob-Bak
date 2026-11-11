@@ -40,6 +40,7 @@ export async function startHob(options: StartOptions = {}): Promise<HobServer> {
 
   runtime.delegations.recovering = true;
   runtime.jobs.recover();
+  runtime.projects.recover();
   runtime.delegations.recover();
   runtime.routines.start();
   runtime.jobs.startWatchdog();

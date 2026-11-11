@@ -13,7 +13,7 @@ describe("未读", () => {
     const markRead = vi.spyOn(realApi, "markRead").mockResolvedValue(undefined);
     const { applyEvent, getState } = await import("../src/store.ts");
     const summary = (id: string) => ({ id, name: id, duty: "", sprite: "hob", primary: false, pinned: true, hidden: false, notify: true, instructions: "", createdAt: "", unread: 2 }) as unknown as AssistantSummary;
-    expect(getState().sel).toBe("hob");
+    getState().sel = "hob"; // 正看着 Hob 的对话
     applyEvent({ type: "assistant", assistant: summary("hob") });
     applyEvent({ type: "assistant", assistant: summary("bird") });
     expect(getState().assistants.find((a) => a.id === "hob")?.unread).toBe(0);

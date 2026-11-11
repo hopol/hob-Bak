@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deriveSteps } from "../../server/src/transcript.ts";
-import type { Job, JobStep } from "../../shared/types.ts";
+import type { Job, JobStep, SedimentStatus } from "../../shared/types.ts";
 import { diffLines, groupThinking, jobDetailRounds, jobReason, jobRoundView, mergeStep, mergeSteps, titleParts } from "../src/steps.ts";
 
 function tool(id: string, extra: Partial<JobStep> = {}): JobStep {
@@ -216,6 +216,15 @@ describe("任务详情分轮", () => {
     expect(rounds.map((round) => round.job.files)).toEqual([["文件一"], undefined, undefined]);
     expect(jobDetailRounds(job, undefined)[0].steps).toBeUndefined();
   });
+
+  it("续做那一轮开头那句就是「这一轮的要求」，不在执行过程里再列一遍；轮中途补充的照常列", () => {
+    const job: Job = { id: "t", assistantId: "hob", title: "测试", instruction: "初始说明", status: "running", createdAt: "01", startedAt: "03", stats: { reads: 0, commands: 0, edits: 0 }, activity: [], rounds: [
+      { status: "done", startedAt: "01", endedAt: "02", followUp: "继续做完" },
+    ] };
+    const user = (id: string, at: string, text: string): JobStep => ({ id, kind: "text", at, from: "user", text });
+    const rounds = jobDetailRounds(job, [tool("a", { at: "01" }), user("u1", "03", "「Hob」接着说（11月8日 05:00）：继续做完"), tool("b", { at: "04" }), user("u2", "05", "用户接着说（11月8日 05:10）：顺便看下日志")]);
+    expect(rounds[1]!.steps?.map((step) => step.id)).toEqual(["b", "u2"]);
+  });
 });
 
 describe("续做过的任务卡", () => {
@@ -235,5 +244,12 @@ describe("续做过的任务卡", () => {
     expect(jobRoundView(job, 2)).toBe(job);
     const fresh = { ...job, rounds: undefined };
     expect(jobRoundView(fresh, 0)).toBe(fresh);
+  });
+
+  it("沉淀结果跟着那一轮走，最后一张不带上一轮的", () => {
+    const sediment: SedimentStatus = { status: "saved", name: "x", title: "写报告", version: 2, updated: true };
+    const withSediment: Job = { ...job, rounds: [{ ...job.rounds![0]!, sediment }], sediment: undefined };
+    expect(jobRoundView(withSediment, 0).sediment).toEqual(sediment);
+    expect(jobRoundView(withSediment, 1).sediment).toBeUndefined();
   });
 });

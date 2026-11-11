@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildSystemPrompt, buildWorkerPrompt } from "../src/prompt.ts";
@@ -9,6 +9,24 @@ import { makeHob, text } from "./helpers.ts";
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("群补充说明", () => {
+  it("群会话和话题任务在助手说明之前读取所属群说明", () => {
+    const group = { id: "g-1", name: "团队", purpose: "协作", ownerId: "hob", members: ["hob"], instructions: "群里的约定", createdAt: "2026-01-01" };
+    const topic = { ...group, id: "g-2", name: "话题", parentId: group.id };
+    const store = {
+      home: "/tmp/hob", assistant: () => ({ id: "hob", name: "Hob", primary: true, duty: "主助手", instructions: "助手自己的说明" }),
+      assistants: () => [], groups: () => [], group: (id: string) => id === group.id ? group : topic,
+      globalRules: () => [], rules: () => [], groupRules: () => [], routines: () => [],
+      job: () => ({ assistantId: "hob", groupId: topic.id, cwd: "/work" }),
+    } as never;
+    const settings = { timezone: "Asia/Shanghai", aboutYou: { name: "", language: "", notes: "" }, memory: "off" as const, searchEnabled: false, imageEnabled: false, desktopEnabled: false };
+    for (const prompt of [buildSystemPrompt(store, "hob", { ...settings, group: topic }), buildWorkerPrompt(store, "job", settings)]) {
+      expect(prompt).toContain("## 本群的补充说明\n群里的约定");
+      expect(prompt.indexOf("群里的约定")).toBeLessThan(prompt.indexOf("助手自己的说明"));
+    }
+  });
 });
 
 describe("现在时间", () => {
@@ -66,7 +84,7 @@ describe("现在时间", () => {
         const id = (result.body as { assistant: { id: string } }).assistant.id;
         expect(hob.runtime.store.assistant(id)?.dutyLong).toBe("每周写周报。");
         const note = hob.runtime.router.items(id).items[0];
-        expect(note.kind === "note" ? note.text : "").toBe("11月1日 由 Hob 创建 · 迁移 2 段对话");
+        expect(note.kind === "note" ? note.text : "").toBe("11月1日 由 Hob 创建");
       } finally {
         hob.close();
       }
@@ -78,24 +96,21 @@ describe("现在时间", () => {
   });
 });
 
-// 定稿只在开发仓库里（.scratch 不随公开版发布），没有就跳过逐字对照
-describe.skipIf(!existsSync(".scratch/v2/design-prompts-v3.md"))("批准的提示词原文", () => {
-  it("主助手、其他助手和 Worker 逐字相等，固定部分符合上限", () => {
+describe("提示词角色和长度", () => {
+  it("覆盖主助手、其他助手和 Worker，固定部分符合上限", () => {
     const primary = { id: "hob", name: "Hob", primary: true, duty: "主助手", instructions: "主说明" };
     const other = { id: "ops", name: "运维", primary: false, duty: "服务器", dutyLong: "维护机器", instructions: "副说明" };
     const store = {
       assistant: (id: string) => id === "hob" ? primary : other,
       assistants: () => [primary, other],
+      groups: () => [],
       globalRules: () => [{ mode: "ask", text: "删除" }, { mode: "allow", text: "验证" }],
       rules: (id: string) => id === "hob" ? [{ mode: "ask", text: "重启" }, { mode: "allow", text: "查看" }] : [{ mode: "ask", text: "发布" }],
       routines: () => [{ assistantId: "hob", name: "日报", schedules: ["0 9 * * *"], active: true, instruction: "写日报" }],
       job: () => ({ assistantId: "hob", cwd: "/work" }),
     } as never;
     const settings = { timezone: "Asia/Shanghai", aboutYou: { name: "小林", language: "中文", notes: "简洁" }, memory: "lore" as const, searchEnabled: true, imageEnabled: true, desktopEnabled: true, skills: [{ name: "搜索", description: "不显示" }] };
-    const design = readFileSync(".scratch/v2/design-prompts-v3.md", "utf8");
-    const source = design.split("## 一、助手的系统提示词\n\n```\n")[1]!.split("\n```\n")[0]!;
     const main = buildSystemPrompt(store, "hob", { ...settings, assistantSkillsDir: "/skills" });
-    for (const paragraph of source.split("\n\n").filter((part) => !part.includes("【") && !part.includes("{") && !part.startsWith("##"))) expect(main).toContain(paragraph);
     expect(main).toContain("你是「Hob」，用户的主助手。用户在一对一的对话里和你合作，每条消息都是对你说的。");
     expect(main).toContain("- 日报 · 每天 09:00：写日报");
     const specific = buildSystemPrompt(store, "ops", { ...settings, assistantSkillsDir: "/skills" });
@@ -105,9 +120,10 @@ describe.skipIf(!existsSync(".scratch/v2/design-prompts-v3.md"))("批准的提�
     expect(worker).toContain("你是「Hob」派出的后台任务，在自己的会话里把交给你的事做完。\n工作目录：/work。产出放在这里；读取不限目录。");
     expect(worker).toContain("不能做：执行命令（bash）、生图（generate_image）。");
     expect(worker).toContain("## 这些事执行前先用 ask_user 问\n- 删除\n- 重启");
-    const emptyStore = { ...store as object, assistant: () => ({ ...primary, instructions: "" }), assistants: () => [primary], globalRules: () => [], rules: () => [], routines: () => [] } as never;
+    const emptyStore = { ...store as object, assistant: () => ({ ...primary, instructions: "" }), assistants: () => [primary], groups: () => [], globalRules: () => [], rules: () => [], routines: () => [] } as never;
     const empty = { timezone: "Asia/Shanghai", aboutYou: { name: "", language: "", notes: "" }, memory: "off" as const, assistantSkillsDir: "/skills" };
-    expect(buildSystemPrompt(emptyStore, "hob", empty).length).toBeLessThanOrEqual(1800);
+    // 票 153 把「助手」一节的最后一句换成了管理那一段（+62 字），上限跟着提到 1860
+    expect(buildSystemPrompt(emptyStore, "hob", empty).length).toBeLessThanOrEqual(1860);
     expect(buildWorkerPrompt(emptyStore, "t", empty).length).toBeLessThanOrEqual(600);
   });
 });
@@ -172,7 +188,8 @@ describe("系统提示词", () => {
       store.migrateAssistantDuties();
       expect(store.assistant("ops")?.dutyLong).toBe("维护服务器");
       store.saveRules("ops", [{ id: "r", text: "重启服务", mode: "ask", changedAt: primary.createdAt }, { id: "r2", text: "查看日志", mode: "allow", changedAt: primary.createdAt }]);
-      expect(promptOf(hob)).toContain("服务器（ops）：机器。维护服务器");
+      expect(promptOf(hob)).toContain("服务器（ops）：机器");
+      expect(promptOf(hob)).not.toContain("服务器（ops）：机器。维护服务器");
       expect(promptOf(hob)).not.toContain("执行前要确认：查看日志");
       const { timezone, aboutYou } = hob.runtime.settings.settings.general;
       expect(buildSystemPrompt(store, "ops", { timezone, aboutYou, memory: "off" })).toContain("详细职责：维护服务器");

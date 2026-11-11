@@ -157,13 +157,18 @@ export function jobDetailRounds(job: Job, steps: JobStep[] | undefined) {
   return [...history, job].map((round, index) => {
     const last = index === history.length;
     const start = round.startedAt ?? (index === 0 ? job.createdAt : history[index - 1].endedAt);
-    const end = last ? undefined : round.endedAt;
     const nextStart = !last ? (history[index + 1]?.startedAt ?? (index + 1 === history.length ? job.startedAt : undefined)) : undefined;
+    // 沉淀是这一轮结束以后接着做的一段：有沉淀结果时，这一段的过程也算在它自己那一轮里
+    const end = last ? undefined : round.sediment ? nextStart : round.endedAt;
+    const instruction = index === 0 ? job.instruction : history[index - 1].followUp;
+    const own = steps?.filter((step) => (!start || step.at >= start) && (!end || step.at <= end) && (!nextStart || step.at < nextStart));
+    // 续做那一轮的第一句（「谁接着说（时间）：…」）就是上面的「这一轮的要求」，不再列一遍；轮中途补充的照常列
+    const repeat = index > 0 && instruction ? own?.findIndex((step) => step.from === "user" && step.text?.endsWith(instruction.trim())) ?? -1 : -1;
     return {
       // 前几轮没写原因就是没有原因，不能沿用整个任务最后的原因
-      job: { ...job, ...round, statusReason: round.statusReason, summary: last && ["running", "queued", "waiting"].includes(job.status) ? undefined : round.summary, files: last && ["running", "queued", "waiting"].includes(job.status) ? undefined : round.files },
-      instruction: index === 0 ? job.instruction : history[index - 1].followUp,
-      steps: steps?.filter((step) => (!start || step.at >= start) && (!end || step.at <= end) && (!nextStart || step.at < nextStart)),
+      job: { ...job, ...round, statusReason: round.statusReason, sediment: last ? job.sediment : round.sediment, summary: last && ["running", "queued", "waiting"].includes(job.status) ? undefined : round.summary, files: last && ["running", "queued", "waiting"].includes(job.status) ? undefined : round.files },
+      instruction,
+      steps: repeat < 0 ? own : own!.filter((_, at) => at !== repeat),
     };
   });
 }
@@ -182,7 +187,7 @@ const STATUS_WORDS = new Set(["排队中", "进行中", "待确认", "等你确�
 export function jobRoundView(job: Job, round = 0): Job {
   const past = job.rounds?.[round];
   if (!past) return job;
-  return { ...job, status: past.status, statusReason: past.statusReason, startedAt: past.startedAt, endedAt: past.endedAt, durationMs: past.durationMs };
+  return { ...job, status: past.status, statusReason: past.statusReason, startedAt: past.startedAt, endedAt: past.endedAt, durationMs: past.durationMs, sediment: past.sediment };
 }
 
 export function jobReason(job: { statusReason?: string }): string | undefined {

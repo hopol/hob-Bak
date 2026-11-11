@@ -1,6 +1,6 @@
 {
   "name": "hob-bot",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "A self-hosted personal assistant that runs real work as background jobs.",
   "license": "MIT",
   "repository": {

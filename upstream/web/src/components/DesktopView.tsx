@@ -1,3 +1,4 @@
+import { Select } from "./Select.tsx";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import RFB from "@novnc/novnc";
@@ -365,15 +366,15 @@ export function DesktopView({ onClose, takeOver = false, initialScreen = "hob" }
         }}>复制到本机</button></span> : null}
         {phase === "ready" && error ? <span className="desktop-note bad" role="alert">{error}</span> : null}
         <span className="sp" />
-        <select className="pick desktop-open" aria-label="屏幕" value={screen} onChange={(event) => setScreen(event.target.value)}>
-          {!Object.values(desktop.profiles).includes(screen) && screen !== "public" ? <option value={screen}>{screen}</option> : null}
-          {assistants.filter((assistant) => desktop.profiles[assistant.id]).map((assistant) => {
+        <Select className="desktop-open" aria-label="屏幕" value={screen} onChange={setScreen} options={[
+          ...(!Object.values(desktop.profiles).includes(screen) && screen !== "public" ? [{ value: screen, label: screen }] : []),
+          ...assistants.filter((assistant) => desktop.profiles[assistant.id]).map((assistant) => {
             const id = desktop.profiles[assistant.id];
             const running = desktop.screens.some((entry) => entry.id === id && entry.running);
-            return <option key={assistant.id} value={id}>{assistant.name} · {running ? "运行中" : "未启动"}</option>;
-          })}
-          <option value="public">公共屏幕 · {desktop.screens.some((entry) => entry.id === "public" && entry.running) ? "运行中" : "未启动"}</option>
-        </select>
+            return { value: id, label: `${assistant.name} · ${running ? "运行中" : "未启动"}` };
+          }),
+          { value: "public", label: `公共屏幕 · ${desktop.screens.some((entry) => entry.id === "public" && entry.running) ? "运行中" : "未启动"}` }
+        ]} />
         {control.mine && touch ? <button className="hob-btn" onClick={() => input.current?.focus()}>键盘</button> : null}
         <button
           className="hob-btn hob-btn-primary"

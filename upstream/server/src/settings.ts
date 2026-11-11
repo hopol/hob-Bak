@@ -49,8 +49,8 @@ export function readLegacyModels(home: string): LegacyModels | undefined {
   let stored: Record<string, unknown>;
   try {
     stored = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-  } catch {
-    return undefined;
+  } catch (error) {
+    throw new Error(`读取 ${file} 失败：${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
   const text = (key: string) => (typeof stored[key] === "string" ? String(stored[key]).trim() : undefined);
   const legacy: LegacyModels = {
@@ -268,8 +268,8 @@ function legacySeed(home: string): SettingsPatch {
   let stored: Record<string, unknown>;
   try {
     stored = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-  } catch {
-    return {};
+  } catch (error) {
+    throw new Error(`读取 ${file} 失败：${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
   const seed: SettingsPatch = {};
   const general: Partial<Settings["general"]> = {};
@@ -311,11 +311,8 @@ export class SettingsStore {
     let stored: Partial<SettingsFile> & { memory?: { provider?: unknown } } = {};
     try {
       stored = JSON.parse(readFileSync(path, "utf8")) as Partial<SettingsFile> & { memory?: { provider?: unknown } };
-    } catch {
-      // 文件坏了就按默认值重建，不静默改用户的设置内容以外的行为
-      this.file = { revision: 1, settings: this.base };
-      this.write();
-      return;
+    } catch (error) {
+      throw new Error(`读取 ${path} 失败：${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
     if (isMemoryProvider(stored.memory?.provider)) this.memoryProvider = stored.memory.provider;
     this.file = {

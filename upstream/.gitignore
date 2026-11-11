@@ -1,7 +1,8 @@
 .local/
-node_modules/
+node_modules
 dist/
 .worktrees/
 .env
 # 本地评测记录可能包含用户上下文，不提交。
 .scratch/v2/109/eval/
+.playwright-cli/

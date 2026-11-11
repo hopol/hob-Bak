@@ -7,8 +7,9 @@ import { fileIcon } from "../file-icons.ts";
 import { numericColumns } from "../csv-columns.ts";
 import { useLeave } from "../motion.ts";
 import { copyText } from "../clipboard.ts";
-import { closePanelPages, fetchFileMeta, fileUrl, photoUrl, setNotice, togglePreviewFull, useApp, type PanelPage } from "../store.ts";
+import { closeImageViewer, closePanelPages, fetchFileMeta, fileUrl, localImage, photoUrl, setNotice, togglePreviewFull, useApp, type PanelPage } from "../store.ts";
 import { PanelHead } from "./PanelHead.tsx";
+import { ImageViewer } from "./ImageViewer.tsx";
 import { DelayedText } from "./Empty.tsx";
 import { fmtBytes, fmtWhen } from "../util.ts";
 import { Markdown } from "./Markdown.tsx";
@@ -222,6 +223,16 @@ function Body({ meta, find, page }: { meta: FileMeta; find?: string; page?: numb
 }
 
 /** 图片：适应宽度，点开放大（再点或 Esc 关）。 */
+/** 点开图片（openFilePreview 遇到图片）时铺在最上面。 */
+export function ImageViewerHost() {
+  const viewer = useApp().viewer;
+  if (!viewer) return null;
+  // svg 没有缩略图；要 inline 才不会被当附件拦下（<img> 里的 svg 不执行脚本）
+  const svg = viewer.path.toLowerCase().endsWith(".svg");
+  const local = localImage(viewer.path);
+  return <ImageViewer key={viewer.path} src={local ?? fileUrl(viewer.path, svg ? { inline: true } : undefined)} thumb={svg ? undefined : photoUrl(viewer.path)} download={local ? undefined : fileUrl(viewer.path)} name={viewer.name} onClose={closeImageViewer} />;
+}
+
 function ImageBody({ path, name, svg }: { path: string; name: string; svg: boolean }) {
   const [open, setOpen] = useState(false);
   const src = fileUrl(path, svg ? { inline: true } : undefined);
@@ -230,18 +241,6 @@ function ImageBody({ path, name, svg }: { path: string; name: string; svg: boole
   const [status, setStatus] = useState<"loading" | "loaded" | "error">(svg ? "loaded" : "loading");
   const loading = status === "loading";
   const thumb = photoUrl(path);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.stopImmediatePropagation();
-        setOpen(false);
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [open]);
 
   return (
     <>
@@ -253,15 +252,7 @@ function ImageBody({ path, name, svg }: { path: string; name: string; svg: boole
           {status === "error" ? <span>图片加载失败</span> : null}
         </button>
       </div>
-      {open ? (
-        <div className="lightbox fp-lightbox" role="dialog" aria-label={name} onClick={() => setOpen(false)}>
-          <div className={loading ? "fp-lightbox-image fp-img-loading" : "fp-lightbox-image"}>
-            <img src={loading ? thumb : src} alt={name} />
-            {loading ? <span className="fp-img-spin" aria-label="图片加载中"><Icon name="spin" size={18} w={2.2} className="spin" /></span> : null}
-            {status === "error" ? <span>图片加载失败</span> : null}
-          </div>
-        </div>
-      ) : null}
+      {open ? <ImageViewer src={src} thumb={svg ? undefined : thumb} name={name} onClose={() => setOpen(false)} /> : null}
     </>
   );
 }

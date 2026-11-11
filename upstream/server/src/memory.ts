@@ -253,7 +253,8 @@ export function memoryPromptLines(provider: MemoryProvider): string[] {
 /** 各提供者要放行的记忆工具（插件注册的工具名；没加载插件时一个都不存在）。 */
 export const MEMORY_TOOL_PATTERNS: Record<MemoryProvider, string[]> = {
   local: ["memory_*", "scratchpad"],
-  lore: ["lore_*"],
+  // 只放记忆工具；lore_skill_* 管的是用户全局的 Lore 技能库，Hob 的技能只经 save_skill 写进助手自己的目录
+  lore: ["lore_status", "lore_boot", "lore_get_node", "lore_search", "lore_list_domains", "lore_create_node", "lore_update_node", "lore_delete_node", "lore_move_node"],
   off: [],
 };
 

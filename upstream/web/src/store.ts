@@ -11,6 +11,11 @@ import type {
   Delegation,
   Draft,
   FileMeta,
+  Group,
+  GroupItem,
+  GroupItemsPage,
+  GroupProfile,
+  GroupSummary,
   HobEvent,
   JobFilesView,
   ImageKeyView,
@@ -28,10 +33,12 @@ import type {
   PageLive,
   ModelThinkingView,
   Profile,
+  Project,
   ProviderImportView,
   ProvidersView,
   PushView,
   Routine,
+  RouterActivity,
   Rule,
   SendMessageBody,
   Settings,
@@ -41,6 +48,7 @@ import type {
   TokenPrice,
   UsageModelPrice,
   UsageView,
+  WorkflowId,
 } from "../../shared/types.ts";
 import type { AssistantSkill } from "../../shared/skills.ts";
 import type { KnowledgeCollection, KnowledgeEntry, KnowledgeGroup } from "../../shared/knowledge.ts";
@@ -64,7 +72,8 @@ export type PanelState =
   | { kind: "routine"; id: string }
   | { kind: "newRoutine" } // 还没创建的定时任务：填好名称和任务内容才真正创建
   | { kind: "assistant" }
-  | { kind: "routines" | "skills" | "knowledge" | "rules" };
+  | { kind: "routines" | "skills" | "knowledge" | "rules" }
+  | { kind: "project"; groupId: string; id: string }; // 演示场景里直接打开某个事项页
 export interface WorklogState {
   jobs: Job[];
   assistantId: string | null;
@@ -72,7 +81,7 @@ export interface WorklogState {
   hasMore: boolean;
   loading: boolean;
 }
-export type MobilePage = "list" | "chat";
+export type MobilePage = "list" | "topics" | "chat";
 export type { SettingsSection } from "./route.ts";
 
 /** 设置分栏下的一层：手机标题栏显示 title，返回回到分栏。 */
@@ -105,12 +114,29 @@ const EMPTY_SETTINGS: Settings = {
 
 export interface SidebarPage<T> { items: T[]; loaded: boolean; loading: boolean; loadingMore: boolean; hasMore: boolean; error: string | null; failedMore?: boolean; cursor?: string }
 
+/**
+ * 群的置顶、位置和展开状态：Group 契约里没有这几个字段（服务端管不上），先记在本地。
+ * 位置和助手的 pinOrder 用同一条数轴，群和助手才能混在一起排序。
+ */
+export interface GroupPrefs {
+  pinned: boolean;
+  pinOrder?: number;
+}
+
 export interface State {
   phase: "loading" | "login" | "ready" | "error";
   error: string | null; // 致命错误（无法连接后端）
   notice: string | null; // 一次性的操作失败提示
   offline: string | null; // 实时连接断开
   assistants: AssistantSummary[];
+  groups: GroupSummary[];
+  groupPrefs: Record<string, GroupPrefs>;
+  groupItems: Record<string, GroupItem[]>;
+  projects: Record<string, Project[]>; // 群 id → 事项，新的在前
+  projectsError: Record<string, string | null>;
+  groupGen: Record<string, number>; // 重新拉这个群的整条时间线 +1
+  groupPages: Record<string, { hasMore: boolean; loading: boolean; error: string | null }>;
+  groupActivity: Record<string, Record<string, RouterActivity>>; // 群 id → 正在说话的成员 → 当前活动
   jobs: Record<string, Job>;
   delegations: Record<string, Delegation>;
   routines: Routine[];
@@ -125,12 +151,17 @@ export interface State {
   items: Record<string, Item[]>;
   itemGen: Record<string, number>; // 每次重新拉这段对话 +1，聊天区据此判断“整批换了”而不是“新到一条”
   itemPages: Record<string, { hasMore: boolean; loading: boolean; error: string | null }>;
+  groupProfiles: Record<string, { value?: GroupProfile; error?: string }>;
   profiles: Record<string, Profile>;
   assistantSkills: Record<string, { skills: AssistantSkill[]; loaded: boolean; loading: boolean; error: string | null }>;
   sidebarJobs: Record<string, SidebarPage<Job>>;
   sidebarFiles: Record<string, SidebarPage<KnowledgeEntry>>;
   sel: string | null;
+  gsel: string | null; // 选中的群；和 sel 互斥（群和助手分开选中）
+  /** 桌面左栏在首页列表：选中群时左栏换成这个群的二级页，点返回又回到首页 */
+  sideHome: boolean;
   panelStack: PanelPage[];
+  viewer: { path: string; name: string } | null; // 全屏看图
   livePages: Record<string, PageLive>;
   steps: Record<string, JobStep[]>; // 打开了详情的任务才有过程
   worklog: WorklogState | null;
@@ -154,7 +185,7 @@ export interface State {
 
 const params = new URLSearchParams(location.search);
 export const MOCK = params.get("mock") === "1";
-const SCENES: SceneId[] = ["readme-chat", "readme-cards", "readme-dark", "readme-rules", "readme-desktop", "readme-page", "readme-knowledge", "readme-list", "readme-question", "readme-profile", "image", "act-demo", "act-think", "act-tool", "act-dark", "act-home", "boot", "bubbles", "bubbles-dark", "card-130", "card-130-dark", "routine-check-dark", "routine-once", "routine-once-dark", "routine-once-list", "s1", "s2", "s3", "s4", "s6", "mlist", "mchat", "d-running", "d-waiting", "d-done", "d-dark", "d-source", "d-mobile", "h-hob", "h-dark", "h-source", "h-settings", "h-mobile"];
+const SCENES: SceneId[] = ["g-owns", "g-owns-dark", "readme-chat", "readme-cards", "readme-desktop", "readme-knowledge", "readme-profile", "readme-group-now", "readme-mobile-list", "readme-mobile-chat", "readme-mobile-project", "image", "act-demo", "act-think", "act-tool", "act-dark", "act-home", "boot", "bubbles", "bubbles-dark", "card-130", "card-130-dark", "job-after", "job-after-dark", "routine-check-dark", "routine-once", "routine-once-dark", "routine-once-list", "ask-rounds", "ask-rounds-answered", "ask-rounds-group", "ask-rounds-dark", "ask-rounds-mobile", "s1", "s2", "s3", "s4", "s6", "mlist", "mchat", "d-running", "d-waiting", "d-done", "d-dark", "d-source", "d-mobile", "h-hob", "h-dark", "h-source", "h-settings", "h-mobile", "g-chat", "g-mention", "g-mobile", "g-dark", "g-team", "p-clarify", "p-plan", "p-doing", "p-card", "p-check", "p-done", "p-dropped", "p-dark", "p-mobile", "topics", "topics-plain"];
 const sceneParam = params.get("scene") as SceneId | null;
 const scene: SceneId = sceneParam && SCENES.includes(sceneParam) ? sceneParam : "s1";
 const api: HobApi = MOCK ? createMock(scene) : realApi;
@@ -166,12 +197,40 @@ let watchingVisibility = false;
 function parsePanel(raw: string): PanelState {
   if (raw === "assistant" || raw === "now" || raw === "routines" || raw === "skills" || raw === "knowledge" || raw === "rules" || raw === "newRoutine") return { kind: raw };
   if (raw.startsWith("routine:")) return { kind: "routine", id: raw.slice("routine:".length) };
+  if (raw.startsWith("project:")) {
+    const [groupId, id] = raw.slice("project:".length).split("/");
+    return { kind: "project", groupId: groupId ?? "", id: id ?? "" };
+  }
   return { kind: "now" };
 }
 
 function storedTheme(): Theme | null {
   const v = localStorage.getItem(THEME_KEY);
   return v === "light" || v === "dark" || v === "system" ? v : null;
+}
+
+const GROUP_PREFS_KEY = "hob.groups.local";
+
+/** 本地记的群设置；坏了就当没有，不影响打开界面。 */
+function loadGroupPrefs(): Record<string, GroupPrefs> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(GROUP_PREFS_KEY) ?? "{}") as Record<string, Partial<GroupPrefs>>;
+    const out: Record<string, GroupPrefs> = {};
+    for (const [id, value] of Object.entries(raw)) {
+      if (!value || typeof value !== "object") continue;
+      out[id] = {
+        pinned: Boolean(value.pinned),
+        ...(typeof value.pinOrder === "number" ? { pinOrder: value.pinOrder } : {}),
+      };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveGroupPrefs(prefs: Record<string, GroupPrefs>) {
+  localStorage.setItem(GROUP_PREFS_KEY, JSON.stringify(prefs));
 }
 
 const themeFromUrl = params.get("dark") === "1";
@@ -187,6 +246,13 @@ function initial(): State {
     notice: null,
     offline: null,
     assistants: [],
+    groups: [],
+    groupPrefs: loadGroupPrefs(),
+    groupItems: {},
+    projects: {},
+    projectsError: {},    groupGen: {},
+    groupPages: {},
+    groupActivity: {},
     jobs: {},
     delegations: {},
     routines: [],
@@ -202,11 +268,15 @@ function initial(): State {
     itemGen: {},
     itemPages: {},
     profiles: {},
+    groupProfiles: {},
     assistantSkills: {},
     sidebarJobs: {},
     sidebarFiles: {},
-    sel: "hob",
+    sel: null, // 没选中对话就是首页
+    gsel: null,
+    sideHome: true,
     panelStack: [],
+    viewer: null,
     livePages: {},
     steps: {},
     worklog: null,
@@ -228,15 +298,23 @@ function initial(): State {
     loggingIn: false,
   };
   if (MOCK) {
-    state.sel = ui.sel;
+    state.sel = ui.gsel ? null : ui.sel;
+    state.gsel = ui.gsel ?? null;
+    state.sideHome = !ui.gsel;
     const panel = parsePanel(ui.panel);
     state.panelStack = panel.kind === "now" ? [] : [panel];
     state.collapsed = ui.collapsed;
     state.mobile = ui.mobile;
     state.theme = ui.dark ? "dark" : "light";
+    if (ui.text) state.text = ui.text;
   }
   const aParam = params.get("a");
   if (aParam) state.sel = aParam;
+  if (bootRoute.group) {
+    state.gsel = bootRoute.group;
+    state.sel = null;
+    state.sideHome = false;
+  }
   if (bootRoute.sel) state.sel = bootRoute.sel;
   if (bootRoute.panel) state.panelStack = [bootRoute.panel];
   if (bootRoute.knowledge) state.page = "knowledge";
@@ -299,6 +377,8 @@ function upsert<T extends { id: string }>(list: T[], item: T): T[] {
 function mergeSettings(base: Settings, patch: SettingsPatch): Settings {
   const models = patch.models ?? {};
   return {
+    ...base,
+    ...(patch.skills ? { skills: patch.skills } : {}),
     general: {
       ...base.general,
       ...(patch.general ?? {}),
@@ -338,6 +418,7 @@ async function writeSettings(patch: SettingsPatch): Promise<boolean> {
     const next = await api.putSettings(before.revision, patch);
     set({ settings: next, theme: next.settings.general.theme });
     applyTheme(next.settings.general.theme);
+    if (patch.models) refreshGroupProfiles();
     localStorage.setItem(THEME_KEY, next.settings.general.theme);
     return true;
   } catch (e) {
@@ -838,7 +919,19 @@ export async function logout() {
   set({ phase: "login", assistants: [], items: {}, profiles: {}, assistantSkills: {}, jobs: {}, routines: [] });
 }
 
-async function loadBootstrap() {
+let groupRetry: ReturnType<typeof setTimeout> | undefined;
+/** 群列表不在 bootstrap 里，单独拉；手机从后台切回来时网络还没好，这一下常失败，失败了隔几秒再拉，不让群一直空着 */
+async function loadGroups() {
+  clearTimeout(groupRetry);
+  try {
+    set({ groups: await api.groups() });
+  } catch (e) {
+    set({ notice: `无法加载群：${errText(e)}，稍后自动重试` });
+    groupRetry = setTimeout(() => void loadGroups(), 5000);
+  }
+}
+
+async function loadBootstrap(reconnect = false) {
   try {
     const boot = await api.bootstrap();
     set({
@@ -861,7 +954,7 @@ async function loadBootstrap() {
           onEvent: applyEvent,
           onReconnect: () => {
             set({ offline: null });
-            void loadBootstrap();
+            void loadBootstrap(true);
           },
           onDown: (reason) => set({ offline: reason }),
         },
@@ -873,7 +966,16 @@ async function loadBootstrap() {
       state.sel && boot.assistants.some((a) => a.id === state.sel)
         ? state.sel
         : (boot.assistants.find((a) => a.primary)?.id ?? boot.assistants[0]?.id ?? null);
-    if (sel) await select(sel, mobileWantsChat());
+    await loadGroups();
+    // 实时连接断了又连上：只补拉正看着的对话，不换页、不收右栏，正在打字的输入框和引用都留着
+    if (reconnect) {
+      if (state.gsel) await Promise.all([loadGroupItems(state.gsel), loadProjects(state.gsel, true)]);
+      else if (state.sel) await Promise.all([loadItems(state.sel), loadProfile(state.sel)]);
+    }
+    // 群地址代表综合时间线；手机刷新也应直接回到综合。
+    else if (state.gsel && state.groups.some((g) => g.id === state.gsel)) await selectGroup(state.gsel, true, false, Boolean(bootRoute.group));
+    // 没指定对话就停在首页
+    else if (sel && state.sel) await select(sel, mobileWantsChat());
     if (state.page === "knowledge") void loadKnowledge();
     // 刷新前开着的任务页：内容要自己拉
     const top = state.panelStack.at(-1);
@@ -887,6 +989,7 @@ async function loadBootstrap() {
 const closedLivePages = new Set<string>();
 export function applyEvent(ev: HobEvent) {
   if (ev.type === "item" || ev.type === "delta") itemEvents.get(ev.assistantId)?.push(ev);
+  if (ev.type === "group-item" || ev.type === "group-delta") groupEvents.get(ev.groupId)?.push(ev);
   switch (ev.type) {
     case "rules":
       if (state.page === "settings" && state.section === "rules") void loadRules();
@@ -906,6 +1009,8 @@ export function applyEvent(ev: HobEvent) {
       if (read) void api.markRead(ev.assistant.id).catch(() => {});
       // 设置页读的是档案里的助手：头像、名字在别处改了也跟着变
       const assistant = read ? { ...ev.assistant, unread: 0 } : ev.assistant;
+      const oldModels = state.assistants.find((a) => a.id === assistant.id)?.models;
+      if (JSON.stringify(oldModels) !== JSON.stringify(assistant.models)) refreshGroupProfiles(assistant.id);
       set((s) => ({
         assistants: upsert(s.assistants, assistant),
         profiles: s.profiles[assistant.id]
@@ -990,8 +1095,70 @@ export function applyEvent(ev: HobEvent) {
       break;
     case "skills":
       void loadAssistantSkills(ev.assistantId);
+      // 事件只带助手：群的技能（沉淀、改、删）也可能变了，已加载过的群一起重拉
+      for (const id of Object.keys(state.assistantSkills)) if (state.groups.some((group) => group.id === id)) void loadAssistantSkills(id);
+      break;
+    case "group": {
+      // 正看着这个群：新消息直接算已读，不亮未读
+      const read = ev.group.unread > 0 && viewingGroup(ev.group.id);
+      if (read) void api.markGroupRead(ev.group.id).catch(() => {});
+      const previous = state.groups.find((group) => group.id === ev.group.id);
+      set((s) => ({ groups: upsert(s.groups, read ? { ...ev.group, unread: 0 } : ev.group) }));
+      if (previous && JSON.stringify([previous.ownerId, previous.members, previous.models, previous.memberModels]) !== JSON.stringify([ev.group.ownerId, ev.group.members, ev.group.models, ev.group.memberModels])) {
+        for (const group of state.groups) if ((group.id === ev.group.id || group.parentId === ev.group.id) && state.groupProfiles[group.id]) void loadGroupProfile(group.id);
+      }
+      break;
+    }
+    case "group_removed":
+      dropGroupPrefs(ev.id);
+      set((s) => {
+        const groups = s.groups.filter((g) => g.id !== ev.id);
+        if (s.gsel !== ev.id) return { groups };
+        const primary = s.assistants.find((a) => a.primary)?.id ?? s.assistants[0]?.id ?? null;
+        return { groups, gsel: null, sel: primary ?? s.sel, mobile: "list" as const, panelStack: [] };
+      });
+      break;
+    case "group-item": {
+      const list = state.groupItems[ev.groupId];
+      if (!list) break;
+      const key = `group:${ev.groupId}`;
+      const outbox = state.pending[key] ?? [];
+      const mine = outbox.find((p) => isSentAs(p, ev.item));
+      if (!mine && !list.some((x) => x.id === ev.item.id)) markFresh([ev.item.id]);
+      set((s) => ({
+        groupItems: { ...s.groupItems, [ev.groupId]: mergeItems(list, ev.item) as GroupItem[] },
+        ...(mine ? { pending: { ...s.pending, [key]: outbox.filter((p) => p !== mine) } } : {}),
+      }));
+      break;
+    }
+    case "group-delta": {
+      const list = state.groupItems[ev.groupId];
+      if (!list) break;
+      const next = applyDelta(list, ev.itemId, ev.text) as GroupItem[];
+      if (next !== list) {
+        // 文字开始输出了：这个人的「正在想」收起来
+        const speaker = list.find((item) => item.id === ev.itemId)?.speaker;
+        set((s) => ({
+          groupItems: { ...s.groupItems, [ev.groupId]: next },
+          ...(speaker ? { groupActivity: withoutActivity(s.groupActivity, ev.groupId, speaker) } : {}),
+        }));
+      }
+      break;
+    }
+    case "group-activity":
+      set((s) => {
+        const current = { ...(s.groupActivity[ev.groupId] ?? {}) };
+        if (ev.activity) current[ev.speaker] = ev.activity;
+        else delete current[ev.speaker];
+        return { groupActivity: { ...s.groupActivity, [ev.groupId]: current } };
+      });
+      break;
+    case "project":
+      set((s) => ({ projects: { ...s.projects, [ev.project.groupId]: upsertProject(s.projects[ev.project.groupId], ev.project) } }));
       break;
     case "knowledge":
+      collectionsVersion++;
+      set((s) => ({ knowledge: { ...s.knowledge, collectionsLoaded: false } }));
       if (state.page === "knowledge") void loadKnowledge(false, true);
       break;
     case "profile":
@@ -1004,20 +1171,42 @@ function endedStatus(status: JobStatus): boolean {
   return status === "done" || status === "stuck" || status === "failed" || status === "stopped";
 }
 
+/** 去掉群里某个成员的当前活动（他说起来了，或者已经说完）。 */
+function withoutActivity(map: State["groupActivity"], groupId: string, speaker: string): State["groupActivity"] {
+  if (!map[groupId]?.[speaker]) return map;
+  const current = { ...map[groupId] };
+  delete current[speaker];
+  return { ...map, [groupId]: current };
+}
+
+/** 事项按 id 替换，新的在前面（按更新时间）。 */
+function upsertProject(list: Project[] | undefined, project: Project): Project[] {
+  return [...(list ?? []).filter((item) => item.id !== project.id), project].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
 /** 页面在前台就不推（服务端根据这个决定）。只存内存，SSE 断开会自动清掉。 */
 function reportVisibility(): void {
   void api.visibility(CLIENT_ID, document.visibilityState === "visible").catch(() => undefined);
-  // 切回来时正开着的那个助手攒下的未读算看过了
+  // 切回来时正开着的那个助手 / 群攒下的未读算看过了
   const a = state.assistants.find((x) => x.id === state.sel);
   if (a && a.unread > 0 && viewing(a.id)) {
     set((s) => ({ assistants: s.assistants.map((x) => (x.id === a.id ? { ...x, unread: 0 } : x)) }));
     void api.markRead(a.id).catch(() => {});
+  }
+  const g = state.groups.find((x) => x.id === state.gsel);
+  if (g && g.unread > 0 && viewingGroup(g.id)) {
+    set((s) => ({ groups: s.groups.map((x) => (x.id === g.id ? { ...x, unread: 0 } : x)) }));
+    void api.markGroupRead(g.id).catch(() => {});
   }
 }
 
 /** 用户正看着这个助手的对话：页面在前台、在主界面，手机上要进了对话页。 */
 function viewing(id: string): boolean {
   return state.sel === id && state.page === "main" && globalThis.document?.visibilityState === "visible" && (window.innerWidth >= 768 || state.mobile === "chat");
+}
+
+function viewingGroup(id: string): boolean {
+  return state.gsel === id && state.page === "main" && globalThis.document?.visibilityState === "visible" && (window.innerWidth >= 768 || state.mobile === "chat");
 }
 
 function watchVisibility(): void {
@@ -1027,12 +1216,181 @@ function watchVisibility(): void {
   reportVisibility();
 }
 
-/* ---------------- 数据 ---------------- */
+/* ---------------- 群 ---------------- */
+
+export function groupById(s: State, id: string | null | undefined): GroupSummary | undefined {
+  return id ? s.groups.find((g) => g.id === id) : undefined;
+}
+
+/** 正在这个群里说话的成员（有活动状态的那几个）。 */
+export function groupSpeaking(s: State, g: GroupSummary): string[] {
+  const active = s.groupActivity[g.id] ?? {};
+  return g.members.filter((id) => Boolean(active[id]));
+}
+
+/** 置顶和位置是本地状态；改完存在 localStorage 里，刷新还照旧。 */
+export function setGroupPrefs(id: string, patch: Partial<GroupPrefs>) {
+  const prefs = { ...state.groupPrefs, [id]: { ...(state.groupPrefs[id] ?? { pinned: false }), ...patch } };
+  saveGroupPrefs(prefs);
+  set({ groupPrefs: prefs });
+}
+
+function dropGroupPrefs(id: string) {
+  if (!state.groupPrefs[id]) return;
+  const prefs = { ...state.groupPrefs };
+  delete prefs[id];
+  saveGroupPrefs(prefs);
+  set({ groupPrefs: prefs });
+}
+
+/** 建群：建好直接进这个群。 */
+export async function createGroup(body: { name: string; purpose: string; ownerId: string; members: string[]; workflow?: WorkflowId | null }): Promise<string | null> {
+  try {
+    const group = await api.createGroup(body);
+    set((s) => ({ groups: upsert(s.groups, { ...group, unread: 0, busy: [] }) }));
+    await selectGroup(group.id);
+    return null;
+  } catch (e) {
+    return errText(e);
+  }
+}
+
+/** 改群（名字、负责什么、成员、群主、工作方式）；列表由 group 事件刷新。 */
+export async function patchGroup(id: string, patch: Parameters<HobApi["patchGroup"]>[1]): Promise<string | null> {
+  try {
+    await api.patchGroup(id, patch);
+    return null;
+  } catch (e) {
+    return errText(e);
+  }
+}
+
+export async function patchGroupMemberModels(groupId: string, assistantId: string, patch: Parameters<HobApi["patchGroupMemberModels"]>[2]): Promise<string | null> {
+  try {
+    const group = await api.patchGroupMemberModels(groupId, assistantId, patch);
+    set((s) => ({ groups: s.groups.map((g) => g.id === group.id || g.parentId === group.id ? { ...g, memberModels: group.memberModels } : g) }));
+    return null;
+  } catch (e) { return errText(e); }
+}
+
+/** 开一个话题：建好直接进这个话题。 */
+export async function openTopic(groupId: string, title: string): Promise<string | null> {
+  try {
+    const topic = await api.createTopic(groupId, { title });
+    set((s) => ({ groups: upsert(s.groups, { ...topic, unread: 0, busy: [] }) }));
+    await selectGroup(topic.id);
+    return null;
+  } catch (e) {
+    return errText(e);
+  }
+}
+
+/** 关闭话题：里面没结束的事项按放弃处理，服务端会给原因。 */
+export async function closeTopic(id: string, note?: string): Promise<string | null> {
+  try {
+    const topic = await api.closeTopic(id, note ? { note } : undefined);
+    set((s) => ({ groups: s.groups.map((g) => (g.id === id ? { ...g, ...topic } : g)) }));
+    return null;
+  } catch (e) {
+    return errText(e);
+  }
+}
+
+/** 重新打开关掉的话题。 */
+export async function reopenTopic(id: string): Promise<string | null> {
+  try {
+    const topic = await api.reopenTopic(id);
+    set((s) => ({ groups: s.groups.map((g) => (g.id === id ? { ...g, ...topic } : g)) }));
+    return null;
+  } catch (e) {
+    return errText(e);
+  }
+}
+
+/** 结束这个群：归档后从列表里移除，正看着它的回到主助手。 */
+export async function archiveGroup(id: string) {
+  try {
+    await api.archiveGroup(id);
+  } catch (e) {
+    set({ notice: `结束群失败：${errText(e)}` });
+  }
+}
+
+export async function stopGroup(id: string) {
+  try {
+    await api.stopGroup(id);
+  } catch (e) {
+    set({ notice: `停止失败：${errText(e)}` });
+  }
+}
+
+/** 群消息走自己的分页；发件箱按会话键分开存，群 id 和助手 id 不撞。 */
+export function pendingKeyOf(s: State): string | null {
+  return s.gsel ? `group:${s.gsel}` : s.sel;
+}
+
+/**
+ * 打开一个群或话题。桌面上左栏换成这个群的二级页（话题页进它所属的群）；
+ * 手机上点群先进话题列表，点话题才进对话。
+ */
+export async function selectGroup(id: string, nav = true, keepStack = false, forceChat = false) {
+  const previous = state.gsel ?? state.sel;
+  const group = state.groups.find((x) => x.id === id);
+  const narrow = window.innerWidth < 768;
+  const opensTopics = !forceChat && narrow && Boolean(group && !group.parentId);
+  set((s) => ({
+    gsel: id,
+    sel: null,
+    sideHome: false,
+    panelStack: selectPanelStack(s.panelStack, previous, id, keepStack),
+    ...(s.gsel !== id && !keepStack ? { worklog: null } : {}),
+    ...(nav ? { mobile: (opensTopics ? "topics" : "chat") as MobilePage, ...(!keepStack ? { sheet: false } : {}), search: false } : {}),
+    quote: null,
+  }));
+  if (group && group.unread > 0 && !opensTopics) {
+    set((s) => ({ groups: s.groups.map((x) => (x.id === id ? { ...x, unread: 0 } : x)) }));
+    void api.markGroupRead(id).catch(() => {});
+  }
+  await loadGroupItems(id);
+  void loadProjects(id, true);
+}
+
+/** 手机上从话题列表进综合：还是这个群，手机切到对话页。 */
+export async function openGroupHome(id: string) {
+  await selectGroup(id, true, false, true);
+}
+
+/** 从管理提示进入目标群综合；群列表可能尚未收到新群事件。 */
+export async function openNoteGroup(id: string) {
+  try {
+    let group = state.groups.find((entry) => entry.id === id);
+    if (!group) {
+      const groups = await api.groups();
+      set({ groups });
+      group = groups.find((entry) => entry.id === id);
+    }
+    if (!group || group.parentId) {
+      set({ notice: "目标群不可用" });
+      return;
+    }
+    await openGroupHome(id);
+  } catch (e) {
+    set({ notice: `无法打开目标群：${errText(e)}` });
+  }
+}
+
+/** 回首页：对话、右栏的页、弹层、设置和知识库一次全收起（左栏二级页的返回、设置和知识库的返回、左栏的首页键都走这里）。 */
+export function goHome() {
+  for (const page of state.panelStack) if (page.kind === "file" && page.liveId) closedLivePages.add(page.liveId);
+  set({ page: "main", sel: null, gsel: null, sideHome: true, panelStack: [], sheet: false, search: false, viewer: null, mobile: "list" });
+}
 
 export async function select(id: string, nav = true, keepStack = false) {
   set((s) => ({
     sel: id,
-    panelStack: selectPanelStack(s.panelStack, s.sel, id, keepStack),
+    gsel: null,
+    sideHome: true,
+    panelStack: selectPanelStack(s.panelStack, s.gsel ?? s.sel, id, keepStack),
     ...(s.sel !== id && !keepStack ? { worklog: null } : {}),
     ...(nav ? { mobile: "chat" as const, ...(!keepStack ? { sheet: false } : {}), search: false } : {}),
     quote: null,
@@ -1048,6 +1406,8 @@ export async function select(id: string, nav = true, keepStack = false) {
 const itemRequests = new Map<string, number>();
 const olderRequests = new Map<string, Promise<void>>();
 const itemEvents = new Map<string, HobEvent[]>();
+/** 拉时间线期间到的新条目/增量：拉完再按顺序合上，不然这一段就丢了。 */
+const groupEvents = new Map<string, HobEvent[]>();
 
 async function loadItems(id: string) {
   const request = (itemRequests.get(id) ?? 0) + 1;
@@ -1116,6 +1476,85 @@ export function loadOlderItems(id: string, retry = false): Promise<void> {
   return work;
 }
 
+const groupRequests = new Map<string, number>();
+const olderGroupRequests = new Map<string, Promise<void>>();
+
+/** 打开一个群：拉最新一页时间线，卡片要用的任务、提问一起收下来。 */
+async function loadGroupItems(id: string) {
+  const request = (groupRequests.get(id) ?? 0) + 1;
+  groupRequests.set(id, request);
+  olderGroupRequests.delete(id);
+  groupEvents.set(id, []);
+  set((s) => ({ groupPages: { ...s.groupPages, [id]: { hasMore: false, loading: false, error: null } } }));
+  try {
+    const page = await api.groupItems(id);
+    if (groupRequests.get(id) !== request) return;
+    const events = groupEvents.get(id) ?? [];
+    groupEvents.delete(id);
+    clearFresh(); // 这一批是历史，不播入场
+    set((s) => ({
+      groupItems: { ...s.groupItems, [id]: page.items },
+      groupGen: { ...s.groupGen, [id]: (s.groupGen[id] ?? 0) + 1 },
+      groupPages: { ...s.groupPages, [id]: { hasMore: page.hasMore, loading: false, error: null } },
+      jobs: { ...s.jobs, ...index(page.jobs) },
+      approvals: { ...s.approvals, ...index(page.approvals) },
+    }));
+    for (const event of events) applyEvent(event);
+  } catch (e) {
+    if (groupRequests.get(id) !== request) return;
+    groupEvents.delete(id);
+    set({ notice: `无法加载群消息：${errText(e)}` });
+  }
+}
+
+const projectRequests = new Map<string, number>();
+
+/** 拉这个群的事项（新的在前）；silent 表示后台拉，用户正在输消息时不打扰。 */
+export async function loadProjects(gid: string, silent = false): Promise<void> {
+  const request = (projectRequests.get(gid) ?? 0) + 1;
+  projectRequests.set(gid, request);
+  try {
+    const list = await api.projects(gid);
+    if (projectRequests.get(gid) !== request) return;
+    set((s) => ({ projects: { ...s.projects, [gid]: list }, projectsError: { ...s.projectsError, [gid]: null } }));
+  } catch (e) {
+    if (projectRequests.get(gid) !== request) return;
+    const message = errText(e);
+    if (silent) set((s) => ({ projectsError: { ...s.projectsError, [gid]: message } }));
+    else set({ notice: `无法加载事项：${message}` });
+  }
+}
+
+export function loadOlderGroupItems(id: string, retry = false): Promise<void> {  const existing = olderGroupRequests.get(id);
+  if (existing) return existing;
+  const paging = state.groupPages[id];
+  const before = state.groupItems[id]?.[0]?.id;
+  if (!paging?.hasMore || !before || (paging.error && !retry)) return Promise.resolve();
+  const request = groupRequests.get(id);
+  set((s) => ({ groupPages: { ...s.groupPages, [id]: { ...paging, loading: true, error: null } } }));
+  const work = (async () => {
+    try {
+      const page = await api.groupItems(id, before);
+      if (groupRequests.get(id) !== request || state.gsel !== id) return;
+      set((s) => {
+        const current = s.groupItems[id] ?? [];
+        const known = new Set(current.map((item) => item.id));
+        return {
+          groupItems: { ...s.groupItems, [id]: [...page.items.filter((item) => !known.has(item.id)), ...current] },
+          groupPages: { ...s.groupPages, [id]: { hasMore: page.hasMore, loading: false, error: null } },
+          jobs: { ...index(page.jobs), ...s.jobs },
+          approvals: { ...index(page.approvals), ...s.approvals },
+        };
+      });
+    } catch (e) {
+      if (groupRequests.get(id) === request && state.gsel === id) set((s) => ({ groupPages: { ...s.groupPages, [id]: { ...s.groupPages[id], loading: false, error: errText(e) } } }));
+    }
+  })();
+  olderGroupRequests.set(id, work);
+  void work.finally(() => { if (olderGroupRequests.get(id) === work) olderGroupRequests.delete(id); });
+  return work;
+}
+
 export async function loadProfile(id: string) {
   try {
     const p = await api.profile(id);
@@ -1146,6 +1585,11 @@ export function photoUrl(path: string): string {
   return previews.get(path) ?? api.fileUrl(path, { thumb: true });
 }
 
+/** 输入框里刚选的图：本机原图的地址，还没传完也能看。 */
+export function localImage(path: string): string | undefined {
+  return previews.get(path);
+}
+
 function patchAttachment(id: string, patch: Partial<Attachment>) {
   const fix = (list: Attachment[]) => (list.some((a) => a.id === id) ? list.map((a) => (a.id === id ? { ...a, ...patch } : a)) : list);
   set((s) => ({
@@ -1154,9 +1598,9 @@ function patchAttachment(id: string, patch: Partial<Attachment>) {
   }));
 }
 
-function startUpload(att: Attachment, assistantId: string): Promise<string> {
+function startUpload(att: Attachment, target: { assistantId?: string; groupId?: string }): Promise<string> {
   const file = uploadFiles.get(att.id)!;
-  const job = api.upload(file, assistantId).then(
+  const job = api.upload(file, target).then(
     (path) => {
       const preview = previews.get(localPath(att));
       if (preview) previews.set(path, preview);
@@ -1174,8 +1618,10 @@ function startUpload(att: Attachment, assistantId: string): Promise<string> {
   return job;
 }
 
-/** 选了文件：立刻出现在输入框里（图片用本地缩略图），后台开始传。传进当前选中的助手目录。 */
-export function attach(files: FileList | File[], assistantId: string) {
+/** 选了文件：立刻出现在输入框里（图片用本地缩略图），后台开始传。传进当前会话的目录（助手或群）。 */
+export function attach(files: FileList | File[]) {
+  const target = state.gsel ? { groupId: state.gsel } : state.sel ? { assistantId: state.sel } : null;
+  if (!target) return;
   const added: Attachment[] = Array.from(files).map((file) => {
     const att: Attachment = { id: `att-${Math.random().toString(36).slice(2, 10)}`, name: file.name, status: "uploading" };
     uploadFiles.set(att.id, file);
@@ -1183,7 +1629,7 @@ export function attach(files: FileList | File[], assistantId: string) {
     return att;
   });
   set((s) => ({ attachments: [...s.attachments, ...added] }));
-  added.forEach((att) => void startUpload(att, assistantId));
+  added.forEach((att) => void startUpload(att, target));
 }
 
 export function removeAttachment(id: string) {
@@ -1192,40 +1638,54 @@ export function removeAttachment(id: string) {
 
 /** 等这条消息的附件都传好（失败过的重传），拿到服务器路径。 */
 async function uploadedPaths(p: PendingMessage): Promise<string[]> {
-  return Promise.all(p.attachments.map((a) => uploads.get(a.id) ?? startUpload(a, p.assistantId)));
+  const target = p.group ? { groupId: p.to } : { assistantId: p.to };
+  return Promise.all(p.attachments.map((a) => uploads.get(a.id) ?? startUpload(a, target)));
 }
 
-function setPending(assistantId: string, localId: string, patch: Partial<PendingMessage> | null) {
+function setPending(key: string, localId: string, patch: Partial<PendingMessage> | null) {
   set((s) => {
-    const list = s.pending[assistantId] ?? [];
+    const list = s.pending[key] ?? [];
     const next = patch ? list.map((p) => (p.localId === localId ? { ...p, ...patch } : p)) : list.filter((p) => p.localId !== localId);
-    return { pending: { ...s.pending, [assistantId]: next } };
+    return { pending: { ...s.pending, [key]: next } };
   });
 }
 
 async function deliver(p: PendingMessage) {
-  setPending(p.assistantId, p.localId, { status: "sending", error: undefined });
+  const key = p.group ? `group:${p.to}` : p.to;
+  setPending(key, p.localId, { status: "sending", error: undefined });
   try {
     const files = await uploadedPaths(p);
-    const sent = await api.sendMessage(p.assistantId, { text: p.text, quote: p.quote, files: files.length ? files : undefined });
+    const body = { text: p.text, quote: p.quote, files: files.length ? files : undefined };
     // 服务端那条顶替待发的这条：不再播入场动画（已经在屏幕上了）
+    if (p.group) {
+      const sent = await api.sendGroupMessage(p.to, body);
+      set((s) => ({
+        pending: { ...s.pending, [key]: (s.pending[key] ?? []).filter((x) => x.localId !== p.localId) },
+        groupItems: { ...s.groupItems, [p.to]: mergeItems(s.groupItems[p.to] ?? [], sent.item) as GroupItem[] },
+      }));
+      return;
+    }
+    const sent = await api.sendMessage(p.to, body);
     set((s) => ({
-      pending: { ...s.pending, [p.assistantId]: (s.pending[p.assistantId] ?? []).filter((x) => x.localId !== p.localId) },
-      ...(sent?.item ? { items: { ...s.items, [p.assistantId]: mergeItems(s.items[p.assistantId] ?? [], sent.item) } } : {}),
+      pending: { ...s.pending, [key]: (s.pending[key] ?? []).filter((x) => x.localId !== p.localId) },
+      items: { ...s.items, [p.to]: mergeItems(s.items[p.to] ?? [], sent.item) },
     }));
   } catch (e) {
-    setPending(p.assistantId, p.localId, { status: "failed", error: errText(e) });
+    setPending(key, p.localId, { status: "failed", error: errText(e) });
   }
 }
 
 export async function send() {
+  const groupId = state.gsel;
   const id = state.sel;
   const text = state.text.trim();
   // 只发图片 / 文件不写字也行（和 Telegram 一样）
-  if (!id || (!text && !state.attachments.length)) return;
+  if ((!groupId && !id) || (!text && !state.attachments.length)) return;
+  const key = groupId ? `group:${groupId}` : id!;
   const p: PendingMessage = {
     localId: `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-    assistantId: id,
+    to: (groupId ?? id)!,
+    ...(groupId ? { group: true as const } : {}),
     at: new Date().toISOString(),
     text,
     ...(state.quote ? { quote: state.quote } : {}),
@@ -1233,18 +1693,27 @@ export async function send() {
     status: "sending",
   };
   markFresh([p.localId]);
-  set((s) => ({ text: "", quote: null, attachments: [], nonce: s.nonce + 1, pending: { ...s.pending, [id]: [...(s.pending[id] ?? []), p] } }));
+  set((s) => ({ text: "", quote: null, attachments: [], nonce: s.nonce + 1, pending: { ...s.pending, [key]: [...(s.pending[key] ?? []), p] } }));
   await deliver(p);
 }
 
-/** 点了「未送达」的重试。 */
-export function retryPending(assistantId: string, localId: string) {
-  const p = state.pending[assistantId]?.find((x) => x.localId === localId);
-  if (p) void deliver(p);
+/** 事项页底部的补充说明：发到群里并引用那张事项卡，所以轮到群主；不点成员的话就由它接。 */
+export async function sendProjectNote(groupId: string, project: Project, text: string): Promise<string | null> {
+  try {
+    const sent = await api.sendGroupMessage(groupId, { text, quote: { itemId: project.itemId, text: `事项「${project.title}」` } });
+    set((s) => ({ groupItems: { ...s.groupItems, [groupId]: mergeItems(s.groupItems[groupId] ?? [], sent.item) as GroupItem[] } }));
+    return null;
+  } catch (e) {
+    return errText(e);
+  }
 }
 
-export function discardPending(assistantId: string, localId: string) {
-  setPending(assistantId, localId, null);
+/** 点了「未送达」的重试。 */export function retryPending(p: PendingMessage) {
+  void deliver(p);
+}
+
+export function discardPending(p: PendingMessage) {
+  setPending(p.group ? `group:${p.to}` : p.to, p.localId, null);
 }
 
 /** 对话里要画的条目：服务端的列表 + 还没顶替掉的待发消息。 */
@@ -1255,8 +1724,16 @@ export function chatItems(s: State, assistantId: string | null): Item[] {
   return pending.length ? [...items, ...pending.map(pendingItem)] : items;
 }
 
-export function pendingOf(s: State, assistantId: string | null, localId: string): PendingMessage | undefined {
-  return assistantId ? s.pending[assistantId]?.find((p) => p.localId === localId) : undefined;
+/** 群里的条目同理；发言人是你自己。 */
+export function groupChatItems(s: State, groupId: string | null): GroupItem[] {
+  if (!groupId) return [];
+  const pending = s.pending[`group:${groupId}`] ?? [];
+  const items = s.groupItems[groupId] ?? [];
+  return pending.length ? [...items, ...pending.map((p) => ({ ...pendingItem(p), speaker: "user" }) as GroupItem)] : items;
+}
+
+export function pendingOf(s: State, key: string | null, localId: string): PendingMessage | undefined {
+  return key ? s.pending[key]?.find((p) => p.localId === localId) : undefined;
 }
 
 export async function stopAssistant(id: string) {
@@ -1271,22 +1748,28 @@ export async function stopAssistant(id: string) {
 
 export async function answer(approvalId: string, answer: AnswerApprovalBody) {
   const ap = state.approvals[approvalId];
-  if (!ap) return;
-  // 点下去就先亮起来：选了选项报选项，自己写的报那段话
+  if (!ap) return false;
+  // 点下去就先亮起来：选了选项报选项，自己写的报那段话；多问题卡按题显示答案
   set((s) => ({
     approvals: {
       ...s.approvals,
       [approvalId]: {
         ...ap,
         status: "answered",
-        ...(answer.key ? { chosen: answer.key } : { answerText: (answer.text ?? "").trim() }),
+        ...(answer.answers
+          ? { answers: answer.answers, ...(answer.text?.trim() ? { answerText: answer.text.trim() } : {}) }
+          : answer.key
+            ? { chosen: answer.key }
+            : { answerText: (answer.text ?? "").trim() }),
       },
     },
   }));
   try {
     await api.answerApproval(approvalId, answer);
+    return true;
   } catch (e) {
     set({ approvals: { ...state.approvals, [approvalId]: ap }, notice: `提交失败：${errText(e)}` });
+    return false;
   }
 }
 
@@ -1369,12 +1852,24 @@ export async function stopJob(jobId: string) {
   }
 }
 
+const groupProfileRequests = new Map<string, number>();
+function refreshGroupProfiles(assistantId?: string) {
+  for (const group of state.groups) if (state.groupProfiles[group.id] && (!assistantId || group.members.includes(assistantId))) void loadGroupProfile(group.id);
+}
+
+export async function loadGroupProfile(id: string) {
+  const request = (groupProfileRequests.get(id) ?? 0) + 1;
+  groupProfileRequests.set(id, request);
+  try { const value = await api.groupProfile(id); if (groupProfileRequests.get(id) === request) set((s) => ({ groupProfiles: { ...s.groupProfiles, [id]: { value } } })); }
+  catch (e) { if (groupProfileRequests.get(id) === request) set((s) => ({ groupProfiles: { ...s.groupProfiles, [id]: { error: errText(e) } } })); }
+}
+
 const skillLoads: Record<string, number> = {};
 export async function loadAssistantSkills(id: string) {
   const generation = skillLoads[id] = (skillLoads[id] ?? 0) + 1;
   set((s) => ({ assistantSkills: { ...s.assistantSkills, [id]: { skills: s.assistantSkills[id]?.skills ?? [], loaded: s.assistantSkills[id]?.loaded ?? false, loading: true, error: null } } }));
   try {
-    const skills = await api.assistantSkills(id);
+    const skills = state.groups.some((group) => group.id === id) ? await api.groupSkills(id) : await api.assistantSkills(id);
     if (skillLoads[id] === generation) set((s) => ({ assistantSkills: { ...s.assistantSkills, [id]: { skills, loaded: true, loading: false, error: null } } }));
   } catch (e) {
     if (skillLoads[id] === generation) set((s) => ({ assistantSkills: { ...s.assistantSkills, [id]: { skills: s.assistantSkills[id]?.skills ?? [], loaded: s.assistantSkills[id]?.loaded ?? false, loading: false, error: errText(e) } } }));
@@ -1383,9 +1878,10 @@ export async function loadAssistantSkills(id: string) {
 
 export async function changeAssistantSkill(id: string, name: string, action: "enable" | "disable" | "rollback" | "delete") {
   try {
-    if (action === "rollback") await api.rollbackAssistantSkill(id, name);
-    else if (action === "delete") await api.deleteAssistantSkill(id, name);
-    else await api.patchAssistantSkill(id, name, action === "enable");
+    const group = state.groups.some((item) => item.id === id);
+    if (action === "rollback") await (group ? api.rollbackGroupSkill(id, name) : api.rollbackAssistantSkill(id, name));
+    else if (action === "delete") await (group ? api.deleteGroupSkill(id, name) : api.deleteAssistantSkill(id, name));
+    else await (group ? api.patchGroupSkill(id, name, action === "enable") : api.patchAssistantSkill(id, name, action === "enable"));
     await loadAssistantSkills(id);
   } catch (e) { set({ notice: `操作失败：${errText(e)}` }); }
 }
@@ -1413,16 +1909,12 @@ export async function saveRoutine(id: string, patch: Omit<Partial<Routine>, "ski
 }
 
 export async function createRoutine(body: Omit<Routine, "id" | "createdAt" | "runs">) {
-  const before = new Set(state.routines.map((r) => r.id));
-  let created: Routine | undefined;
   try {
-    created = await api.createRoutine(body);
+    const { routine } = await api.createRoutine(body);
+    set((s) => ({ routines: upsert(s.routines, routine), panelStack: replacePage(s.panelStack, { kind: "routine", id: routine.id }) }));
   } catch (e) {
     set({ notice: `创建失败：${errText(e)}` });
-    return;
   }
-  const added = created?.id ? created : state.routines.find((r) => !before.has(r.id));
-  if (added) set((s) => ({ panelStack: replacePage(s.panelStack, { kind: "routine", id: added.id }) }));
 }
 
 export async function deleteRoutine(id: string) {
@@ -1461,6 +1953,7 @@ export async function patchAssistant(id: string, patch: Partial<Assistant>) {
   }));
   try {
     await api.patchAssistant(id, patch);
+    if (patch.models) refreshGroupProfiles(id);
     return null;
   } catch (e) {
     const message = `保存失败：${errText(e)}`;
@@ -1473,13 +1966,40 @@ export async function patchAssistant(id: string, patch: Partial<Assistant>) {
   }
 }
 
+/** 把会话行拖进置顶区：助手写档案，群记在本地。 */
+export async function pinConversation(id: string): Promise<string | null> {
+  if (state.groups.some((g) => g.id === id)) {
+    setGroupPrefs(id, { pinned: true });
+    return null;
+  }
+  const a = state.assistants.find((x) => x.id === id);
+  if (!a) return null;
+  return patchAssistant(id, a.hidden ? { pinned: true, hidden: false } : { pinned: true });
+}
+
 /**
- * 置顶头像换了先后：按新先后把位置写成 0、1、2…（下标）存进各助手的档案。
- * 只发变了的几条；有任何一条没存上，把整套先后退回并提示。
+ * 会话列表（置顶区和日常行）换了先后：按新先后把位置写成 0、1、2…。
+ * 助手记在档案的 pinOrder 里，群记在本地（Group 契约里没有这个字段）；两边的数字用同一条数轴，
+ * 群和助手才能混在一起排。只发变了的几条；保存失败的助手恢复原先顺序并提示。
  */
 export async function savePinOrder(ids: string[]): Promise<string | null> {
+  const isGroup = (id: string) => state.groups.some((g) => g.id === id);
+  const prefs = { ...state.groupPrefs };
+  let groupsChanged = false;
+  for (const [index, id] of ids.entries()) {
+    if (!isGroup(id)) continue;
+    const current = prefs[id] ?? { pinned: false };
+    if (current.pinOrder === index) continue;
+    prefs[id] = { ...current, pinOrder: index };
+    groupsChanged = true;
+  }
+  if (groupsChanged) {
+    saveGroupPrefs(prefs);
+    set({ groupPrefs: prefs });
+  }
   const changed = ids
-    .map((id, index) => ({ id, pinOrder: index }))
+    .map((id, pinOrder) => ({ id, pinOrder }))
+    .filter(({ id }) => !isGroup(id))
     .filter(({ id, pinOrder }) => state.assistants.find((a) => a.id === id)?.pinOrder !== pinOrder);
   if (!changed.length) return null;
   const before = state.assistants;
@@ -1489,17 +2009,23 @@ export async function savePinOrder(ids: string[]): Promise<string | null> {
       return index < 0 ? a : { ...a, pinOrder: index };
     }),
   }));
-  try {
-    await Promise.all(changed.map(({ id, pinOrder }) => api.patchAssistant(id, { pinOrder })));
-    return null;
-  } catch (e) {
-    const message = `保存失败：${errText(e)}`;
-    set({ assistants: before, notice: message });
-    return message;
-  }
+  const results = await Promise.allSettled(changed.map(({ id, pinOrder }) => api.patchAssistant(id, { pinOrder })));
+  const failed = changed.filter((_, index) => results[index]?.status === "rejected");
+  if (!failed.length) return null;
+  const first = results.find((result) => result.status === "rejected");
+  const message = `保存失败：${errText(first?.status === "rejected" ? first.reason : "未知错误")}`;
+  set((s) => ({
+    assistants: s.assistants.map((a) => failed.some((entry) => entry.id === a.id) ? before.find((old) => old.id === a.id) ?? a : a),
+    notice: message,
+  }));
+  return message;
 }
 
 export async function addRule(assistantId: string, text: string, mode: "ask" | "allow"): Promise<string | null> {
+  if (state.groups.some((group) => group.id === assistantId)) {
+    try { await api.patchGroup(assistantId, { rule: { text, mode } }); await loadGroupProfile(assistantId); return null; }
+    catch (e) { return `保存失败：${errText(e)}`; }
+  }
   try {
     const result = await api.patchAssistant(assistantId, { rule: { text, mode } });
     if (!result?.rule) throw new Error("保存响应缺少规则。");
@@ -1516,6 +2042,10 @@ export async function addRule(assistantId: string, text: string, mode: "ask" | "
 }
 
 export async function updateRule(assistantId: string, rule: { id: string; text?: string; mode?: "ask" | "allow" }): Promise<string | null> {
+  if (state.groups.some((group) => group.id === assistantId)) {
+    try { await api.patchGroup(assistantId, { rule }); await loadGroupProfile(assistantId); return null; }
+    catch (e) { return `保存失败：${errText(e)}`; }
+  }
   try {
     await api.patchAssistant(assistantId, { rule });
     set((s) => {
@@ -1530,6 +2060,11 @@ export async function updateRule(assistantId: string, rule: { id: string; text?:
 }
 
 export async function deleteRule(assistantId: string, ruleId: string) {
+  if (state.groups.some((group) => group.id === assistantId)) {
+    try { await api.deleteGroupRule(assistantId, ruleId); await loadGroupProfile(assistantId); }
+    catch (e) { set({ notice: `删除失败：${errText(e)}` }); }
+    return;
+  }
   const p = state.profiles[assistantId];
   if (!p) return;
   set((s) => ({
@@ -1559,8 +2094,9 @@ export async function loadTranscript(jobId: string) {
   }
 }
 
-export function openJob(id: string, round?: number) {
-  set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "job", id, round }) }));
+/** instant：和换对话一起打开，跟着对话直接出现，不再滑入 */
+export function openJob(id: string, round?: number, instant = false) {
+  set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "job", id, round, ...(instant ? { instant } : {}) }) }));
   void loadTranscript(id);
 }
 
@@ -1581,7 +2117,10 @@ export function closePanelPages() {
   set({ panelStack: [] });
 }
 
+let worklogRequest = 0;
+
 export async function loadWorklog(filter: { assistantId?: string | null; status?: JobStatus | null } = {}) {
+  const request = ++worklogRequest;
   const assistantId = filter.assistantId ?? null;
   const status = filter.status ?? null;
   set({ worklog: { jobs: [], assistantId, status, hasMore: false, loading: true } });
@@ -1591,9 +2130,9 @@ export async function loadWorklog(filter: { assistantId?: string | null; status?
       ...(status ? { status } : {}),
       limit: 30,
     });
-    applyJobsPage(page, assistantId, status);
+    if (request === worklogRequest) applyJobsPage(page, assistantId, status);
   } catch (e) {
-    set({ worklog: null, notice: `无法加载任务记录：${errText(e)}` });
+    if (request === worklogRequest) set({ worklog: null, notice: `无法加载任务记录：${errText(e)}` });
   }
 }
 
@@ -1601,6 +2140,7 @@ export async function loadWorklog(filter: { assistantId?: string | null; status?
 export async function moreWorklog() {
   const log = state.worklog;
   if (!log || !log.hasMore || log.loading) return;
+  const request = worklogRequest;
   const last = log.jobs[log.jobs.length - 1];
   set({ worklog: { ...log, loading: true } });
   try {
@@ -1610,9 +2150,9 @@ export async function moreWorklog() {
       ...(last ? { before: last.id } : {}),
       limit: 30,
     });
-    applyJobsPage(page, log.assistantId, log.status);
+    if (request === worklogRequest) applyJobsPage(page, log.assistantId, log.status);
   } catch (e) {
-    set((s) => ({ worklog: s.worklog ? { ...s.worklog, loading: false } : null, notice: `无法加载更多：${errText(e)}` }));
+    if (request === worklogRequest) set((s) => ({ worklog: s.worklog ? { ...s.worklog, loading: false } : null, notice: `无法加载更多：${errText(e)}` }));
   }
 }
 
@@ -1640,12 +2180,14 @@ export function newAssistant() {
   set({ text: "我想创建一个专属助手，负责：", nonce: state.nonce + 1, mobile: "chat", sheet: false });
 }
 
-/** 从定时任务运行记录跳到对话里那条任务卡片；找不到就什么都不做。 */
+/** 从定时运行记录打开任务所在对话及详情。 */
 export async function jumpToJob(assistantId: string, jobId: string) {
-  if (state.sel !== assistantId || !state.items[assistantId]) await select(assistantId);
-  requestAnimationFrame(() => {
-    document.getElementById(`job-${jobId}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
-  });
+  if (!state.jobs[jobId]) await loadTranscript(jobId);
+  const job = state.jobs[jobId];
+  if (!job) return;
+  if (job.groupId && state.groups.some((group) => group.id === job.groupId)) await selectGroup(job.groupId, true, true, true);
+  else if (state.assistants.some((assistant) => assistant.id === assistantId)) await select(assistantId, true, true);
+  openJob(jobId);
 }
 
 export function openRoutine(id: string) {
@@ -1653,15 +2195,54 @@ export function openRoutine(id: string) {
 }
 
 export function openNewRoutine() {
-  set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "newRoutine" }) }));
+  const page = state.panelStack.at(-1);
+  const groupId = page?.kind === "routines" ? page.groupId : undefined;
+  set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "newRoutine", groupId }) }));
+}
+
+/** 打开一个事项页（群信息、事项卡都走它）。 */
+export function openProject(groupId: string, id: string) {
+  set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "project", groupId, id }) }));
+  if (!state.projects[groupId]) void loadProjects(groupId, true);
+}
+
+/** 用户点了拆分卡片或事项页的「开始执行」：和 start_subtasks 走同一段。 */
+export async function startProject(project: Pick<Project, "groupId" | "id">): Promise<string | null> {
+  try {
+    const saved = await api.startProject(project.groupId, project.id);
+    set((s) => ({ projects: { ...s.projects, [project.groupId]: upsertProject(s.projects[project.groupId], saved) } }));
+    return null;
+  } catch (e) {
+    return errText(e);
+  }
+}
+
+/** 用户的子任务：按钮点了等服务器回来再改（不先改界面）。 */
+export async function doneSubtask(project: Project, n: number): Promise<string | null> {
+  try {
+    const saved = await api.doneSubtask(project.groupId, project.id, n);
+    set((s) => ({ projects: { ...s.projects, [project.groupId]: upsertProject(s.projects[project.groupId], saved) } }));
+    return null;
+  } catch (e) {
+    return errText(e);
+  }
+}
+
+/** 群信息里点成员：右栏推进这个助手的信息页（返回回到群信息），群聊不动。 */export function openMemberPanel(id: string) {
+  set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "member", id }) }));
+  void loadProfile(id);
+}
+
+export function openGroupSettings(id: string) {
+  set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "groupSettings", id }) }));
 }
 
 export function openAssistantPanel() {
   set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "assistant" }) }));
 }
 
-export function openSidebarPage(kind: "routines" | "skills" | "knowledge" | "rules") {
-  set((s) => ({ panelStack: pushPage(s.panelStack, { kind }) }));
+export function openSidebarPage(kind: "routines" | "skills" | "knowledge" | "rules", groupId?: string) {
+  set((s) => ({ panelStack: pushPage(s.panelStack, { kind, groupId }) }));
 }
 
 async function loadSidebarPage(kind: "sidebarJobs" | "sidebarFiles", assistantId: string, more: boolean) {
@@ -1671,9 +2252,11 @@ async function loadSidebarPage(kind: "sidebarJobs" | "sidebarFiles", assistantId
   set((s) => ({ [kind]: { ...s[kind], [assistantId]: { ...previous, loading: true, loadingMore: more, error: null } } }));
   try {
     const before = more ? previous.cursor : undefined;
+    const isGroup = state.groups.some((group) => group.id === assistantId);
+    const scope = isGroup ? { groupId: assistantId } : { assistantId, groupId: "none" };
     const page = kind === "sidebarJobs"
-      ? await api.jobs({ assistantId, before, limit: 20 }).then((p) => ({ items: p.jobs, hasMore: p.hasMore }))
-      : await api.knowledge({ origin: "output", assistantId, before, limit: 30 }).then((p) => ({ items: p.entries, hasMore: p.hasMore }));
+      ? await api.jobs({ ...scope, before, limit: 20 }).then((p) => ({ items: p.jobs, hasMore: p.hasMore }))
+      : await api.knowledge({ origin: "output", ...scope, before, limit: 30 }).then((p) => ({ items: p.entries, hasMore: p.hasMore }));
     const combined = more ? [...previous.items, ...page.items] : [...page.items, ...previous.items];
     const seen = new Set<string>();
     const items = combined.filter((item) => !seen.has(item.id) && !!seen.add(item.id));
@@ -1689,12 +2272,22 @@ async function loadSidebarPage(kind: "sidebarJobs" | "sidebarFiles", assistantId
 export function loadSidebarJobs(assistantId: string, more = false) { return loadSidebarPage("sidebarJobs", assistantId, more); }
 export function loadSidebarFiles(assistantId: string, more = false) { return loadSidebarPage("sidebarFiles", assistantId, more); }
 
-let sidebarCollectionsLoaded = false;
-export async function loadSidebarCollections() {
-  if (sidebarCollectionsLoaded) return;
-  const page = await api.knowledge({ limit: 1 });
-  sidebarCollectionsLoaded = true;
-  set((s) => ({ knowledge: { ...s.knowledge, collections: page.collections, collectionsLoaded: true } }));
+let collectionsVersion = 0;
+let collectionsRequest: Promise<void> | undefined;
+export async function loadSidebarCollections(): Promise<void> {
+  if (state.knowledge.collectionsLoaded) return;
+  if (collectionsRequest) {
+    await collectionsRequest;
+    if (!state.knowledge.collectionsLoaded) return loadSidebarCollections();
+    return;
+  }
+  const version = collectionsVersion;
+  collectionsRequest = (async () => {
+    const page = await api.knowledge({ limit: 1 });
+    if (version === collectionsVersion) set((s) => ({ knowledge: { ...s.knowledge, collections: page.collections, collectionsLoaded: true } }));
+  })();
+  try { await collectionsRequest; } finally { collectionsRequest = undefined; }
+  if (!state.knowledge.collectionsLoaded) await loadSidebarCollections();
 }
 
 /** 助手头像 / 助手行上的右键（桌面）或长按（手机）菜单。 */
@@ -1761,7 +2354,7 @@ export function openKnowledge() {
   set({ page: "knowledge", panelStack: [], sheet: false });
   void loadKnowledge();
 }
-export function closeKnowledge() { set({ page: "main", panelStack: [] }); }
+export function closeKnowledge() { goHome(); }
 export async function jumpToItem(assistantId: string, itemId: string) {
   set({ page: "main", panelStack: [] });
   await select(assistantId);
@@ -1787,7 +2380,7 @@ export function openSettings() {
 }
 
 export function closeSettings() {
-  set({ page: "main", panelStack: [] });
+  goHome();
 }
 
 /** 桌面点了左导航 / 手机点了列表里的一项。 */
@@ -1821,6 +2414,16 @@ export function setQuery(query: string) {
 
 export function setMobile(page: MobilePage) {
   set({ mobile: page, sheet: false, search: false });
+}
+
+/** 手机上从对话返回：群里的对话先回话题列表，单聊回首页。 */
+export function leaveChat() {
+  set({ mobile: state.gsel ? "topics" : "list" });
+}
+
+/** 手机上从话题列表返回首页。 */
+export function leaveTopicList() {
+  set({ mobile: "list", gsel: null, sideHome: true });
 }
 
 export function openSheet() {
@@ -1871,17 +2474,23 @@ export function loadJobFiles(jobId: string, path?: string): Promise<JobFilesView
 
 /** 打开文件预览（盖在最上层；点 esc 或背景关闭）。 */
 export function openFilePreview(path: string, title?: string, location?: { find?: string; page?: number }) {
+  // 图片（含 svg）直接全屏看，不进侧栏预览
+  if (isImagePath(path) || path.toLowerCase().endsWith(".svg")) return set({ viewer: { path, name: title ?? path.split("/").pop() ?? path } });
   set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "file", path, full: false, ...(title ? { title } : {}), ...location }) }));
+}
+
+export function closeImageViewer() {
+  set({ viewer: null });
 }
 
 export function openLivePreview(callId: string) {
   set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "file", path: "", full: false, liveId: callId }) }));
 }
 
-/** 桌面右栏和全宽之间切换。 */
+/** 桌面右栏和全宽之间切换（文件预览、任务详情）。 */
 export function togglePreviewFull() {
   set((s) => {
     const top = s.panelStack.at(-1);
-    return top?.kind === "file" ? { panelStack: replacePage(s.panelStack, { ...top, full: !top.full }) } : {};
+    return top?.kind === "file" || top?.kind === "job" ? { panelStack: replacePage(s.panelStack, { ...top, full: !top.full }) } : {};
   });
 }

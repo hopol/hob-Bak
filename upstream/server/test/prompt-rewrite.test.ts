@@ -27,28 +27,27 @@ describe("工具说明和确认选项", () => {
     } finally { hob.close(); }
   });
 
-  it("facts 非空才能建草稿，事实进入助手补充说明", async () => {
+  it("facts 非空才能建，事实进入助手补充说明", async () => {
     const hob = makeHob();
     try {
-      const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "propose_assistant")!;
+      const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "create_assistant")!;
       const input = { name: "天气", duty: "天气", dutyLong: "查天气", sprite: "page" };
       for (const facts of [undefined, [], [" ", ""]]) {
         expect(await tool.execute("p", { ...input, facts })).toMatchObject({ isError: true, content: [{ text: "facts 至少写一条：这个助手管什么、不管什么。" }] });
       }
+      expect(hob.runtime.store.drafts()).toHaveLength(0);
       await tool.execute("p", { ...input, facts: ["  负责天气  "] });
       expect(hob.runtime.store.drafts()[0].instructions).toEqual(["负责天气"]);
-      const { createFromDraft } = await import("../src/actions.ts");
-      const result = await createFromDraft(hob.runtime, hob.runtime.store.drafts()[0].id);
-      const id = (result.body as { assistant: { id: string } }).assistant.id;
-      expect(hob.runtime.store.assistant(id)?.instructions).toBe("负责天气");
+      const created = hob.runtime.store.assistants().find((item) => item.name === "天气");
+      expect(created?.instructions).toBe("负责天气");
     } finally { hob.close(); }
   });
 
-  it("草稿头像不能使用主助手火苗", async () => {
+  it("新建助手不能使用主助手火苗", async () => {
     const hob = makeHob();
     try {
-      const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "propose_assistant")!;
-      const result = await tool.execute("p", { name: "助手", duty: "工作", dutyLong: "做事", sprite: "hob" });
+      const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "create_assistant")!;
+      const result = await tool.execute("p", { name: "助手", duty: "工作", dutyLong: "做事", sprite: "hob", facts: ["做事"] });
       expect(result).toMatchObject({ isError: true, content: [{ text: "hob 火苗是主助手专用的。" }] });
       expect(hob.runtime.store.drafts()).toHaveLength(0);
     } finally { hob.close(); }

@@ -20,8 +20,8 @@ export function readSecrets(home: string): Secrets {
       if (typeof value === "string") out[key] = value;
     }
     return out;
-  } catch {
-    return {};
+  } catch (error) {
+    throw new Error(`读取 ${path} 失败：${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
 }
 

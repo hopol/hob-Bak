@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Item, Routine } from "../../shared/types.ts";
+import { saveAssistantSkill, setAssistantSkillEnabled } from "../src/assistant-skills.ts";
 import { createApp } from "../src/http.ts";
 import { buildRouterTools } from "../src/router-tools.ts";
 import { call, makeHob, text, type TestHob } from "./helpers.ts";
@@ -221,6 +222,27 @@ describe("定时任务的检查脚本", () => {
       expect(updated.checks).toMatchObject({ total: 1, hits: 0 });
       const tick = await hob.runtime.routines.runNow(routine.id);
       expect(tick.outcome).toBe("job");
+    } finally {
+      hob.close();
+    }
+  });
+
+  it("接口创建暂停的定时任务并校验启用的技能", async () => {
+    const hob = makeHob();
+    try {
+      saveAssistantSkill(hob.home, "hob", { name: "daily-check", title: "巡检", description: "日常巡检", content: "检查" });
+      const app = createApp(hob.runtime, { home: hob.home });
+      const login = await app.request("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "test" }) });
+      const cookie = login.headers.get("set-cookie")!.split(";")[0];
+      const create = (skill: string) => app.request("/api/routines", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ assistantId: "hob", name: "巡检", instruction: "检查", schedules: ["0 9 * * *"], active: false, skill }) });
+      const response = await create("daily-check");
+      expect(response.status).toBe(200);
+      const routine = ((await response.json()) as { routine: Routine }).routine;
+      expect(hob.runtime.store.routine(routine.id)).toMatchObject({ active: false, skill: "daily-check" });
+      expect(hob.runtime.routines.nextRuns(routine.id)).toEqual([]);
+      expect((await create("missing-skill")).status).toBe(400);
+      setAssistantSkillEnabled(hob.home, "hob", "daily-check", false);
+      expect((await create("daily-check")).status).toBe(400);
     } finally {
       hob.close();
     }

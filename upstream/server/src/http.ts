@@ -25,8 +25,7 @@ import type {
   UsagePricePatch,
   UsagePriceSaved,
 } from "../../shared/types.ts";
-import { parseSprite } from "../../shared/sprites.ts";
-import { answerApproval, archiveAssistant, createFromDraft, dismissDraft } from "./actions.ts";
+import { answerApproval, archiveAssistant, createFromDraft, dismissDraft, updateAssistant } from "./actions.ts";
 import { setPassword, assistantFilesDir, cacheDir } from "./config.ts";
 import { newId } from "./ids.ts";
 import { claudeStatus } from "./claude-status.ts";
@@ -39,16 +38,15 @@ import { importMcpServers, listMcpImports, mcpView, patchMcpServer, removeMcpSer
 import type { McpServerPatch, McpServerSave } from "../../shared/mcp.ts";
 import { checkImageSettings, generateImage, imageConfigured, imageKey, IMAGE_KEY_SECRET } from "./image.ts";
 import { checkEmbeddingSettings, embed, embeddingKey, embeddingModel, EMBEDDING_KEY_SECRET } from "./embedding.ts";
-import { checkAssistantModels, checkModelsPatch } from "./models.ts";
+import { groupModelPick, checkModelsPatch } from "./models.ts";
 import { saveLoreConnection, testLoreConnection } from "./memory.ts";
 import { verifyPassword } from "./password.ts";
 import type { HobRuntime } from "./runtime.ts";
 import { readSecrets, writeSecret } from "./secrets.ts";
 import { SEARCH_PROVIDERS } from "../../shared/search.ts";
 import { WebSearch } from "./search.ts";
-import { clampDuty } from "./text.ts";
 import { deleteOwnSkill, importSkills, listImportSkills, skillViews } from "./skills.ts";
-import { listAssistantSkills, rollbackAssistantSkill, setAssistantSkillEnabled } from "./assistant-skills.ts";
+import { groupSkillsDir, listAssistantSkills, listSkills, rollbackAssistantSkill, rollbackSkill, setAssistantSkillEnabled, setSkillEnabled } from "./assistant-skills.ts";
 import { deleteSkill } from "./delete-skill.ts";
 import type { SkillImportSource } from "../../shared/skills.ts";
 
@@ -689,6 +687,7 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
     return c.json(
       jobs.page({
         ...(assistantId ? { assistantId } : {}),
+        ...(c.req.query("groupId") ? { groupId: c.req.query("groupId")! } : {}),
         ...(status ? { status: status as JobStatus } : {}),
         ...(c.req.query("before") ? { before: c.req.query("before")! } : {}),
         ...(Number.isFinite(limit) ? { limit } : {}),
@@ -804,56 +803,259 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
       bus.emit({ type: "profile", assistantId: id });
       return c.json({ ok: true, rule });
     }
-    if (body.knowledge !== undefined) {
-      if (!Array.isArray(body.knowledge) || body.knowledge.some((id) => typeof id !== "string")) return c.json({ error: "知识库绑定无效。" }, 400);
-      const collections = (await runtime.knowledge.list()).collections;
-      if (body.knowledge.some((id) => !collections.some((item) => item.id === id))) return c.json({ error: "知识库不存在。" }, 400);
-    }
-    if (typeof body.sprite === "string" && body.sprite !== assistant.sprite) {
-      const parsed = parseSprite(body.sprite);
-      // custom 要有画法数据才收（画法在 prop 字段上，PATCH 不改它）；否则渲染成空手火苗，不如拒绝
-      if (!parsed || (parsed.prop === "custom" && !assistant.prop)) return c.json({ error: "头像无效。" }, 400);
-    }
-    let models;
-    let abilities;
-    try {
-      await runtime.models.get();
-      ({ models, abilities } = checkAssistantModels(
-        { ...(body.models ? { models: body.models } : {}), ...(body.abilities ? { abilities: body.abilities } : {}) },
-        runtime.settings.settings.models.roster,
-        runtime.models,
-      ));
-    } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
-    }
-    const next: Assistant = {
-      ...assistant,
-      ...(typeof body.name === "string" ? { name: body.name } : {}),
-      ...(typeof body.duty === "string" ? { duty: clampDuty(body.duty) } : {}),
-      ...(typeof body.dutyLong === "string" ? { dutyLong: body.dutyLong } : {}),
-      ...(typeof body.sprite === "string" ? { sprite: body.sprite } : {}),
-      ...(typeof body.pinned === "boolean" ? { pinned: body.pinned } : {}),
-      // 置顶区里的位置：拖动头像换位置后按 0、1、2… 存，取整且不为负
-      ...(typeof body.pinOrder === "number" && Number.isFinite(body.pinOrder) ? { pinOrder: Math.max(0, Math.round(body.pinOrder)) } : {}),
-      ...(typeof body.hidden === "boolean" ? { hidden: body.hidden } : {}),
-      ...(typeof body.notify === "boolean" ? { notify: body.notify } : {}),
-      ...(models ? { models } : {}),
-      ...(abilities ? { abilities } : {}),
-      ...(typeof body.instructions === "string" ? { instructions: body.instructions } : {}),
-      ...(body.knowledge !== undefined ? { knowledge: [...new Set(body.knowledge)] } : {}),
-    };
-    store.saveAssistant(next);
-    // 工具说明和注册取决于模型及助手能力，变化后重开会话
-    if (models || abilities) router.releaseSessions();
-    const summary = router.summary(next);
-    bus.emit({ type: "assistant", assistant: summary });
-    return c.json({ assistant: summary });
+    const result = await updateAssistant(runtime, id, body);
+    return c.json(result.body as Record<string, unknown>, result.status as 200);
   });
 
   // 归档助手：档案、对话、规则和定时进归档，助手从列表移除
   app.post("/api/assistants/:id/archive", async (c) => {
     const result = await archiveAssistant(runtime, c.req.param("id"));
     return c.json(result.body as Record<string, unknown>, result.status as 200);
+  });
+
+  app.get("/api/groups/:id/skills", (c) => {
+    const group = store.group(c.req.param("id"));
+    if (!group) return c.json({ error: "群不存在" }, 404);
+    try { return c.json(listSkills(groupSkillsDir(options.home, group.parentId ?? group.id))); }
+    catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
+  });
+  app.patch("/api/groups/:id/skills/:name", async (c) => {
+    const group = store.group(c.req.param("id"));
+    if (!group) return c.json({ error: "群不存在" }, 404);
+    const body = await c.req.json().catch(() => ({})) as { enabled?: unknown };
+    if (typeof body.enabled !== "boolean") return c.json({ error: "启用状态无效" }, 400);
+    try {
+      const skill = setSkillEnabled(groupSkillsDir(options.home, group.parentId ?? group.id), c.req.param("name"), body.enabled);
+      bus.emit({ type: "skills", assistantId: group.ownerId });
+      return c.json(skill);
+    } catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
+  });
+  app.post("/api/groups/:id/skills/:name/rollback", (c) => {
+    const group = store.group(c.req.param("id"));
+    if (!group) return c.json({ error: "群不存在" }, 404);
+    try {
+      const skill = rollbackSkill(groupSkillsDir(options.home, group.parentId ?? group.id), c.req.param("name"));
+      bus.emit({ type: "skills", assistantId: group.ownerId });
+      return c.json(skill);
+    } catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
+  });
+  app.delete("/api/groups/:id/skills/:name", (c) => {
+    const group = store.group(c.req.param("id"));
+    if (!group) return c.json({ error: "群不存在" }, 404);
+    try {
+      const name = c.req.param("name");
+      if (!listSkills(groupSkillsDir(options.home, group.parentId ?? group.id)).some((skill) => skill.name === name)) throw new Error("技能不存在");
+      deleteSkill(runtime, group.ownerId, name, undefined, group.id, true);
+      return c.json({ ok: true });
+    } catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
+  });
+
+  // ---------- 群 ----------
+  app.get("/api/groups", (c) => c.json(runtime.groups.list()));
+
+  app.post("/api/groups", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    try {
+      return c.json(runtime.groups.create(body), 201);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  app.get("/api/groups/:id/profile", async (c) => {
+    const selected = store.group(c.req.param("id"));
+    if (!selected) return c.json({ error: "群不存在" }, 404);
+    const group = selected.parentId ? store.group(selected.parentId)! : selected;
+    await runtime.models.get();
+    const memberModels = Object.fromEntries(group.members.flatMap((id) => {
+      const assistant = store.assistant(id);
+      if (!assistant) return [];
+      const settings = runtime.settings.settings.models;
+      return [[id, { conversation: groupModelPick(assistant, group, runtime.models, settings, "conversation"), work: groupModelPick(assistant, group, runtime.models, settings, "work") }]];
+    }));
+    return c.json({ group, rules: store.groupRules(group.id), memberModels });
+  });
+
+  app.delete("/api/groups/:id/rules/:rid", (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    const rules = store.groupRules(id);
+    const kept = rules.filter((rule) => rule.id !== c.req.param("rid"));
+    if (kept.length === rules.length) return c.json({ error: "规则不存在。" }, 404);
+    store.saveGroupRules(id, kept);
+    return c.json({ ok: true });
+  });
+
+  app.patch("/api/groups/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    if (body.rule !== undefined) {
+      const edit = body.rule as { id?: unknown; text?: unknown; mode?: unknown };
+      if (!edit || typeof edit !== "object" || (edit.id !== undefined && (typeof edit.id !== "string" || !edit.id))) return c.json({ error: "规则无效。" }, 400);
+      if ((edit.id === undefined || edit.text !== undefined) && (typeof edit.text !== "string" || !edit.text.trim() || edit.text.trim().length > 1000)) return c.json({ error: "规则内容不能为空或超过 1000 字。" }, 400);
+      if ((edit.id === undefined || edit.mode !== undefined) && edit.mode !== "ask" && edit.mode !== "allow") return c.json({ error: "规则模式无效。" }, 400);
+      const rules = store.groupRules(id);
+      const existing = edit.id === undefined ? undefined : rules.find((item) => item.id === edit.id);
+      if (edit.id !== undefined && !existing) return c.json({ error: "规则不存在。" }, 404);
+      const text = typeof edit.text === "string" ? edit.text.trim() : existing!.text;
+      if (rules.some((item) => item.id !== edit.id && item.text === text)) return c.json({ error: "规则内容已存在。" }, 400);
+      const mode = edit.mode === "ask" || edit.mode === "allow" ? edit.mode : existing!.mode;
+      const rule = { id: existing?.id ?? newId("r-"), text, mode, changedAt: new Date().toISOString() };
+      if (existing) Object.assign(existing, rule);
+      else rules.push(rule);
+      store.saveGroupRules(id, rules);
+      return c.json({ ok: true, rule });
+    }
+    try {
+      if (body.models !== undefined) {
+        const { models, ...rest } = body;
+        await runtime.groups.updateModels(id, models);
+        if (Object.keys(rest).length) return c.json(runtime.groups.update(id, rest));
+        return c.json(store.group(id));
+      }
+      return c.json(runtime.groups.update(id, body));
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  app.patch("/api/groups/:id/members/:assistantId/models", async (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    try {
+      return c.json(await runtime.groups.updateMemberModels(id, c.req.param("assistantId"), body));
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  app.post("/api/groups/:id/archive", async (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    try {
+      await runtime.groups.archive(id);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+    return c.json({ ok: true });
+  });
+
+  // 用户开一个话题：话题是挂在群下面的群，综合里落一张话题卡
+  app.post("/api/groups/:id/topics", async (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as { title?: unknown };
+    try {
+      return c.json(runtime.groups.createTopic(id, body.title, "user"), 201);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  // 用户关闭话题：没结束的事项按放弃处理；正在跑的回合和任务不停
+  app.post("/api/groups/:id/close", async (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as { note?: unknown };
+    try {
+      return c.json(runtime.groups.closeByUser(id, body.note));
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  app.post("/api/groups/:id/reopen", (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    try {
+      return c.json(runtime.groups.reopen(id));
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  app.get("/api/groups/:id/items", (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    const limit = Number(c.req.query("limit") ?? 50);
+    const before = c.req.query("before") ?? undefined;
+    return c.json(runtime.groups.items(id, { ...(before ? { before } : {}), limit }));
+  });
+
+  app.post("/api/groups/:id/messages", async (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as { text?: unknown; quote?: unknown; files?: unknown };
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    const files = Array.isArray(body.files) ? body.files.filter((path): path is string => typeof path === "string" && !!path) : [];
+    if (!text && !files.length) return c.json({ error: "消息内容为空" }, 400);
+    const quote = body.quote as { itemId?: unknown; text?: unknown } | undefined;
+    if (quote !== undefined && (typeof quote?.itemId !== "string" || typeof quote?.text !== "string")) return c.json({ error: "引用的消息无效：要 itemId 和 text" }, 400);
+    try {
+      const item = await runtime.groups.send(id, {
+        text,
+        ...(quote ? { quote: { itemId: quote.itemId as string, text: quote.text as string } } : {}),
+        ...(files.length ? { files } : {}),
+      });
+      return c.json({ item }, 202);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  // 事项：这个群的全部事项（新的在前）和单个事项
+  app.get("/api/groups/:id/projects", (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    return c.json(runtime.projects.list(id));
+  });
+
+  app.get("/api/groups/:id/projects/:pid", (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    const project = runtime.projects.get(id, c.req.param("pid"));
+    if (!project) return c.json({ error: "事项不存在" }, 404);
+    return c.json(project);
+  });
+
+  // 用户点「开始执行」：和 start_subtasks 走同一段
+  app.post("/api/groups/:id/projects/:pid/start", (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    try {
+      return c.json(runtime.projects.start(id, c.req.param("pid")));
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  // 用户点了自己那个子任务的「已完成」
+  app.post("/api/groups/:id/projects/:pid/subtasks/:n/done", (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    const n = Number(c.req.param("n"));
+    if (!Number.isInteger(n) || n < 1) return c.json({ error: "子任务序号要是从 1 开始的整数" }, 400);
+    try {
+      return c.json(runtime.projects.done(id, c.req.param("pid"), n));
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
+  app.post("/api/groups/:id/read", (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    runtime.groups.read(id);
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/groups/:id/stop", async (c) => {
+    const id = c.req.param("id");
+    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
+    await runtime.groups.stop(id);
+    return c.json({ ok: true });
   });
 
   app.delete("/api/assistants/:id/rules/:rid", (c) => {
@@ -877,10 +1079,12 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
 
   app.post("/api/approvals/:id", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as AnswerApprovalBody;
-    if (body.key === undefined && body.text === undefined) return c.json({ error: "缺答案：key 或 text 二选一" }, 400);
+    // 多问题卡只带 answers（没写补充说明）也算答了
+    if (body.key === undefined && body.text === undefined && !body.answers?.length) return c.json({ error: "缺答案：key、text、answers 至少给一个" }, 400);
     const result = await answerApproval(runtime, c.req.param("id"), {
       ...(body.key !== undefined ? { key: body.key } : {}),
       ...(body.text !== undefined ? { text: body.text } : {}),
+      ...(body.answers?.length ? { answers: body.answers } : {}),
     });
     return c.json(result.body as Record<string, unknown>, result.status as 200);
   });
@@ -898,21 +1102,27 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
   app.post("/api/routines", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as {
       assistantId?: string;
+      groupId?: string;
+      skill?: string;
+      active?: boolean;
       name?: string;
       instruction?: string;
       schedules?: string[];
       check?: RoutineCheck;
       once?: boolean;
     };
-    if (!body.assistantId || !body.name || !body.instruction || !body.schedules?.length) {
+    if ((!body.assistantId && !body.groupId) || !body.name || !body.instruction || !body.schedules?.length) {
       return c.json({ error: "缺字段：assistantId、name、instruction、schedules" }, 400);
     }
     try {
       const routine = routines.create({
-        assistantId: body.assistantId,
+        assistantId: body.assistantId ?? "",
+        ...(body.groupId ? { groupId: body.groupId } : {}),
         name: body.name,
         instruction: body.instruction,
         schedules: body.schedules,
+        ...(body.active !== undefined ? { active: body.active } : {}),
+        ...(body.skill !== undefined ? { skill: body.skill } : {}),
         ...(body.check ? { check: body.check } : {}),
         ...(body.once ? { once: true } : {}),
       });
@@ -924,6 +1134,8 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
 
   app.patch("/api/routines/:id", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as {
+      assistantId?: string;
+      groupId?: string;
       name?: string;
       instruction?: string;
       schedules?: string[];
@@ -962,7 +1174,7 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
   app.post("/api/jobs/:id/sediment", (c) => {
     const id = c.req.param("id");
     if (!store.job(id)) return c.json({ error: "任务不存在" }, 404);
-    try { jobs.startSediment(id); return c.json({ ok: true }); }
+    try { jobs.startSediment(id, { manual: true }); return c.json({ ok: true }); }
     catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
   });
 
@@ -984,7 +1196,7 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
 
   app.get("/api/knowledge", async (c) => {
     const limit = Number(c.req.query("limit"));
-    return c.json(await runtime.knowledge.list({ origin: c.req.query("origin"), collection: c.req.query("collection"), kind: c.req.query("kind"), assistantId: c.req.query("assistantId"), q: c.req.query("q"), before: c.req.query("before"), ...(Number.isFinite(limit) && limit > 0 ? { limit: Math.floor(limit) } : {}) }));
+    return c.json(await runtime.knowledge.list({ origin: c.req.query("origin"), collection: c.req.query("collection"), kind: c.req.query("kind"), assistantId: c.req.query("assistantId"), groupId: c.req.query("groupId"), q: c.req.query("q"), before: c.req.query("before"), ...(Number.isFinite(limit) && limit > 0 ? { limit: Math.floor(limit) } : {}) }));
   });
 
   app.post("/api/knowledge/collections", async (c) => {
@@ -1062,11 +1274,18 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
   });
 
   app.post("/api/uploads", async (c) => {
+    const groupId = (c.req.query("groupId") ?? "").trim();
     const assistantId = (c.req.query("assistantId") ?? "").trim();
-    if (!assistantId) return c.json({ error: "缺少 assistantId：上传的文件要放在某个助手的目录下" }, 400);
-    if (!store.assistant(assistantId)) return c.json({ error: `助手不存在：${assistantId}` }, 404);
+    let uploads: string;
+    if (groupId) {
+      if (!store.group(groupId)) return c.json({ error: `群不存在：${groupId}` }, 404);
+      uploads = store.groupFiles(groupId, "uploads");
+    } else {
+      if (!assistantId) return c.json({ error: "缺少 assistantId 或 groupId：上传的文件要放在某个助手或群的目录下" }, 400);
+      if (!store.assistant(assistantId)) return c.json({ error: `助手不存在：${assistantId}` }, 404);
+      uploads = assistantFilesDir(options.home, assistantId, "uploads");
+    }
     const body = await c.req.parseBody({ all: true });
-    const uploads = assistantFilesDir(options.home, assistantId, "uploads");
     mkdirSync(uploads, { recursive: true });
     const saved: { path: string; name: string }[] = [];
     const values = Object.values(body).flatMap((value) => (Array.isArray(value) ? value : [value]));

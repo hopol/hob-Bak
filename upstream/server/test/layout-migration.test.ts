@@ -1,4 +1,6 @@
 // v1 → v2 的目录迁移：老布局的造假 HOB_HOME + 各种坏情况（断电、空间不够、备份坏、恢复）。
+import * as fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +10,23 @@ import { isCurrentLayout, migrateHome, movesIndex, restoreHome } from "../src/la
 import { Store } from "../src/store.ts";
 
 const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+
+it("分拆旧审批时所有目标写完才删除来源", () => {
+  const home = legacyHome();
+  const source = join(home, "approvals.json");
+  const original = fs.default.renameSync;
+  let writes = 0;
+  fs.default.renameSync = ((from, to) => {
+    if (String(to).endsWith("/approvals.json") && ++writes === 2) throw new Error("注入第二个目标写入失败");
+    return original(from, to);
+  }) as typeof fs.renameSync;
+  syncBuiltinESMExports();
+  try {
+    expect(() => migrateHome(home)).toThrow("注入第二个目标写入失败");
+    expect(existsSync(source)).toBe(true);
+    expect(JSON.parse(readFileSync(source, "utf8"))).toHaveLength(3);
+  } finally { fs.default.renameSync = original; syncBuiltinESMExports(); rmSync(home, { recursive: true, force: true }); }
+});
 
 function write(path: string, data: string | Buffer, mode?: number): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -189,7 +208,7 @@ function rootEntries(home: string): string[] {
 }
 
 function expectCleanRoot(home: string): void {
-  const allowed = new Set(["layout.json", "rules.json", "system", "cache", "knowledge", "skills", "assistants", "archive"]);
+  const allowed = new Set(["layout.json", "rules.json", "system", "cache", "knowledge", "skills", "assistants", "groups", "archive"]);
   const unexpected = rootEntries(home).filter((name) => !allowed.has(name) && !name.startsWith("backup-v1-"));
   expect(unexpected).toEqual([]);
 }

@@ -59,7 +59,8 @@ describe("技能来源", () => {
       expect(loaded.map((skill) => skill.name).sort()).toEqual(["commononly", "loreonly", "own", "shared"]);
       expect(loaded.find((skill) => skill.name === "shared")?.description).toBe("Hob 优先");
       expect(opened.session.systemPrompt).toContain("loreonly");
-      expect(opened.session.getActiveToolNames()).toContain("lore_skill_list");
+      expect(opened.session.getActiveToolNames()).toContain("lore_search");
+      expect(opened.session.getActiveToolNames().some((name) => name.startsWith("lore_skill_"))).toBe(false);
       opened.session.dispose();
       const disabled = ["hob:shared", "lore:loreonly"];
       const next = await hob.runtime.pi.open({ file: join(hob.home, "session2.jsonl"), cwd: project, model: "hob-faux/faux-1", thinking: "off", memory: "lore", systemPrompt: () => "测试", tools: ["read"], customTools: [], skills: availableSkills(hob.home, join(hob.home, "user"), disabled), disabledSkills: disabled });

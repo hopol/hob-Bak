@@ -87,6 +87,7 @@ describe("Router 技能工具", () => {
       await execute(["dir-size", "another"]);
       expect(start.mock.calls[2][1].instruction).toMatch(/^按技能「统计」「检查」做（先读它们的 SKILL.md）。\n/);
       expect(start.mock.calls[2][1].skills).toEqual(["dir-size", "another"]);
+      hob.runtime.store.saveJob(base);
       const stop = vi.spyOn(hob.runtime.jobs, "stop").mockResolvedValue();
       await tools.find((item) => item.name === "stop_job")!.execute("id", { jobId: "t-1" }, undefined, undefined, {} as never);
       expect(stop).toHaveBeenCalledWith("t-1", `${hob.runtime.store.assistant("hob")!.name}叫停了`);

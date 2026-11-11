@@ -1,12 +1,13 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
+import { ImageViewerHost } from "./components/FilePreview.tsx";
 import { startHistory } from "./history.ts";
 import { registerServiceWorker } from "./pwa.ts";
 // 文件预览里的文档排版用 GitHub 的样式表；颜色在 styles.css 里换成 Hob 自己的
 import "github-markdown-css/github-markdown.css";
 import "./styles.css";
 
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(<><App /><ImageViewerHost /></>);
 
 // 手机上侧滑 / 返回键退回上一层页面
 startHistory();

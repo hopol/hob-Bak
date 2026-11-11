@@ -9,6 +9,10 @@ function setup() {
   const hob = makeHob();
   const primary = hob.runtime.store.assistant("hob")!;
   hob.runtime.store.saveAssistant({ ...primary, id: "ops", name: "服务器", primary: false });
+  vi.spyOn(hob.runtime.router, "delegationResult").mockImplementation(async (id, _delegationId, message) => {
+    await hob.runtime.router.event(id, message);
+    return true;
+  });
   return hob;
 }
 
@@ -59,6 +63,34 @@ describe("交回 Hob", () => {
 });
 
 describe("委派", () => {
+  it("交回会话不可用时保留待交回结果，恢复后只接收一次", async () => {
+    const hob = setup();
+    try {
+      vi.mocked(hob.runtime.router.delegationResult).mockRestore();
+      hob.runtime.store.saveDelegation({ ...record(), turnFinished: true, reply: "完成结果" });
+      const ensure = vi.spyOn(hob.runtime.router, "ensure").mockRejectedValueOnce(new Error("模型不可用"));
+      hob.runtime.delegations.update("dg-test");
+      await waitFor(() => ensure.mock.calls.length > 0);
+      expect(hob.runtime.store.delegation("dg-test")?.reportedAt).toBeUndefined();
+      expect(JSON.stringify(hob.runtime.store.delegations())).not.toContain("pendingResult");
+      const pending = hob.runtime.store.internalDelegation("dg-test")!.pendingResult!;
+      ensure.mockRestore();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      hob.faux.setResponses([text("收到")]);
+      hob.runtime.delegations.recover();
+      await waitFor(() => Boolean(hob.runtime.store.delegation("dg-test")?.reportedAt));
+      await hob.runtime.router.waitIdle("hob");
+      const completed = hob.runtime.store.internalDelegation("dg-test")!;
+      const { reportedAt: _reportedAt, ...unconfirmed } = completed;
+      hob.runtime.store.saveDelegation({ ...unconfirmed, pendingResult: pending });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      hob.runtime.delegations.recover();
+      await waitFor(() => Boolean(hob.runtime.store.delegation("dg-test")?.reportedAt));
+      const state = await hob.runtime.router.ensure("hob");
+      const entries = state.manager!.getEntries().filter((entry) => entry.type === "custom_message" && (entry.details as { returnedDelegationId?: string } | undefined)?.returnedDelegationId === "dg-test");
+      expect(entries).toHaveLength(1);
+    } finally { hob.close(); }
+  });
   it("转交结束发给 Hob 的汇总里没有沉淀提醒，那些任务归转交对象", () => {
     const hob = setup();
     try {
@@ -317,6 +349,7 @@ describe("委派", () => {
       expect(event.mock.calls[0][1]).toContain("共 3104 字，以下是前 3,000 字；全文：");
       expect(event.mock.calls[0][1]).toContain(hob.runtime.store.job("b")!.reportPath!);
       expect(event.mock.calls[0][1]).not.toContain("完整报告细节");
+      await waitFor(() => Boolean(hob.runtime.store.delegation("dg-test")?.reportedAt));
       expect(hob.runtime.store.delegation("dg-test")).toMatchObject({ status: "done", reportedAt: expect.any(String) });
     } finally { hob.close(); }
   });

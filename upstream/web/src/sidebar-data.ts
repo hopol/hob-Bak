@@ -1,6 +1,17 @@
 import { Cron } from "croner";
 import type { Approval, AssistantSummary, Delegation, Job, Routine } from "../../shared/types.ts";
 import type { KnowledgeEntry } from "../../shared/knowledge.ts";
+import type { AssistantSkill } from "../../shared/skills.ts";
+
+export function followingModel(source: "group" | "assistant" | "global", name: string) {
+  const label = source === "group" ? "本群" : "助手";
+  return { text: `跟随${label} · ${name}`, option: `跟随${label}（${name}）` };
+}
+
+export function routineSkills(group: AssistantSkill[], member: AssistantSkill[]) {
+  const own = group.filter((skill) => skill.enabled);
+  return [...own.map((skill) => ({ skill, group: true })), ...member.filter((skill) => skill.enabled && !own.some((item) => item.name === skill.name)).map((skill) => ({ skill, group: false }))];
+}
 
 export function nextRoutine(routines: Routine[], timezone: string, now = new Date()): { routine: Routine; at: Date } | undefined {
   let next: { routine: Routine; at: Date } | undefined;
@@ -15,20 +26,19 @@ export function nextRoutine(routines: Routine[], timezone: string, now = new Dat
 
 export function assistantStatus(assistant: Pick<AssistantSummary, "id" | "busy">, jobs: Job[], approvals: Approval[], delegations: Delegation[]) {
   const own = jobs.filter((job) => job.assistantId === assistant.id);
-  if (approvals.some((approval) => approval.status === "pending" && (approval.assistantId === assistant.id || own.some((job) => job.id === approval.jobId))) || own.some((job) => job.status === "waiting")) return "等你确认";
-  // 转交出去的活算在收到转交的那个助手头上：交出去的一方（主助手）这一轮已经说完了，等结果时是空闲的。
-  // 它自己在说话由 busy 表示，不用看 delegations 的 from。
-  if (assistant.busy || own.some((job) => job.status === "running") || delegations.some((d) => d.status === "running" && d.to === assistant.id)) return "执行中";
+  // 只有真等用户答的提问才算「等你确认」；任务提了问在等助手回（waiting），对用户来说还是在办
+  if (approvals.some((approval) => approval.status === "pending" && (approval.assistantId === assistant.id || own.some((job) => job.id === approval.jobId)))) return "等你确认";
+  // 转交出去的活算在收到转交的那个助手头上：交出去的一方这一轮已经说完了，等结果时是空闲的
+  if (assistant.busy || own.some((job) => job.status === "running" || job.status === "waiting") || delegations.some((d) => d.status === "running" && d.to === assistant.id)) return "执行中";
   if (own.some((job) => job.status === "queued")) return "排队中";
   return "空闲";
 }
 
 export function sidebarJobs(jobs: Job[], assistantId: string) {
   const own = jobs.filter((job) => job.assistantId === assistantId);
-  const active = own.filter((job) => ["running", "queued", "waiting"].includes(job.status)).sort((a, b) => (b.startedAt ?? b.createdAt).localeCompare(a.startedAt ?? a.createdAt))[0];
   const last = own.filter((job) => !["running", "queued", "waiting"].includes(job.status) && job.endedAt).sort((a, b) => b.endedAt!.localeCompare(a.endedAt!))[0];
   const running = own.filter((job) => job.status === "running").sort((a, b) => (b.startedAt ?? b.createdAt).localeCompare(a.startedAt ?? a.createdAt))[0];
-  return { active, running, last, recent: own.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 20) };
+  return { running, last };
 }
 
 export function formatNext(at: Date, timezone: string, now = new Date()): string {

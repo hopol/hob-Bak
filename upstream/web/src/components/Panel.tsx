@@ -1,14 +1,18 @@
 // 右栏：进行中的任务 + 定时任务列表 / 定时任务编辑 / 助手设置 / 应用设置。
+import { Select } from "./Select.tsx";
 import { DelayedText, Empty } from "./Empty.tsx";
+import { SaveMessage, useSaveMessage } from "./SaveMessage.tsx";
+import { DetailRow } from "./DetailRow.tsx";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useMenu } from "./Knowledge.tsx";
+import { useMenu } from "./use-menu.ts";
 import { skillUsage } from "../skill-usage.ts";
 import { commandSummary } from "../../../shared/command.ts";
-import type { ActivityLine, Assistant, CustomProp, ModelInfo, ModelsView, Routine, Rule, ThinkingLevel } from "../../../shared/types.ts";
+import type { ActivityLine, Assistant, CustomProp, GroupSummary, ModelInfo, ModelsView, Routine, Rule, ThinkingLevel, WorkflowId } from "../../../shared/types.ts";
 import { Icon } from "../icons.tsx";
-import { assistantStatus, formatNext, nextRoutine, sidebarJobs } from "../sidebar-data.ts";
+import { assistantStatus, followingModel, formatNext, nextRoutine, routineSkills, sidebarJobs } from "../sidebar-data.ts";
 import { PanelRootDetails } from "./PanelRootDetails.tsx";
+import { GroupProjects, ProjectPanel } from "./Projects.tsx";
 import { fitThinking } from "../model-list.ts";
 import { COLOR_IDS, COLORS, customSprite, parseSprite, PROP_IDS, PROPS, spriteId } from "../../../shared/sprites.ts";
 import { Avatar } from "../sprites.tsx";
@@ -16,6 +20,7 @@ import { useLeave } from "../motion.ts";
 import { useDesktopScreens } from "../desktop-screens.ts";
 import {
   addRule,
+  archiveGroup,
   backPanel,
   changeAssistantSkill,
   collapsePanel,
@@ -27,15 +32,21 @@ import {
   loadModels,
   loadKnowledge,
   loadAssistantSkills,
+  loadGroupProfile,
   openKnowledge,
   openFilePreview,
   archiveAssistant,
   openAssistantPanel,
+  openGroupSettings,
+  openMemberPanel,
   openJob,
   openJobs,
   openNewRoutine,
   openRoutine,
   patchAssistant,
+  patchGroup,
+  patchGroupMemberModels,
+  setNotice,
   updateRule,
   runRoutine,
   saveRoutine,
@@ -45,7 +56,11 @@ import {
 } from "../store.ts";
 import { cronText, fmtElapsed, fmtWhen, parseCron, routineRunUsage, scheduleCron, timePointText, WEEK, type Schedule } from "../util.ts";
 import { PanelHead } from "./PanelHead.tsx";
+import { panelAssistant } from "../panel-stack.ts";
 import { DELEGATION_STATUS, JOB_STATUS, StatusTag, jobStatusIcon } from "./status-meta.tsx";
+import { GroupCluster, membersOf } from "./Groups.tsx";
+import { PlaceJobs, TopicPanel } from "./Topics.tsx";
+import { topicsOf, WORKFLOWS, workflowInfo } from "../topics.ts";
 
 // noVNC 要顶层 await，单独分包按需加载
 const DesktopMini = lazy(() => import("./DesktopView.tsx").then((m) => ({ default: m.DesktopMini })));
@@ -63,15 +78,21 @@ export function Panel({ mobile = false, page }: { mobile?: boolean; page?: Panel
   const s = useApp();
   const top = page === undefined ? s.panelStack.at(-1) : page;
   const panel = top && top.kind !== "job" && top.kind !== "jobs" && top.kind !== "file" ? top : { kind: "now" as const };
-  const kind = panel.kind;
+  // 群成员页和助手的根页长得一样，只是讲的是那个成员、头部带返回
+  const member = panel.kind === "member";
+  const kind = member ? "now" : panel.kind;
+  // 选中群时右栏的根页是群信息（推进了成员页时除外）
+  const group = s.gsel && !member ? s.groups.find((g) => g.id === s.gsel) : undefined;
+  const groupScope = "groupId" in panel && (panel.kind === "routines" || panel.kind === "skills" || panel.kind === "rules" || panel.kind === "newRoutine") ? panel.groupId : undefined;
   const [rootScrolled, setRootScrolled] = useState(false);
-  const selectedAssistant = s.profiles[s.sel ?? "hob"]?.assistant ?? s.assistants.find((a) => a.id === (s.sel ?? "hob"));
-  useEffect(() => setRootScrolled(false), [s.sel]);
-  const title = panel.kind === "routine" ? s.routines.find((r) => r.id === panel.id)?.name ?? "定时任务" : kind === "newRoutine" ? "新建定时任务" : kind === "routines" ? "定时任务" : kind === "skills" ? "技能" : kind === "knowledge" ? "知识库" : kind === "rules" ? "执行前确认" : kind === "now" ? "" : "编辑助手";
+  const selectedAssistant = s.profiles[panelAssistant(s.panelStack, s.sel)]?.assistant ?? s.assistants.find((a) => a.id === (panelAssistant(s.panelStack, s.sel)));
+  useEffect(() => setRootScrolled(false), [s.sel, s.gsel]);
+  const title = panel.kind === "routine" ? s.routines.find((r) => r.id === panel.id)?.name ?? "定时任务" : kind === "newRoutine" ? "新建定时任务" : kind === "routines" ? "定时任务" : kind === "skills" ? "技能" : kind === "knowledge" ? "知识库" : kind === "rules" ? "执行前确认" : kind === "project" ? "事项" : kind === "now" ? "" : kind === "groupSettings" ? "编辑群" : "编辑助手";
   return (
     <aside className="panel" onScroll={(event) => { if (kind === "now") { const card = event.currentTarget.querySelector(".sidebar-card"); const head = event.currentTarget.querySelector(".phead"); setRootScrolled(!!card && !!head && card.getBoundingClientRect().bottom <= head.getBoundingClientRect().bottom); } }}>
-      <PanelHead className="phead" root={kind === "now"} title={<span className="t">{kind === "now" && rootScrolled && selectedAssistant ? <span className="sidebar-head-identity"><Avatar sprite={selectedAssistant.sprite} prop={selectedAssistant.prop} size={24} />{selectedAssistant.name}</span> : title}</span>}>
-        {kind === "now" ? <><button className="hob-icon-btn" title="编辑助手" onClick={openAssistantPanel}><Icon name="edit" size={17} /></button><button className="hob-icon-btn panel-close" title="收起右栏" onClick={collapsePanel}><Icon name="dbl" size={17} /></button></> : null}
+      <PanelHead className="phead" root={kind === "now" && !member} close={kind === "project"} title={<span className="t">{kind === "now" && !group && rootScrolled && selectedAssistant ? <span className="sidebar-head-identity"><Avatar sprite={selectedAssistant.sprite} prop={selectedAssistant.prop} size={24} />{selectedAssistant.name}</span> : title}</span>}>
+        {kind === "now" && !group ? <><button className="hob-icon-btn" title="编辑助手" onClick={openAssistantPanel}><Icon name="edit" size={17} /></button><button className="hob-icon-btn panel-close" title="收起右栏" onClick={collapsePanel}><Icon name="dbl" size={17} /></button></> : null}
+        {kind === "now" && group ? <>{!group.parentId ? <button className="hob-icon-btn" title="编辑群" onClick={() => openGroupSettings(group.id)}><Icon name="edit" size={17} /></button> : null}<button className="hob-icon-btn panel-close" title="收起右栏" onClick={collapsePanel}><Icon name="dbl" size={17} /></button></> : null}
         {kind === "routines" ? <button className="hob-icon-btn" title="新建定时任务" onClick={openNewRoutine}><Icon name="plus" size={17} /></button> : null}
         {panel.kind === "routine" ? <button className="hob-btn hob-btn-primary hob-btn-compact" onClick={() => void runRoutine(panel.id)}>立即运行</button> : null}
       </PanelHead>
@@ -79,29 +100,172 @@ export function Panel({ mobile = false, page }: { mobile?: boolean; page?: Panel
         {kind === "routine" ? (
           <RoutineEditor key={panel.kind === "routine" ? panel.id : ""} id={panel.kind === "routine" ? panel.id : ""} />
         ) : kind === "newRoutine" ? (
-          <NewRoutine />
+          <NewRoutine groupId={groupScope} />
+        ) : panel.kind === "groupSettings" ? (
+          <GroupSettings id={panel.id} />
         ) : kind === "assistant" ? (
-          <AssistantSettings key={s.sel ?? "hob"} />
-        ) : kind === "routines" ? <RoutineList /> : kind === "skills" ? <AssistantSkills aid={s.sel ?? "hob"} /> : kind === "knowledge" ? <AssistantKnowledge aid={s.sel ?? "hob"} /> : kind === "rules" ? <AssistantRules aid={s.sel ?? "hob"} /> : (
-          <><PanelNow /><PanelRootDetails /></>
+          <AssistantSettings key={panelAssistant(s.panelStack, s.sel)} />
+        ) : kind === "routines" ? <RoutineList groupId={groupScope} /> : kind === "skills" ? <AssistantSkills aid={groupScope ?? panelAssistant(s.panelStack, s.sel)} /> : kind === "knowledge" ? <AssistantKnowledge aid={panelAssistant(s.panelStack, s.sel)} /> : kind === "rules" ? <AssistantRules aid={groupScope ?? panelAssistant(s.panelStack, s.sel)} group={!!groupScope} /> : panel.kind === "project" ? (
+          <ProjectPanel groupId={panel.groupId} id={panel.id} />
+        ) : group ? (
+          group.parentId ? <TopicPanel topic={group} /> : <GroupPanel g={group} />
+        ) : (
+          <><PanelNow />{member && s.gsel ? <GroupMemberModels aid={panelAssistant(s.panelStack, s.sel)} groupId={s.gsel} /> : null}<PanelRootDetails /></>
         )}
       </div>
     </aside>
   );
 }
 
+/**
+ * 右栏：群信息——群头像和名字、群主和人数、状态、负责什么、成员（空闲 / 在办几件）、添加成员、结束这个群。
+ * 成员的「设为群主 / 移出群」在成员行右边的 ⋯ 里（手机上一直看得见，桌面上悬停才出现）。
+ */
+function GroupPanel({ g }: { g: GroupSummary }) {
+  const s = useApp();
+  const members = membersOf(g, s.assistants);
+  const owner = members.find((m) => m.id === g.ownerId);
+  // 群的事连同各话题一起算：成员在哪个话题里做事，群信息里都看得到
+  const places = [g, ...topicsOf(s.groups, g.id)];
+  const ids = places.map((place) => place.id);
+  const busy = new Set(places.flatMap((place) => place.busy));
+  const jobs = Object.values(s.jobs);
+  const doing = (id: string) => jobs.filter((job) => job.groupId && ids.includes(job.groupId) && job.assistantId === id && (job.status === "running" || job.status === "queued" || job.status === "waiting")).length;
+  const [adding, setAdding] = useState(false);
+  const [ending, setEnding] = useState(false);
+  const [pickingWorkflow, setPickingWorkflow] = useState(false);
+  const [workflowError, setWorkflowError] = useState("");
+  const menu = useMenu();
+  const picked = menu.menu ? s.assistants.find((a) => a.id === menu.menu!.id) : undefined;
+  const workflow = workflowInfo(g.workflow);
+
+  const change = async (patch: { ownerId?: string; members?: string[] }) => {
+    const failure = await patchGroup(g.id, patch);
+    if (failure) setNotice(`保存失败：${failure}`);
+    return !failure;
+  };
+
+  // 改成「无」时服务端会拦住还有没结束的事项的群，原因原样显示出来
+  const pickWorkflow = async (id: WorkflowId | null) => {
+    setPickingWorkflow(false);
+    setWorkflowError("");
+    const failure = await patchGroup(g.id, { workflow: id });
+    if (failure) setWorkflowError(failure);
+  };
+
+  return (
+    <>
+      <div className="group-card sidebar-card">
+        <div className="sidebar-identity">
+          <GroupCluster g={g} assistants={s.assistants} size={44} />
+          <span>
+            <strong>{g.name}</strong>
+            <small>群主 {owner?.name ?? g.ownerId} · {g.members.length} 位成员</small>
+          </span>
+          <em className={busy.size ? "active" : ""}><span key={busy.size ? "busy" : "idle"}>{busy.size ? "执行中" : "空闲"}</span></em>
+        </div>
+        <div className="gpanel-origin"><small>负责什么</small>{g.purpose || "还没写"}</div>
+        <div className="gpanel-origin gpanel-wf">
+          <small>工作方式</small>
+          <button className="wf-row" aria-expanded={pickingWorkflow} onClick={() => setPickingWorkflow(!pickingWorkflow)}>
+            <strong>{workflow.label}</strong>
+            <span>{workflow.flow}</span>
+          </button>
+          {pickingWorkflow ? (
+            <div className="wf-menu" role="menu">
+              {WORKFLOWS.map((item) => (
+                <button key={item.label} role="menuitem" className={item.label === workflow.label ? "on" : ""} onClick={() => void pickWorkflow(item.id)}>{item.label}</button>
+              ))}
+            </div>
+          ) : null}
+          {workflowError ? <div className="badline">保存失败：{workflowError}</div> : null}
+        </div>
+      </div>
+
+      <PanelRootDetails groupId={g.id} part="info" />
+
+      <PlaceJobs ids={ids} />
+
+      <GroupProjects groupId={g.id} />
+
+      <div className="group-card gmembers">
+        <span className="gm-title">成员</span>
+        {members.map((m) => {
+          const count = doing(m.id);
+          return (
+            <div className="gm-row" key={m.id}>
+              {/* 点头像或名字：右栏进这个助手的信息页，返回回到群信息 */}
+              <button className="gm-open" title={`${m.name}的设置`} onClick={() => openMemberPanel(m.id)}>
+                <Avatar sprite={m.sprite} prop={m.prop} size={30} />
+                <span><strong>{m.name}</strong><small>{m.id === g.ownerId ? `群主 · ${m.duty}` : m.duty}</small></span>
+              </button>
+              <em className={count ? "busy" : ""}>{count ? `在办 ${count} 件` : busy.has(m.id) ? "在说" : "空闲"}</em>
+              {/* 群主没有操作菜单：占住同样的宽度，状态和别的行对齐 */}
+              {m.id === g.ownerId ? <i className="gm-dots gm-dots-gap" aria-hidden="true"><Icon name="more" size={18} /></i> : (
+                <button className="gm-dots" aria-label={`${m.name}的操作`} onClick={(event) => menu.toggle(m.id, event.currentTarget)}><Icon name="more" size={18} /></button>
+              )}
+            </div>
+          );
+        })}
+        {adding ? (
+          <div className="gm-add">
+            <div className="gm-add-head">
+              <span>选一个助手加进群</span>
+              <button onClick={() => setAdding(false)}>取消</button>
+            </div>
+            {s.assistants.filter((a) => !g.members.includes(a.id)).map((a) => (
+              <button key={a.id} className="gm-row gm-pick" onClick={() => void change({ members: [...g.members, a.id] }).then((ok) => { if (ok) setAdding(false); })}>
+                <Avatar sprite={a.sprite} prop={a.prop} size={30} />
+                <span><strong>{a.name}</strong><small>{a.duty}</small></span>
+                <em className="gm-pick-add"><Icon name="plus" size={14} />加入</em>
+              </button>
+            ))}
+            {s.assistants.every((a) => g.members.includes(a.id)) ? <div className="gm-empty">所有助手都在这个群里了</div> : null}
+          </div>
+        ) : (
+          <button className="gm-row gm-add-row" onClick={() => setAdding(true)}>
+            <span className="addi"><Icon name="plus" size={14} /></span>添加成员
+          </button>
+        )}
+      </div>
+
+      <PanelRootDetails groupId={g.id} part="tabs" />
+
+      {ending ? (
+        <div className="group-card sidebar-card-group mergeconfirm">
+          结束「{g.name}」？群会归档，时间线和任务都留着，不会转给别人。
+          <div className="acts">
+            <button className="hob-btn hob-btn-primary" onClick={() => void archiveGroup(g.id)}>确认结束</button>
+            <button className="hob-btn" onClick={() => setEnding(false)}>取消</button>
+          </div>
+        </div>
+      ) : (
+        <button className="gm-end" onClick={() => setEnding(true)}>结束这个群</button>
+      )}
+
+      {picked && menu.menu ? createPortal(
+        <div className="amenu" ref={menu.box}>
+          <button onClick={() => { menu.close(); void change({ ownerId: picked.id }); }}>设为群主</button>
+          <button onClick={() => { menu.close(); void change({ members: g.members.filter((id) => id !== picked.id) }); }}>移出群</button>
+        </div>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
+
 function PanelNow() {
   const s = useApp();
-  const aid = s.sel ?? "hob";
+  const aid = panelAssistant(s.panelStack, s.sel);
   const assistant = s.profiles[aid]?.assistant ?? s.assistants.find((a) => a.id === aid);
   const jobs = Object.values(s.jobs);
   const { running: job, last } = sidebarJobs(jobs, aid);
   const status = assistant ? assistantStatus(assistant, jobs, Object.values(s.approvals), Object.values(s.delegations)) : "空闲";
-  const next = nextRoutine(s.routines.filter((r) => r.assistantId === aid), s.settings.settings.general.timezone);
+  const next = nextRoutine(s.routines.filter((r) => r.assistantId === aid && !r.groupId), s.settings.settings.general.timezone);
 
   // 只有当前助手的屏幕运行时显示小屏，屏幕关闭后恢复命令行。
   const desktop = useDesktopScreens();
-  const screenId = desktop.profiles[s.sel ?? "hob"];
+  const screenId = desktop.profiles[panelAssistant(s.panelStack, s.sel)];
   const desk = !!screenId && desktop.screens.some((entry) => entry.id === screenId && entry.running);
   const [screen, setScreen] = useState<null | "view" | "take">(null);
   const wide = desk && s.nowWide;
@@ -155,6 +319,7 @@ function PanelNow() {
         </div>
       ) : null}
       {screen && screenId ? <Suspense fallback={null}><DesktopScreen initialScreen={screenId} takeOver={screen === "take"} onClose={() => setScreen(null)} /></Suspense> : null}
+      {desktop.error ? <div className="badline">云桌面状态读取失败：{desktop.error}</div> : null}
       {!desk ? <div className={`now-log${job ? " open" : ""}`} inert={!job}><div>{logPresence.mounted && job ? log("jd-open", "打开任务详情", () => openJob(job.id)) : logPresence.mounted ? log("jd-open", "打开任务详情", () => {}) : null}</div></div> : null}
       {job ? (
         <>
@@ -162,12 +327,64 @@ function PanelNow() {
         </>
       ) : <div className="sidebar-facts">{last ? <button onClick={() => openJob(last.id)}>上次 <span>{jobStatusIcon(last.status, 14)}<span>{last.title}</span></span><small>{fmtWhen(last.endedAt!)}</small></button> : null}{next ? <div>下一次 <span><span aria-hidden="true">⏱</span><span>{next.routine.name}</span></span><small>{formatNext(next.at, s.settings.settings.general.timezone)}</small></div> : null}</div>}
 
-      {s.sel === "hob" ? Object.values(s.delegations).filter((delegation) => delegation.status === "running" || delegation.status === "waiting").map((delegation) => {
+      {panelAssistant(s.panelStack, s.sel) === "hob" ? Object.values(s.delegations).filter((delegation) => delegation.status === "running" || delegation.status === "waiting").map((delegation) => {
         const target = s.assistants.find((assistant) => assistant.id === delegation.to);
         return <button className="sidebar-delegation" key={delegation.id} onClick={() => void jumpToDelegation("hob", delegation.id, false)}>{target ? <Avatar sprite={target.sprite} prop={target.prop} size={22} /> : null}<span>交给「{target?.name ?? delegation.to}」</span><small><StatusTag meta={DELEGATION_STATUS[delegation.status]} /></small> ›</button>;
       }) : null}
     </div>
   );
+}
+
+function GroupSettings({ id }: { id: string }) {
+  const s = useApp();
+  const group = s.groups.find((item) => item.id === id);
+  const [view, setView] = useState<ModelsView | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { void loadModels().then(setView); }, []);
+  if (!group) return <Empty>这个群已不存在</Empty>;
+  const save = async (patch: Parameters<typeof patchGroup>[1]) => { const failure = await patchGroup(id, patch); setError(failure ?? ""); return !failure; };
+  const settings = s.settings.settings.models;
+  return <>
+    <div className="pgroup"><div className="bigav"><GroupCluster g={group} assistants={s.assistants} size={64} /></div>
+      <div className="sech"><span>基本信息</span></div><div className="group-card sidebar-card-group">
+      {([ ["name", "群名"], ["purpose", "负责什么"], ["instructions", "补充说明"] ] as const).map(([key, label]) => <div key={key}><div className="lbl">{label}</div><PanelText value={group[key] ?? ""} multiline={key === "instructions"} save={(value) => save({ [key]: value })} /></div>)}
+      </div></div>
+    <div className="pgroup"><div className="sech"><span>模型</span></div>
+    <div className="group-card sidebar-card-group">{([ ["conversation", "对话模型"], ["work", "默认任务模型"] ] as const).map(([key, label]) => <div key={key}><div className="lbl">{label}</div><Select aria-label={label} value={group.models?.[key]?.ref ?? ""} onChange={(ref) => { const model = view?.models.find((item) => item.ref === ref); void save({ models: { [key]: ref ? { ref, thinking: fitThinking(model, settings.roster.find((entry) => entry.ref === ref)?.thinking ?? settings[key].thinking) } : null } }); }} options={[{ value: "", label: "跟随各成员" }, ...settings.roster.map((entry) => ({ value: entry.ref, label: view?.models.find((item) => item.ref === entry.ref)?.name ?? entry.ref }))]} /></div>)}
+    <div className="note">成员在本群单独设过的，按成员的；都没设，跟随助手自己的。</div></div></div>
+    {error ? <div className="badline">保存失败：{error}</div> : null}
+  </>;
+}
+
+function GroupMemberModels({ aid, groupId }: { aid: string; groupId: string }) {
+  const s = useApp();
+  const selected = s.groups.find((g) => g.id === groupId);
+  const group = s.groups.find((g) => g.id === (selected?.parentId ?? groupId));
+  const assistant = s.profiles[aid]?.assistant ?? s.assistants.find((a) => a.id === aid);
+  const [view, setView] = useState<ModelsView | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { void loadModels().then(setView); if (group) void loadGroupProfile(group.id); }, [group?.id]);
+  if (!group || !assistant) return null;
+  const resolved = s.groupProfiles[group.id];
+  const settings = s.settings.settings.models;
+  const name = (ref: string) => view?.models.find((model) => model.ref === ref)?.name ?? ref;
+  return <div className="group-card sidebar-info group-member-models">
+    <div className="group-member-models-head"><span>在「{group.name}」里</span><small>只在本群生效</small></div>
+    {([ ["conversation", "对话模型"], ["work", "默认任务模型"] ] as const).map(([key, label]) => {
+      const effective = resolved?.value?.memberModels[aid]?.[key];
+      const inherited = effective?.inherited;
+      const follow = inherited ? followingModel(inherited.source, name(inherited.pick.ref)) : undefined;
+      const pick = effective?.source === "member" ? effective.pick : undefined;
+      return <label className="group-member-model-row" key={key}>
+        <span>{label}</span><span className={pick ? "" : "following"}>{pick ? name(pick.ref) : follow ? follow.text : resolved?.error ? "加载失败" : "正在加载…"}</span><Icon name="updown" size={14} />
+        <Select aria-label={label} value={pick?.ref ?? ""} onChange={(ref) => {
+          const thinking = fitThinking(view?.models.find((model) => model.ref === ref), settings.roster.find((entry) => entry.ref === ref)?.thinking ?? inherited?.pick.thinking ?? settings[key].thinking);
+          void patchGroupMemberModels(group.id, aid, { [key]: ref ? { ref, thinking } : null }).then((failure) => { setError(failure ?? ""); if (!failure) void loadGroupProfile(group.id); });
+        }} options={[{ value: "", label: follow?.option ?? "跟随" }, ...settings.roster.map((entry) => ({ value: entry.ref, label: name(entry.ref) }))]} />
+      </label>;
+    })}
+    {error ? <div className="badline">保存失败：{error}</div> : null}
+  </div>;
 }
 
 /** 停了的定时任务怎么说：列表和详情用同一句，详情后面再带时间。 */
@@ -177,14 +394,22 @@ function stoppedText(routine: Routine): string | undefined {
   return undefined;
 }
 
-function RoutineList() {
-  const s = useApp();
-  const routines = s.routines.filter((r) => r.assistantId === (s.sel ?? "hob"));
-  return routines.length ? <div className="group-card sidebar-card-group card-rows">{routines.map((r) => <button className="list-row sidebar-row" key={r.id} onClick={() => openRoutine(r.id)}><Icon name={r.active ? "clock" : "pause"} size={18} /><span><strong>{r.name}</strong><small>{r.active ? <>{cronText(r.schedules[0] ?? "")}{r.check ? r.checks?.failing ? <> · <span className="rt-bad">检查失败</span></> : ` · 检查 ${r.checks?.total ?? 0} 次 · 触发 ${r.checks?.hits ?? 0} 次` : r.runs[0] ? <> · 上次 <StatusTag meta={JOB_STATUS[r.runs[0].status]} /> {fmtWhen(r.runs[0].at)}</> : null}</> : stoppedText(r) ?? "已暂停"}</small></span><b>›</b></button>)}</div> : <Empty>这个助手还没有定时任务</Empty>;
+function routineDetail(r: Routine, s: ReturnType<typeof useApp>) {
+  const topic = r.groupId ? s.groups.find((g) => g.id === r.groupId) : undefined;
+  return <>{r.active ? <>{cronText(r.schedules[0] ?? "")}{r.check ? r.checks?.failing ? <> · <span className="rt-bad">检查失败</span></> : ` · 检查 ${r.checks?.total ?? 0} 次 · 触发 ${r.checks?.hits ?? 0} 次` : r.runs[0] ? <> · 上次 {r.runs[0].status === "handed" ? "交给群主" : <StatusTag meta={JOB_STATUS[r.runs[0].status]} />} {fmtWhen(r.runs[0].at)}</> : null}</> : stoppedText(r) ?? "已暂停"}{topic?.parentId ? ` · 发到话题「${topic.name}」` : ""}</>;
 }
 
-function AssistantRules({ aid }: { aid: string }) {
-  const rules = useApp().profiles[aid]?.rules ?? [];
+function RoutineList({ groupId }: { groupId?: string }) {
+  const s = useApp();
+  const routines = s.routines.filter((r) => groupId ? r.groupId === groupId || s.groups.some((g) => g.id === r.groupId && g.parentId === groupId) : r.assistantId === panelAssistant(s.panelStack, s.sel) && !r.groupId);
+  return routines.length ? <div className="group-card sidebar-card-group card-rows">{routines.map((r) => <DetailRow key={r.id} leading={<Icon name={r.active ? "clock" : "pause"} size={18} />} title={r.name} detail={routineDetail(r, s)} onClick={() => openRoutine(r.id)} />)}</div> : <Empty>{groupId ? "这个群还没有定时任务" : "这个助手还没有定时任务"}</Empty>;
+}
+
+function AssistantRules({ aid, group = false }: { aid: string; group?: boolean }) {
+  const s = useApp();
+  const rules = group ? s.groupProfiles[aid]?.value?.rules ?? [] : s.profiles[aid]?.rules ?? [];
+  useEffect(() => { if (group) void loadGroupProfile(aid); }, [aid, group]);
+  if (group && s.groupProfiles[aid]?.error) return <div className="badline">加载失败：{s.groupProfiles[aid].error} <button onClick={() => void loadGroupProfile(aid)}>重试</button></div>;
   return <><div className="note">标为「需确认」的事项，助手执行前会先征求你的同意。</div>{!rules.length ? <Empty>还没有执行前确认事项</Empty> : null}<div className="group-card sidebar-card-group card-rows">{rules.map((rule) => <RuleRow key={rule.id} aid={aid} rule={rule} />)}<RuleCreator aid={aid} /></div></>;
 }
 
@@ -233,20 +458,9 @@ function ScheduleRow({
 
   return (
     <div className="w sched-edit">
-      <select value={sch.kind} onChange={(e) => update({ kind: e.target.value as Schedule["kind"] })}>
-        <option value="daily">每天</option>
-        <option value="weekly">每周</option>
-        <option value="monthly">每月</option>
-        <option value="raw">自定义</option>
-      </select>
+      <Select value={sch.kind} onChange={(value) => update({ kind: value as Schedule["kind"] })} options={[{ value: "daily", label: "每天" }, { value: "weekly", label: "每周" }, { value: "monthly", label: "每月" }, { value: "raw", label: "自定义" }]} />
       {sch.kind === "weekly" ? (
-        <select value={sch.weekday} onChange={(e) => update({ weekday: Number(e.target.value) })}>
-          {WEEK.map((w, i) => (
-            <option key={i} value={i}>
-              周{w}
-            </option>
-          ))}
-        </select>
+        <Select value={String(sch.weekday)} onChange={(value) => update({ weekday: Number(value) })} options={WEEK.map((w, i) => ({ value: String(i), label: `周${w}` }))} />
       ) : null}
       {sch.kind === "monthly" ? (
         <input
@@ -282,21 +496,24 @@ function ScheduleRow({
 }
 
 /** 新建定时任务：先在本地填写，名称和任务内容都有了才创建（建好后切到它的编辑页）。 */
-function NewRoutine() {
+function NewRoutine({ groupId }: { groupId?: string }) {
   const s = useApp();
+  const group = s.groups.find((g) => g.id === groupId);
+  const aid = groupId ? group?.ownerId ?? "" : panelAssistant(s.panelStack, s.sel);
+  const [destination, setDestination] = useState(groupId ?? "");
   const [name, setName] = useState("");
   const [instruction, setInstruction] = useState("");
   const [schedule, setSchedule] = useState("0 9 * * *");
   const [active, setActive] = useState(true);
   const [skill, setSkill] = useState("");
   const [busy, setBusy] = useState(false);
-  const aid = s.sel ?? "hob";
-  useEffect(() => { void loadAssistantSkills(aid); }, [aid]);
+  useEffect(() => { if (aid) void loadAssistantSkills(aid); if (groupId) void loadAssistantSkills(groupId); }, [aid, groupId]);
   const ready = name.trim() !== "" && instruction.trim() !== "" && !busy;
   const create = async () => {
     setBusy(true);
     await createRoutine({
-      assistantId: s.sel ?? "hob",
+      assistantId: aid,
+      ...(groupId ? { groupId: destination } : {}),
       name: name.trim(),
       instruction: instruction.trim(),
       schedules: [schedule],
@@ -319,7 +536,7 @@ function NewRoutine() {
         <textarea
           rows={4}
           value={instruction}
-          placeholder="到点后交给后台任务执行的内容，写清楚需要什么结果"
+          placeholder={groupId ? "到点后交给群主处理的内容，写清楚需要什么结果" : "到点后交给后台任务执行的内容，写清楚需要什么结果"}
           onChange={(e) => setInstruction(e.target.value)}
         />
       </label>
@@ -329,9 +546,11 @@ function NewRoutine() {
         <ScheduleRow value={schedule} onSave={setSchedule} />
       </div>
 
+      {group ? <RoutineTarget group={group} destination={destination} onDestination={setDestination} /> : null}
       <div className="lbl">技能</div>
+      {groupId && s.assistantSkills[groupId]?.error ? <div className="badline">本群技能加载失败：{s.assistantSkills[groupId].error} <button onClick={() => void loadAssistantSkills(groupId)}>重试</button></div> : null}
       {s.assistantSkills[aid]?.error ? <div className="badline">加载失败：{s.assistantSkills[aid].error} <button onClick={() => void loadAssistantSkills(aid)}>重试</button></div> : null}
-      <div className="group-card sidebar-card-group"><select className="pick" aria-label="技能" value={skill} disabled={!s.assistantSkills[aid] || s.assistantSkills[aid].loading || !!s.assistantSkills[aid].error} onChange={(e) => setSkill(e.target.value)}><option value="">不用技能</option>{(s.assistantSkills[aid]?.skills ?? []).filter((item) => item.enabled).map((item) => <option key={item.name} value={item.name}>{item.title}</option>)}</select></div>
+      <div className="group-card sidebar-card-group"><Select aria-label="技能" value={skill} disabled={!s.assistantSkills[aid] || s.assistantSkills[aid].loading || !!s.assistantSkills[aid].error || !!(groupId && (!s.assistantSkills[groupId]?.loaded || s.assistantSkills[groupId]?.error))} onChange={setSkill} options={[{ value: "", label: "不用技能" }, ...routineSkills(s.assistantSkills[groupId ?? ""]?.skills ?? [], s.assistantSkills[aid]?.skills ?? []).map(({ skill: item, group }) => ({ value: item.name, label: `${item.title}${group ? "（本群）" : ""}` }))]} /></div>
       <div className="ctl">
         <span className="sp" />
         <button className="hob-btn" onClick={backPanel}>
@@ -345,11 +564,18 @@ function NewRoutine() {
   );
 }
 
+function RoutineTarget({ group, destination, onDestination }: { group: GroupSummary; destination: string; onDestination: (id: string) => void }) {
+  const s = useApp();
+  return <><div className="lbl">发到</div><div className="group-card sidebar-card-group"><Select aria-label="发到" value={destination} onChange={onDestination} options={[{ value: group.id, label: "综合" }, ...s.groups.filter((topic) => topic.parentId === group.id && !topic.closedAt).map((topic) => ({ value: topic.id, label: `话题「${topic.name}」` }))]} /></div></>;
+}
+
 function RoutineEditor({ id }: { id: string }) {
   const s = useApp();
   const r = s.routines.find((x) => x.id === id);
   const aid = r?.assistantId;
-  useEffect(() => { if (aid) void loadAssistantSkills(aid); }, [aid]);
+  const place = s.groups.find((group) => group.id === r?.groupId);
+  const group = s.groups.find((item) => item.id === (place?.parentId ?? place?.id));
+  useEffect(() => { if (aid) void loadAssistantSkills(aid); if (group) void loadAssistantSkills(group.id); }, [aid, group?.id]);
   if (!r) return <Empty>这个定时任务已不存在。</Empty>;
 
   return (
@@ -415,13 +641,15 @@ function RoutineEditor({ id }: { id: string }) {
         </div>
       ) : null}
 
+      {group ? <RoutineTarget group={group} destination={r.groupId ?? group.id} onDestination={(groupId) => void saveRoutine(r.id, { groupId })} /> : null}
       <div className="lbl">技能</div>
+      {group && s.assistantSkills[group.id]?.error ? <div className="badline">本群技能加载失败：{s.assistantSkills[group.id].error} <button onClick={() => void loadAssistantSkills(group.id)}>重试</button></div> : null}
       {s.assistantSkills[r.assistantId]?.error ? <div className="badline">加载失败：{s.assistantSkills[r.assistantId].error} <button onClick={() => void loadAssistantSkills(r.assistantId)}>重试</button></div> : null}
-      <div className="group-card sidebar-card-group"><select className="pick" aria-label="技能" value={r.skill ?? ""} disabled={!s.assistantSkills[r.assistantId] || s.assistantSkills[r.assistantId].loading || !!s.assistantSkills[r.assistantId].error} onChange={(e) => void saveRoutine(r.id, { skill: e.target.value || null })}>
-        <option value="">不用技能</option>
-        {r.skill && !s.assistantSkills[r.assistantId]?.skills.some((skill) => skill.name === r.skill && skill.enabled) ? <option value={r.skill} disabled>{r.skill}</option> : null}
-        {(s.assistantSkills[r.assistantId]?.skills ?? []).filter((skill) => skill.enabled).map((skill) => <option key={skill.name} value={skill.name}>{skill.title}</option>)}
-      </select></div>
+      <div className="group-card sidebar-card-group"><Select aria-label="技能" value={r.skill ?? ""} disabled={!s.assistantSkills[r.assistantId] || s.assistantSkills[r.assistantId].loading || !!s.assistantSkills[r.assistantId].error || !!(group && (!s.assistantSkills[group.id]?.loaded || s.assistantSkills[group.id]?.error))} onChange={(value) => void saveRoutine(r.id, { skill: value || null })} options={[
+        { value: "", label: "不用技能" },
+        ...(r.skill && !s.assistantSkills[r.assistantId]?.skills.some((skill) => skill.name === r.skill && skill.enabled) && !s.assistantSkills[group?.id ?? ""]?.skills.some((skill) => skill.name === r.skill && skill.enabled) ? [{ value: r.skill, label: r.skill, disabled: true }] : []),
+        ...routineSkills(s.assistantSkills[group?.id ?? ""]?.skills ?? [], s.assistantSkills[r.assistantId]?.skills ?? []).map(({ skill, group }) => ({ value: skill.name, label: `${skill.title}${group ? "（本群）" : ""}` }))
+      ]} /></div>
 
       {r.check ? (
         <>
@@ -443,13 +671,14 @@ function RoutineEditor({ id }: { id: string }) {
       <div className="group-card sidebar-card-group sidebar-runs">
       {r.runs.length ? (
         r.runs.map((run) => {
+          if (!run.jobId) return <div className="run" key={run.at}><span className="rt">{fmtWhen(run.at)} · 交给群主</span></div>;
           const job = s.jobs[run.jobId];
           const st = job?.status ?? run.status;
           const spinning = st === "running" || st === "queued";
           const bad = st === "failed" || st === "stuck";
           const usage = routineRunUsage(run);
           return (
-            <button className={`run${bad ? " bad" : ""}`} key={run.jobId} onClick={() => void jumpToJob(r.assistantId, run.jobId)}>
+            <button className={`run${bad ? " bad" : ""}`} key={run.jobId} onClick={() => void jumpToJob(r.assistantId, run.jobId!)}>
               <span className="rt">
                 {fmtWhen(run.at)}
                 {usage ? <small>{usage}</small> : null}
@@ -480,13 +709,8 @@ function RoutineEditor({ id }: { id: string }) {
 }
 
 function useAssistantSave(aid: string) {
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useSaveMessage();
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (message !== "已保存") return;
-    const timer = setTimeout(() => setMessage(null), 3000);
-    return () => clearTimeout(timer);
-  }, [message]);
   const save = async (patch: Partial<Assistant>) => {
     setBusy(true);
     const error = await patchAssistant(aid, patch);
@@ -498,7 +722,7 @@ function useAssistantSave(aid: string) {
 }
 
 function PanelSaveStatus({ message }: { message: string | null }) {
-  return message ? <div role="status" className={message === "已保存" ? "okline" : "badline"}>{message}</div> : null;
+  return <SaveMessage message={message} />;
 }
 
 function PanelText({ value, multiline, placeholder, save }: { value: string; multiline?: boolean; placeholder?: string; save: (text: string) => Promise<boolean> }) {
@@ -547,14 +771,7 @@ function AssistantModels({ aid }: { aid: string }) {
     <>
       <div className="lbl">{label}</div>
       <div className="ctl">
-        <select className="pick grow" value={models[key]?.ref ?? ""} onChange={(e) => pick(key)(e.target.value)}>
-          <option value="">跟随全局（{nameOf(key === "conversation" ? globals.conversation.ref : globals.work.ref)}）</option>
-          {roster.map((entry) => (
-            <option key={entry.ref} value={entry.ref}>
-              {nameOf(entry.ref)}
-            </option>
-          ))}
-        </select>
+        <Select className="grow" aria-label={label} value={models[key]?.ref ?? ""} onChange={pick(key)} options={[{ value: "", label: `跟随全局（${nameOf(key === "conversation" ? globals.conversation.ref : globals.work.ref)}）` }, ...roster.map((entry) => ({ value: entry.ref, label: nameOf(entry.ref) }))]} />
       </div>
     </>
   );
@@ -652,12 +869,7 @@ function AssistantAbilities({ aid }: { aid: string }) {
 }
 
 function SidebarLoading() {
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    const timer = setTimeout(() => setVisible(true), 300);
-    return () => clearTimeout(timer);
-  }, []);
-  return <div className="sidebar-loading" role="status">{visible ? "正在加载…" : null}</div>;
+  return <div className="sidebar-loading" role="status"><DelayedText text="正在加载…" /></div>;
 }
 
 function AssistantKnowledge({ aid }: { aid: string }) {
@@ -744,13 +956,8 @@ function RuleRow({ aid, rule }: { aid: string; rule: Rule }) {
   const [text, setText] = useState(rule.text);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useSaveMessage();
   const cancel = useRef(false);
-  useEffect(() => {
-    if (message !== "已保存") return;
-    const timer = setTimeout(() => setMessage(null), 3000);
-    return () => clearTimeout(timer);
-  }, [message]);
   const save = async (patch: { text?: string; mode?: "ask" | "allow" }) => {
     setBusy(true);
     const error = await updateRule(aid, { id: rule.id, ...patch });
@@ -783,8 +990,7 @@ function RuleRow({ aid, rule }: { aid: string; rule: Rule }) {
           <button className="del" title="删除这条规则" disabled={busy} onClick={() => setConfirming(true)}><Icon name="close" size={13} /></button>
         </span>
       </div>
-      {confirming ? <div className="rule-confirm"><span>确定删除这条规则？</span><button className="hob-btn" onClick={() => setConfirming(false)}>取消</button><button className="hob-btn hob-btn-danger" onClick={() => void deleteRule(aid, rule.id)}>确认删除</button></div> : null}
-      {message ? <div className={message === "已保存" ? "okline" : "badline"} role="status">{message}</div> : null}
+      {message ? <SaveMessage message={message} /> : null}
     </div>
   );
 }
@@ -794,12 +1000,7 @@ function RuleCreator({ aid }: { aid: string }) {
   const [text, setText] = useState("");
   const [mode, setMode] = useState<"ask" | "allow">("ask");
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  useEffect(() => {
-    if (message !== "已保存") return;
-    const timer = setTimeout(() => setMessage(null), 3000);
-    return () => clearTimeout(timer);
-  }, [message]);
+  const [message, setMessage] = useSaveMessage();
   const cancel = () => { setEditing(false); setText(""); setMode("ask"); setMessage(null); };
   const save = async () => {
     if (busy || !text.trim()) return;
@@ -817,19 +1018,19 @@ function RuleCreator({ aid }: { aid: string }) {
     {editing ? <form className="rule-new" onSubmit={(e) => { e.preventDefault(); void save(); }} onKeyDown={(e) => { if (e.key === "Escape" && !busy) { e.preventDefault(); cancel(); } }}>
       <input className="rule-input" autoFocus aria-label="规则文字" placeholder="输入规则内容" maxLength={1000} value={text} disabled={busy} onChange={(e) => setText(e.target.value)} />
       <div className="ctl">
-        <select className="pick" aria-label="规则确认方式" value={mode} disabled={busy} onChange={(e) => setMode(e.target.value as "ask" | "allow")}><option value="ask">需确认</option><option value="allow">直接执行</option></select>
+        <Select aria-label="规则确认方式" value={mode} disabled={busy} onChange={(value) => setMode(value as "ask" | "allow")} options={[{ value: "ask", label: "需确认" }, { value: "allow", label: "直接执行" }]} />
         <span className="sp" />
         <button type="button" className="hob-btn" disabled={busy} onClick={cancel}>取消</button>
         <button type="submit" className="hob-btn hob-btn-primary" disabled={busy || !text.trim()}>{busy ? "正在保存…" : "保存"}</button>
       </div>
     </form> : <button className="rule-add" onClick={() => { setMessage(null); setEditing(true); }}>＋ 新增规则</button>}
-    {message ? <div className={message === "已保存" ? "okline" : "badline"} role="status">{message}</div> : null}
+    {message ? <SaveMessage message={message} /> : null}
   </div>;
 }
 
 function AssistantSettings() {
   const s = useApp();
-  const aid = s.sel ?? "hob";
+  const aid = panelAssistant(s.panelStack, s.sel);
   const profile = s.profiles[aid];
   const [picking, setPicking] = useState(false);
   const [archiving, setArchiving] = useState(false);

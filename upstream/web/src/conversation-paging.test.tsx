@@ -13,6 +13,7 @@ describe("对话往前分页", () => {
     vi.stubGlobal("window", { setTimeout, matchMedia: () => ({ matches: false, addEventListener: () => {} }) });
     const { realApi } = await import("./api.ts");
     const store = await import("./store.ts");
+    store.getState().sel = "hob";
     store.getState().items.hob = [item("3")];
     store.getState().itemPages.hob = { hasMore: true, loading: false, error: null };
     store.getState().jobs["t-1"] = { id: "t-1", title: "新状态" } as never;
@@ -37,6 +38,7 @@ describe("对话往前分页", () => {
     vi.stubGlobal("window", { matchMedia: () => ({ matches: false, addEventListener: () => {} }) });
     const { realApi } = await import("./api.ts");
     const store = await import("./store.ts");
+    store.getState().sel = "hob";
     store.getState().items.hob = [item("2")];
     store.getState().itemPages.hob = { hasMore: true, loading: false, error: null };
     const fetchPage = vi.spyOn(realApi, "items").mockRejectedValueOnce(new Error("断网")).mockResolvedValueOnce(page(["1"], false));

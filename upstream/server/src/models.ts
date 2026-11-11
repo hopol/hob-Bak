@@ -2,6 +2,8 @@
 import type { Model } from "@earendil-works/pi-ai";
 import type {
   Assistant,
+  Group,
+  GroupMemberModel,
   ModelInfo,
   ModelPick,
   ModelSettings,
@@ -95,11 +97,6 @@ export class ModelCatalog {
     private readonly settings: () => ModelSettings,
   ) {}
 
-  /** 上一次拿到的名单（同步，提示词用；还没拉过就是空）。 */
-  snapshot(): ModelInfo[] {
-    return this.list;
-  }
-
   /** 服务商变了：下一次 get() 重新拉。 */
   reset(): void {
     this.list = [];
@@ -137,6 +134,38 @@ export function noteOf(entry: RosterEntry, catalog: ModelCatalog): string {
 /** 助手的名字：注册表里有名字就用，没有就用 ref。 */
 export function nameOf(ref: string, catalog: ModelCatalog): string {
   return catalog.find(ref)?.name ?? ref;
+}
+
+export function groupModelPick(assistant: Assistant, group: Group | undefined, catalog: ModelCatalog, settings: ModelSettings, key: "conversation" | "work"): GroupMemberModel {
+  const candidates = [
+    ["member", group?.memberModels?.[assistant.id]?.[key]],
+    ["group", group?.models?.[key]],
+    ["assistant", assistant.models?.[key]],
+    ["global", settings[key]],
+  ] as const;
+  const choose = (start: number) => {
+    const found = candidates.slice(start).find(([, pick]) => pick && catalog.find(pick.ref) && (key !== "work" || allowedRefs(settings.roster, assistant).includes(pick.ref)));
+    const source = found?.[0] ?? "global";
+    let pick = found?.[1] ?? settings[key];
+    if (key === "work") {
+      try {
+        const effective = { ...assistant, models: { ...assistant.models, work: pick } };
+        pick = jobModel({ settings, assistant: effective, catalog }).model;
+      } catch { /* 没有可用模型时保留设置里的值供界面显示 */ }
+    }
+    return { source, pick };
+  };
+  const chosen = choose(0);
+  const inherited = choose(1);
+  return { ...chosen, inherited: { source: inherited.source === "member" ? "global" : inherited.source, pick: inherited.pick } };
+}
+
+/** 本群覆盖有效时只影响这次选模，不改助手档案。 */
+export function assistantInGroup(assistant: Assistant, group: Group | undefined, catalog: ModelCatalog, settings: ModelSettings): Assistant {
+  if (!group) return assistant;
+  const conversation = groupModelPick(assistant, group, catalog, settings, "conversation").pick;
+  const work = groupModelPick(assistant, group, catalog, settings, "work").pick;
+  return { ...assistant, models: { ...assistant.models, conversation, work } };
 }
 
 /** 这个助手能派的模型 ref：缺省名单全部。 */

@@ -254,6 +254,8 @@ function stamp(value: unknown, fallback: unknown): string {
 }
 
 export interface DeriveOptions {
+  /** 只要这个时间（写进会话的时间）以后的条目 */
+  since?: string;
   cwd?: string;
   limit?: number;
   /** 输出过长时落盘，返回路径 */
@@ -281,6 +283,11 @@ export function deriveSteps(file: string, options: DeriveOptions = {}): JobStep[
       continue; // 半行（进程被杀）跳过
     }
     if (entry?.type !== "message" || !entry.message) continue;
+    // 抄过来的那段（沉淀会话开头是任务会话）不算，只记下任务说明已经出现过
+    if (options.since && String(entry.timestamp ?? "") < options.since) {
+      if (entry.message.role === "user") seenUser = true;
+      continue;
+    }
     const message = entry.message;
     const at = stamp(message.timestamp, entry.timestamp);
 

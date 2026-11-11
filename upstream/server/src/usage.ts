@@ -33,6 +33,8 @@ interface Target {
   assistantId: string;
   assistantName: string;
   source: UsageSource;
+  /** 沉淀会话开头抄的是任务会话：只算这个时间以后的 */
+  since?: number;
 }
 
 function num(value: unknown): number {
@@ -239,6 +241,23 @@ export class UsageService {
       if (!assistants.has(id)) assistants.set(id, { id, name, archived: true });
       await this.sync({ file, assistantId: id, assistantName: name, source: "chat" }, seen);
     }
+    // 群会话（groups/<gid>/members/<aid>.jsonl，归档群也算）：记在成员助手名下，算对话
+    const groupRoots = [
+      ...readDir(join(home, "groups")).map((gid) => ({ root: join(home, "groups", gid), archived: false })),
+      ...readDir(join(home, "archive", "groups")).map((folder) => ({ root: join(home, "archive", "groups", folder), archived: true })),
+    ];
+    for (const { root: dir } of groupRoots) {
+      for (const file of readDir(join(dir, "members"))) {
+        if (!file.endsWith(".jsonl")) continue;
+        const path = join(dir, "members", file);
+        if (!existsSync(path)) continue;
+        const assistantId = file.slice(0, -".jsonl".length);
+        const live = this.options.store.assistant(assistantId);
+        const name = assistants.get(assistantId)?.name ?? live?.name ?? assistantId;
+        if (!assistants.has(assistantId)) assistants.set(assistantId, { id: assistantId, name, archived: !live });
+        await this.sync({ file: path, assistantId, assistantName: name, source: "chat" }, seen);
+      }
+    }
     for (const jobDir of jobSessionDirs(home)) {
       const file = join(jobDir, "worker.jsonl");
       if (!existsSync(file)) continue;
@@ -250,6 +269,9 @@ export class UsageService {
       const name = cached?.assistantName ?? job?.assistantName ?? live?.name ?? assistantId;
       if (!assistants.has(assistantId)) assistants.set(assistantId, { id: assistantId, name, archived: !live });
       await this.sync({ file, assistantId, assistantName: name, source: "job" }, seen);
+      for (const sediment of readDir(join(jobDir, "sediment"))) {
+        if (sediment.endsWith(".jsonl")) await this.sync({ file: join(jobDir, "sediment", sediment), assistantId, assistantName: name, source: "job", since: Number(sediment.slice(0, -".jsonl".length)) }, seen);
+      }
     }
     for (const file of [...this.files.keys()]) if (!seen.has(file)) this.files.delete(file);
     this.assistants = assistants;
@@ -276,8 +298,9 @@ export class UsageService {
       return; // 读不了就留着上次的记录，不当成 0
     }
     this.reads += 1;
-    let records = parsed.records;
-    if (appendFrom && cached) records = [...cached.records, ...parsed.records];
+    const fresh = target.since ? parsed.records.filter((record) => record.at >= target.since!) : parsed.records;
+    let records = fresh;
+    if (appendFrom && cached) records = [...cached.records, ...fresh];
     this.files.set(target.file, {
       size: stat.size,
       mtimeMs: stat.mtimeMs,

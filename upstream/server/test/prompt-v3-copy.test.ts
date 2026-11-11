@@ -1,13 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
 import { buildSystemPrompt, buildWorkerPrompt } from "../src/prompt.ts";
-import { assistantJobResultEvent } from "../src/jobs.ts";
+import { assistantJobResultEvent, sedimentMessage } from "../src/jobs.ts";
 import { saveAssistantSkill } from "../src/assistant-skills.ts";
-import { textOfContent } from "../src/transcript.ts";
 import { buildRouterTools } from "../src/router-tools.ts";
 import { registerAskTool, registerImageTool, registerReportTool } from "../src/worker-tools.ts";
 import { DesktopToolSession } from "../src/desktop-tools.ts";
-import { makeHob, call, text } from "./helpers.ts";
+import { makeHob } from "./helpers.ts";
 
 // 定稿只在开发仓库里（.scratch 不随公开版发布），没有就跳过逐字对照
 const DOC = ".scratch/v2/design-prompts-v3.md";
@@ -43,7 +43,7 @@ describe.skipIf(!doc)("第三版逐字对照", () => {
       const routerSource = section("## 三、助手的工具", "## 四、任务的工具");
       const workerSource = section("## 四、任务的工具", "## 五、沉淀时发给任务的话");
       const router = buildRouterTools(hob.runtime, "hob");
-      for (const name of ["check_job", "save_job_as_skill", "edit_skill", "delete_skill", "read", "start_job", "reply_job", "stop_job", "ask_user", "set_rule", "remove_rule", "create_routine", "update_routine", "delete_routine", "send_file", "set_avatar", "generate_image", "overview", "propose_assistant", "message_assistant", "search_knowledge", "find_knowledge", "web_search", "web_fetch"]) {
+      for (const name of ["check_job", "save_job_as_skill", "edit_skill", "delete_skill", "read", "start_job", "reply_job", "stop_job", "ask_user", "set_rule", "remove_rule", "create_routine", "update_routine", "delete_routine", "send_file", "set_avatar", "generate_image", "overview", "create_assistant", "message_assistant", "search_knowledge", "find_knowledge", "web_search", "web_fetch"]) {
         expect(router.find((tool) => tool.name === name)?.description, name).toBe(line(routerSource, name));
       }
       expect(router.find((tool) => tool.name === "show_page")?.description.startsWith(`${line(routerSource, "show_page")}\n`)).toBe(true);
@@ -75,45 +75,12 @@ describe.skipIf(!doc)("第三版逐字对照", () => {
     } finally { hob.close(); }
   });
 
-  it("沉淀时发给任务的话，开头和结尾与定稿逐字一致", async () => {
-    const hob = makeHob({}, { memory: "off" });
-    try {
-      const source = section("## 五、沉淀时发给任务的话\n\n```\n", "\n```\n");
-      const head = source.split("\n\n")[0]!;
-      const tail = source.split("\n").at(-1)!;
-      hob.runtime.store.saveJob({ id: "t-sed", assistantId: "hob", title: "测试", instruction: "整理报告", status: "done", createdAt: "", cwd: "/work", stats: { reads: 0, commands: 0, edits: 0 }, activity: [] });
-      vi.spyOn(hob.runtime.router, "event").mockResolvedValue();
-      hob.faux.setResponses([text("没有需要沉淀的")]);
-      hob.runtime.jobs.startSediment("t-sed");
-      await hob.runtime.jobs.waitIdle();
-      const entries = readFileSync(hob.runtime.store.workerFile("t-sed"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
-      const sent = entries.filter((entry) => entry.type === "message" && entry.message.role === "user").map((entry) => textOfContent(entry.message.content).trim()).at(-1)!;
-      expect(sent.startsWith(`${head}\n\n`)).toBe(true);
-      expect(sent.endsWith(tail)).toBe(true);
-    } finally { hob.close(); }
-  });
-
-  it("沉淀做完的事件与定稿逐字一致，目录名只加在事件里", async () => {
-    const hob = makeHob({}, { memory: "off" });
-    try {
-      const job = { id: "t-event", assistantId: "hob", title: "整理报告", instruction: "整理报告", status: "done" as const, createdAt: "", cwd: "/work", stats: { reads: 0, commands: 0, edits: 0 }, activity: [] };
-      hob.runtime.store.saveJob(job);
-      const notify = vi.spyOn(hob.runtime.router, "event").mockResolvedValue();
-      const line = doc.split("\n").find((item) => item.startsWith("**沉淀做完**"))!;
-      const [created, updated] = line.split("沉淀完了：")[1]!.replace(/。$/, "").slice(1, -1).split("|");
-      const fill = (text: string) => text.replace("X", "新报告整理").replace("{name}", "new-guide").replace("{N}", "2");
-      expect(fill(created!)).toBe("已沉淀技能「新报告整理」（new-guide）");
-      expect(fill(updated!)).toBe("已更新技能「新报告整理」（new-guide）· 第 2 版");
-      hob.faux.setResponses([call("save_skill", { name: "new-guide", title: "新报告整理", description: "整理报告", content: "步骤" }), text("完成")]);
-      hob.runtime.jobs.startSediment(job.id);
-      await hob.runtime.jobs.waitIdle();
-      expect(notify).toHaveBeenCalledWith("hob", `任务「整理报告」（${job.id}）沉淀完了：${fill(created!)}。`);
-      hob.faux.setResponses([call("save_skill", { title: "新报告整理", description: "整理报告", content: "新步骤" }), text("完成")]);
-      hob.runtime.jobs.startSediment(job.id, { into: "new-guide" });
-      await hob.runtime.jobs.waitIdle();
-      expect(notify).toHaveBeenCalledWith("hob", `任务「整理报告」（${job.id}）沉淀完了：${fill(updated!)}。`);
-      const notes = hob.runtime.router.items("hob").items.filter((item) => item.kind === "note" && (item.text.startsWith("已沉淀技能") || item.text.startsWith("已更新技能"))).map((item) => (item.kind === "note" ? item.text : ""));
-      expect(notes).toEqual(["已沉淀技能「新报告整理」", "已更新技能「新报告整理」· 第 2 版"]);
-    } finally { hob.close(); }
+  it("沉淀时发给任务的话，前四段与定稿逐字一致", () => {
+    // 票 154 把第五段起的写法换了，定稿还没替换，这里只对前四段
+    const source = section("## 五、沉淀时发给任务的话\n\n```\n", "\n```\n");
+    const head = source.split("\n\n").slice(0, 4).join("\n\n");
+    const sent = sedimentMessage({ skillsDir: "/skills", assistantName: "Hob" });
+    expect(sent.startsWith(`${head}\n\n`)).toBe(true);
+    expect(sent).toContain("写好以后调用 report");
   });
 });

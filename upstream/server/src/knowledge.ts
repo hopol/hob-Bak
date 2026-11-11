@@ -18,7 +18,7 @@ function jobIdFromPath(rel: string): string | undefined {
 
 type Entry = KnowledgeEntry & { sourceKey?: string };
 type CollectInput = { origin: "output" | "chat"; path: string; name?: string; description?: string; assistantId: string; itemId?: string; jobId?: string };
-type Query = { origin?: string; collection?: string; kind?: string; assistantId?: string; q?: string; before?: string; limit?: number };
+type Query = { origin?: string; collection?: string; kind?: string; assistantId?: string; groupId?: string; q?: string; before?: string; limit?: number };
 type Collection = Omit<KnowledgeCollection, "count">;
 type IndexFile = { model: string; dims: number; name?: string; chunks: IndexedChunk[] };
 type SearchResult = { entry: KnowledgeEntry; chunk: IndexedChunk; score: number };
@@ -260,7 +260,7 @@ export class KnowledgeStore {
     });
     const q = query.q?.toLocaleLowerCase();
     const limit = Math.max(1, Math.min(200, query.limit || 50));
-    const candidates = all.filter((e) => (!query.origin || e.origin === query.origin) && (!query.collection || e.collections.includes(query.collection)) && (!query.kind || knowledgeGroup(e.kind) === query.kind as KnowledgeGroup) && (!query.assistantId || e.source?.assistantId === query.assistantId) && (!query.before || e.updatedAt < query.before)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const candidates = all.filter((e) => (!query.origin || e.origin === query.origin) && (!query.groupId || (e.origin === "output" && (query.groupId === "none" ? !e.source?.jobId || !this.store.job(e.source.jobId)?.groupId : !!e.source?.jobId && !!this.store.job(e.source.jobId) && this.store.groupMatches(query.groupId, this.store.job(e.source.jobId)?.groupId)))) && (!query.collection || e.collections.includes(query.collection)) && (!query.kind || knowledgeGroup(e.kind) === query.kind as KnowledgeGroup) && (!query.assistantId || e.source?.assistantId === query.assistantId) && (!query.before || e.updatedAt < query.before)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     // ponytail: 几千条以内线性扫描，凑够一页（多一条判断 hasMore）就停；后续向量检索时改为索引。
     const entries: (KnowledgeEntry & { snippet?: string })[] = [];
     for (const e of candidates) {

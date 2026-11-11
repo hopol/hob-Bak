@@ -16,7 +16,7 @@ export async function openKnowledgeCitation(entryId: string, chunk?: number) {
   }
 }
 
-export function Markdown({ text, className, streaming, onMathRendered }: { text: string; className?: string; streaming?: boolean; onMathRendered?: () => void }) {
+export function Markdown({ text, className, streaming, mentions, onMathRendered }: { text: string; className?: string; streaming?: boolean; mentions?: string[]; onMathRendered?: () => void }) {
   const [mathVersion, refresh] = useState(0);
   useEffect(() => {
     let active = true;
@@ -42,5 +42,5 @@ export function Markdown({ text, className, streaming, onMathRendered }: { text:
       button.setAttribute("aria-label", "已复制");
       window.setTimeout(() => { button.innerHTML = iconSvg("copy", 15); button.setAttribute("aria-label", "复制代码"); }, 1500);
     });
-  }} dangerouslySetInnerHTML={{ __html: renderMarkdown(text) + (streaming ? '<span class="cur"></span>' : "") }} />;
+  }} dangerouslySetInnerHTML={{ __html: renderMarkdown(text, mentions) + (streaming ? '<span class="cur"></span>' : "") }} />;
 }

@@ -75,6 +75,36 @@ export function assistantFilesDir(home: string, id: string, kind?: "uploads" | "
   return kind ? join(assistantDir(home, id), "files", kind) : join(assistantDir(home, id), "files");
 }
 
+/** 群数据的根目录：一个群一个目录。 */
+export function groupsDir(home: string): string {
+  return join(home, "groups");
+}
+
+/** 一个群的目录：group.json、timeline.jsonl、state.json、members/、files/。 */
+export function groupDir(home: string, gid: string): string {
+  return join(groupsDir(home), gid);
+}
+
+/** 这个群里的文件（上传、生图这类产出）。 */
+export function groupFilesDir(home: string, gid: string, kind?: "uploads" | "images"): string {
+  return kind ? join(groupDir(home, gid), "files", kind) : join(groupDir(home, gid), "files");
+}
+
+/** 这个群里的事项：一个事项一份 json 和一份 md 记录。 */
+export function groupProjectsDir(home: string, gid: string): string {
+  return join(groupDir(home, gid), "projects");
+}
+
+/** 事项的记录文件：成员和任务读的就是它。 */
+export function projectRecordPath(home: string, gid: string, pid: string): string {
+  return join(groupProjectsDir(home, gid), `${pid}.md`);
+}
+
+/** 归档群的地方：一个群一个目录，目录名是 <gid>-<归档时间>。 */
+export function archiveGroupsDir(home: string): string {
+  return join(home, "archive", "groups");
+}
+
 /** 归档助手的地方：一个助手一个目录，目录名是 <id>-<归档时间>。 */
 export function archiveAssistantsDir(home: string): string {
   return join(home, "archive", "assistants");
@@ -109,9 +139,11 @@ export function loadConfig(home: string, env: NodeJS.ProcessEnv = process.env): 
   // 对话、任务、引擎日志（MCP 服务发来的日志原样落盘）都在这里：只给本人读
   chmodSync(home, 0o700);
   const file = join(systemDir(home), CONFIG_FILE);
-  const stored: Record<string, unknown> = existsSync(file)
-    ? (JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>)
-    : {};
+  let stored: Record<string, unknown> = {};
+  if (existsSync(file)) {
+    try { stored = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>; }
+    catch (error) { throw new Error(`读取 ${file} 失败：${error instanceof Error ? error.message : String(error)}`, { cause: error }); }
+  }
   const plain = typeof stored.password === "string" ? stored.password.trim() : "";
   const fromEnv = (env.HOB_PASSWORD ?? "").trim();
   const storedHash = typeof stored.passwordHash === "string" ? stored.passwordHash.trim() : "";

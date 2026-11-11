@@ -176,11 +176,15 @@ describe("知识库查内容", () => {
     const { hob, collection, bind } = await setup();
     try {
       bind([collection.id]); vectorOn(hob);
-      vi.spyOn(hob.runtime.knowledge, "search").mockImplementation(() => new Promise((resolve) => { setTimeout(() => resolve([]), 5000).unref(); }));
+      vi.spyOn(hob.runtime.knowledge, "search").mockImplementation(() => new Promise(() => {}));
+      const realSetTimeout = globalThis.setTimeout;
+      const timers = vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback: TimerHandler, delay?: number, ...args: unknown[]) =>
+        realSetTimeout(callback, delay === 3000 ? 1 : delay, ...args)) as typeof setTimeout);
       hob.faux.setResponses([text("收到")]);
       await hob.runtime.router.send("hob", { text: "每日巡检怎么做" });
       await hob.runtime.router.waitIdle("hob");
       const state = await hob.runtime.router.ensure("hob");
+      expect(timers.mock.calls.some(([, delay]) => delay === 3000)).toBe(true);
       expect(JSON.stringify(state.session!.messages)).toContain("每日巡检怎么做");
       expect(JSON.stringify(state.session!.messages)).not.toContain("知识库里可能相关的内容");
     } finally { vi.restoreAllMocks(); hob.close(); }

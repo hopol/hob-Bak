@@ -5,10 +5,12 @@ import { DesktopControl } from "./desktop-control.ts";
 import { DesktopEvents } from "./desktop-events.ts";
 import { DesktopPublicLock } from "./desktop-public.ts";
 import { DelegationManager } from "./delegations.ts";
+import type { GroupManager } from "./groups.ts";
 import type { HobConfig } from "./config.ts";
 import { memoryDir } from "./config.ts";
 import { ModelCatalog } from "./models.ts";
 import type { PiHost } from "./pi.ts";
+import type { ProjectManager } from "./projects.ts";
 import type { ProviderService } from "./providers.ts";
 import type { RouterManager } from "./router.ts";
 import type { JobManager } from "./jobs.ts";
@@ -19,7 +21,10 @@ import type { Store } from "./store.ts";
 import type { PushSender, PushService } from "./push.ts";
 import type { UsageService } from "./usage.ts";
 import { Bus as BusImpl } from "./bus.ts";
+import { seedDevTeam } from "./dev-team.ts";
+import { GroupManager as GroupManagerImpl } from "./groups.ts";
 import { JobManager as JobManagerImpl } from "./jobs.ts";
+import { ProjectManager as ProjectManagerImpl } from "./projects.ts";
 import { PushService as PushServiceImpl } from "./push.ts";
 import { ProviderService as ProviderServiceImpl } from "./providers.ts";
 import { RouterManager as RouterManagerImpl } from "./router.ts";
@@ -51,6 +56,10 @@ export interface HobRuntime {
   /** 引擎注册表里现在能用的模型（设置页、派任务时看） */
   models: ModelCatalog;
   router: RouterManager;
+  /** 群：时间线、成员会话、轮到谁 */
+  groups: GroupManager;
+  /** 群里的事项：原始需求、需求说明、子任务、验收 */
+  projects: ProjectManager;
   jobs: JobManager;
   delegations: DelegationManager;
   routines: RoutineScheduler;
@@ -78,6 +87,7 @@ export function createRuntime(options: CreateRuntimeOptions): HobRuntime {
   process.env.PI_MEMORY_DIR = memoryDir(options.home);
   const store = new StoreImpl(options.home);
   store.init();
+  store.validate();
   store.ensurePrimary();
   store.migrateMemories();
   store.migrateAssistantDuties();
@@ -112,6 +122,10 @@ export function createRuntime(options: CreateRuntimeOptions): HobRuntime {
   runtime.desktopEvents = new DesktopEvents(runtime);
   runtime.desktopPublic = new DesktopPublicLock();
   runtime.router = new RouterManagerImpl(runtime);
+  runtime.groups = new GroupManagerImpl(runtime);
+  runtime.projects = new ProjectManagerImpl(runtime);
+  // 第一次启动带上敏捷团队（5 个收起的助手和一个群）；标记在 system/seeded.json，之后不再建
+  seedDevTeam(runtime.store, (input) => runtime.groups.create(input));
   runtime.jobs = new JobManagerImpl(runtime);
   runtime.delegations = new DelegationManager(runtime);
   runtime.routines = new RoutineSchedulerImpl(runtime);

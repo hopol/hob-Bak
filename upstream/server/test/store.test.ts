@@ -1,7 +1,10 @@
+import * as fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Store } from "../src/store.ts";
+import { SettingsStore } from "../src/settings.ts";
 import { makeHob } from "./helpers.ts";
 import { cronToChinese } from "../src/cron-text.ts";
 import { createApp } from "../src/http.ts";
@@ -40,14 +43,117 @@ describe("store", () => {
     }
   });
 
-  it("文件坏了退回默认值，不炸", () => {
+  it("坏规则和旧记忆报出路径并保留原文件", () => {
     const hob = makeHob();
     try {
-      writeFileSync(join(hob.home, "assistants", "hob", "rules.json"), "{坏掉的");
-      expect(hob.runtime.store.rules("hob")).toEqual([]);
+      const rules = join(hob.home, "assistants", "hob", "rules.json");
+      const memories = join(hob.home, "assistants", "hob", "memories.json");
+      writeFileSync(rules, "{坏掉的");
+      expect(() => hob.runtime.store.rules("hob")).toThrow(rules);
+      writeFileSync(memories, "{坏掉的");
+      expect(() => hob.runtime.store.migrateMemories()).toThrow(memories);
+      expect(readFileSync(memories, "utf8")).toBe("{坏掉的");
     } finally {
       hob.close();
     }
+  });
+
+  it("坏设置报错并保留原文件", () => {
+    const hob = makeHob();
+    try {
+      const file = join(hob.home, "system", "settings.json");
+      writeFileSync(file, "{坏掉的");
+      expect(() => new SettingsStore(hob.home)).toThrow(file);
+      expect(readFileSync(file, "utf8")).toBe("{坏掉的");
+    } finally { hob.close(); }
+  });
+
+  it("审批和定时更新只写一次，失败保留原记录", () => {
+    const hob = makeHob();
+    try {
+      const approval = { id: "q-atomic", assistantId: "hob", title: "测试", options: [], status: "pending" as const, source: "router" as const, createdAt: new Date().toISOString() };
+      const routine = { id: "r-atomic", assistantId: "hob", name: "测试", instruction: "测试", schedules: [], active: true, createdAt: new Date().toISOString(), runs: [] };
+      const store = hob.runtime.store;
+      for (const [file, save] of [
+        ["approvals.json", () => store.saveApproval(approval)],
+        ["routines.json", () => store.saveRoutine(routine)],
+      ] as const) {
+        save();
+        const target = join(hob.home, "assistants", "hob", file);
+        const original = fs.default.renameSync;
+        let count = 0;
+        fs.default.renameSync = ((from, to) => { if (String(to) === target && ++count === 1) throw new Error("注入写入失败"); return original(from, to); }) as typeof fs.renameSync;
+        syncBuiltinESMExports();
+        try { expect(save).toThrow("注入写入失败"); } finally { fs.default.renameSync = original; syncBuiltinESMExports(); }
+        expect(JSON.parse(readFileSync(target, "utf8"))).toHaveLength(1);
+        count = 0;
+        fs.default.renameSync = ((from, to) => { if (String(to) === target) count++; return original(from, to); }) as typeof fs.renameSync;
+        syncBuiltinESMExports();
+        try { save(); } finally { fs.default.renameSync = original; syncBuiltinESMExports(); }
+        expect(count).toBe(1);
+      }
+    } finally { hob.close(); }
+  });
+
+  it("损坏的单个任务和事项跳过并记录路径", () => {
+    const hob = makeHob();
+    try {
+      const group = hob.runtime.groups.create({ name: "群", purpose: "测试", ownerId: "hob", members: ["hob"] });
+      const project = join(hob.home, "groups", group.id, "projects", "bad.json");
+      const job = join(hob.home, "assistants", "hob", "jobs", "bad", "job.json");
+      mkdirSync(join(hob.home, "groups", group.id, "projects"), { recursive: true });
+      mkdirSync(join(hob.home, "assistants", "hob", "jobs", "bad"), { recursive: true });
+      writeFileSync(project, "{坏掉");
+      writeFileSync(job, "{坏掉");
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      expect(hob.runtime.store.projects(group.id)).toEqual([]);
+      expect(hob.runtime.store.jobs()).toEqual([]);
+      expect(errors.mock.calls.flat().map(String).join("\n")).toContain(project);
+      expect(errors.mock.calls.flat().map(String).join("\n")).toContain(job);
+      errors.mockRestore();
+    } finally { hob.close(); }
+  });
+
+  it("跨助手转移审批时清理旧文件失败仍读取新记录", () => {
+    const hob = makeHob();
+    try {
+      const store = hob.runtime.store;
+      store.saveAssistant({ ...store.assistant("hob")!, id: "other", name: "其他", primary: false });
+      const approval = { id: "q-move", assistantId: "other", title: "旧", options: [], status: "pending" as const, source: "router" as const, createdAt: new Date().toISOString() };
+      store.saveApproval(approval);
+      const original = fs.default.renameSync;
+      const oldPath = join(hob.home, "assistants", "other", "approvals.json");
+      fs.default.renameSync = ((from, to) => { if (String(to) === oldPath) throw new Error("旧文件清理失败"); return original(from, to); }) as typeof fs.renameSync;
+      syncBuiltinESMExports();
+      try { expect(() => store.saveApproval({ ...approval, assistantId: "hob", title: "新" })).toThrow("旧文件清理失败"); }
+      finally { fs.default.renameSync = original; syncBuiltinESMExports(); }
+      expect(store.approvals().filter((item) => item.id === approval.id)).toEqual([expect.objectContaining({ title: "新", assistantId: "hob" })]);
+    } finally { hob.close(); }
+  });
+
+  it("启动前检查助手与群的规则文件并保留损坏内容", () => {
+    const hob = makeHob();
+    try {
+      const file = join(hob.home, "assistants", "hob", "rules.json");
+      writeFileSync(file, "{损坏");
+      expect(() => hob.runtime.store.validate()).toThrow(file);
+      expect(readFileSync(file, "utf8")).toBe("{损坏");
+    } finally { hob.close(); }
+  });
+
+  it("启动前检查归档助手档案和知识库索引", () => {
+    const hob = makeHob();
+    try {
+      const archive = join(hob.home, "archive", "assistants", "old", "profile.json");
+      mkdirSync(join(hob.home, "archive", "assistants", "old"), { recursive: true });
+      writeFileSync(archive, "{坏掉");
+      expect(() => hob.runtime.store.validate()).toThrow(archive);
+      writeFileSync(archive, "{}");
+      const knowledge = join(hob.home, "knowledge", "entries.json");
+      mkdirSync(join(hob.home, "knowledge"), { recursive: true });
+      writeFileSync(knowledge, "{坏掉");
+      expect(() => hob.runtime.store.validate()).toThrow(knowledge);
+    } finally { hob.close(); }
   });
 
   it("首次启动只建一个主助手", () => {
@@ -55,7 +161,8 @@ describe("store", () => {
     try {
       const again = hob.runtime.store.ensurePrimary();
       expect(again.id).toBe("hob");
-      expect(hob.runtime.store.assistants()).toHaveLength(1);
+      // 自带的敏捷团队是收起的助手，不算在列表里
+      expect(hob.runtime.store.assistants().filter((assistant) => !assistant.hidden)).toHaveLength(1);
       expect(hob.runtime.store.assistant("hob")).toMatchObject({ primary: true, pinned: true, sprite: "hob" });
     } finally {
       hob.close();
@@ -131,9 +238,9 @@ describe("登录和接口鉴权", () => {
 
       const bootstrap = await app.request("/api/bootstrap", { headers: { cookie } });
       expect(bootstrap.status).toBe(200);
-      const body = (await bootstrap.json()) as { assistants: { id: string; primary: boolean }[] };
-      expect(body.assistants.map((item) => item.id)).toEqual(["hob"]);
-      expect(body.assistants[0].primary).toBe(true);
+      const body = (await bootstrap.json()) as { assistants: { id: string; primary: boolean; hidden: boolean }[] };
+      expect(body.assistants.filter((item) => !item.hidden).map((item) => item.id)).toEqual(["hob"]);
+      expect(body.assistants.find((item) => item.id === "hob")?.primary).toBe(true);
     } finally {
       hob.close();
     }

@@ -142,8 +142,8 @@ export class PushService {
     if (existsSync(this.file())) {
       try {
         stored = JSON.parse(readFileSync(this.file(), "utf8")) as Partial<PushFile>;
-      } catch {
-        stored = {};
+      } catch (error) {
+        throw new Error(`读取 ${this.file()} 失败：${error instanceof Error ? error.message : String(error)}`, { cause: error });
       }
     }
     const vapid = isVapid(stored.vapid) ? stored.vapid : webpush.generateVAPIDKeys();
@@ -296,8 +296,9 @@ export interface NotifyDeps {
   store: Store;
 }
 
-function openUrl(assistantId: string): string {
-  return `/?a=${encodeURIComponent(assistantId)}`;
+/** 点开推送去哪：群里提的问题、群里开的任务去群聊页，其余去这个助手的单聊。 */
+function openUrl(assistantId: string, groupId?: string): string {
+  return groupId ? `/#/group/${encodeURIComponent(groupId)}` : `/?a=${encodeURIComponent(assistantId)}`;
 }
 
 /** 出审批：这个助手开了「需要确认时通知我」才推送。 */
@@ -305,7 +306,10 @@ export function pushApproval(deps: NotifyDeps, approval: Approval): void {
   const assistant = deps.store.assistant(approval.assistantId);
   if (!assistant?.notify) return;
   // 推送失败不能影响审批本身（也不能变成未处理的 rejection 把进程带走）
-  void deps.push.send({ title: assistant.name, body: plainText(approval.title), url: openUrl(approval.assistantId) }).catch(() => undefined);
+  // 推送的标题是卡片标题（一张卡可能问几个问题），正文写谁在等、等什么
+  void deps.push
+    .send({ title: plainText(approval.title), body: `${assistant.name} · 等待你的回答`, url: openUrl(approval.assistantId, approval.groupId) })
+    .catch(() => undefined);
 }
 
 /** 任务受阻或失败：所属助手开了通知才推送。 */
@@ -316,6 +320,6 @@ export function pushJobEnd(deps: NotifyDeps, job: Job): void {
   const what = job.status === "stuck" ? "受阻" : "失败";
   const reason = job.statusReason ? `：${plainText(job.statusReason)}` : "";
   void deps.push
-    .send({ title: assistant.name, body: `任务「${job.title}」${what}${reason}`, url: openUrl(job.assistantId) })
+    .send({ title: assistant.name, body: `任务「${job.title}」${what}${reason}`, url: openUrl(job.assistantId, job.groupId) })
     .catch(() => undefined);
 }

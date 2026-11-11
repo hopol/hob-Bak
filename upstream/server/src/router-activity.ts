@@ -17,7 +17,7 @@ export function activityLabel(name: string, args: Record<string, unknown> = {}, 
     case "create_routine": case "update_routine": case "delete_routine": label = withValue("设定时任务", value("name")); break;
     case "send_file": label = withValue("发文件", basename(value("path"))); break;
     case "set_avatar": label = "换头像"; break;
-    case "propose_assistant": label = "提议新助手"; break;
+    case "create_assistant": label = "新建助手"; break;
     case "message_assistant": { const id = value("assistantId"); label = id ? `交给「${assistantName?.(id) ?? id}」` : "交给助手"; break; }
     case "hand_back_to_hob": label = "交回 Hob"; break;
     case "show_page": label = withValue("写页面", value("title")); break;

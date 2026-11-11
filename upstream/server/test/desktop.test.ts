@@ -360,6 +360,9 @@ describe("云桌面配置", () => {
   });
   it("转发屏幕快照并在断线后重连", async () => {
     const hob = makeHob();
+    const realSetTimeout = globalThis.setTimeout;
+    const timers = vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback: TimerHandler, delay?: number, ...args: unknown[]) =>
+      realSetTimeout(callback, delay === 1000 ? 1 : delay, ...args)) as typeof setTimeout);
     const server = createServer();
     const sockets = new WebSocketServer({ server });
     const snapshot = [{ id: "hob", running: true, browserRunning: false, viewers: 0, lastActiveAt: null }];
@@ -376,13 +379,16 @@ describe("云桌面配置", () => {
       const changed = [{ ...snapshot[0], browserRunning: true }];
       for (const socket of sockets.clients) socket.send(JSON.stringify({ type: "screens", screens: changed }));
       await vi.waitFor(() => expect(hob.runtime.desktopEvents.screens).toEqual(changed));
+      const beforeDisconnect = events.length;
       for (const socket of sockets.clients) socket.terminate();
-      await vi.waitFor(() => expect(hob.runtime.desktopEvents.screens).toEqual([]));
+      await vi.waitFor(() => expect(events.slice(beforeDisconnect)).toContainEqual([]));
       await vi.waitFor(() => expect(connections).toBe(2), { timeout: 4000 });
       await vi.waitFor(() => expect(hob.runtime.desktopEvents.screens).toEqual(snapshot));
       expect(events).toContainEqual(changed);
+      expect(timers.mock.calls.some(([, delay]) => delay === 1000)).toBe(true);
       unsubscribe();
     } finally {
+      vi.restoreAllMocks();
       hob.close();
       for (const socket of sockets.clients) socket.terminate();
       await new Promise<void>((resolve) => sockets.close(() => resolve()));
@@ -391,6 +397,9 @@ describe("云桌面配置", () => {
   });
   it("启动时未配置的桌面在配置出现后会自动连接", async () => {
     const hob = makeHob();
+    const realSetTimeout = globalThis.setTimeout;
+    const timers = vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback: TimerHandler, delay?: number, ...args: unknown[]) =>
+      realSetTimeout(callback, delay === 1000 ? 1 : delay, ...args)) as typeof setTimeout);
     const server = createServer();
     const sockets = new WebSocketServer({ server });
     sockets.on("connection", (socket) => socket.send(JSON.stringify({ type: "screens", screens: [{ id: "hob", running: true, browserRunning: false, viewers: 0, lastActiveAt: null }] })));
@@ -400,7 +409,9 @@ describe("云桌面配置", () => {
       hob.runtime.settings.setDesktop(1, { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, enabled: true });
       writeSecret(hob.home, "desktop:token", "token");
       await vi.waitFor(() => expect(hob.runtime.desktopEvents.screens[0]?.id).toBe("hob"), { timeout: 4000 });
+      expect(timers.mock.calls.some(([, delay]) => delay === 1000)).toBe(true);
     } finally {
+      vi.restoreAllMocks();
       hob.close();
       for (const socket of sockets.clients) socket.terminate();
       await new Promise<void>((resolve) => sockets.close(() => resolve()));

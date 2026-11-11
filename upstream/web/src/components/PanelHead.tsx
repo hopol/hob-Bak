@@ -9,6 +9,7 @@ export function PanelHead({ title, children, root = false, close = false, classN
     <button className={`hob-icon-btn${mobileOnly ? " panel-mobile-back" : ""}`} title="返回" onClick={root ? closeSheet : backPanel}><Icon name="left" size={18} /></button>
     {title}
     {children}
-    {close ? <button className="hob-icon-btn panel-close" title="关闭" onClick={closePanelPages}><Icon name="close" size={17} /></button> : null}
+    {/* 只叠了一层时返回就是关掉，不再多放一个 ×；叠了几层时 × 一次关到底 */}
+    {close && s.panelStack.length > 1 ? <button className="hob-icon-btn panel-close" title="关闭" onClick={closePanelPages}><Icon name="close" size={17} /></button> : null}
   </div>;
 }

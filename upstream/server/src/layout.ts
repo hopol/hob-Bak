@@ -25,7 +25,7 @@ const BACKUP_MARKER = ".hob-backup.json";
 const FALLBACK_OWNER = "hob";
 
 /** 只有 v2 布局才有的根条目：根上出现别的东西就说明还是 v1。 */
-const V2_ROOT_ENTRIES = new Set(["layout.json", "system", "cache", "knowledge", "skills", "assistants", "archive"]);
+const V2_ROOT_ENTRIES = new Set(["layout.json", "system", "cache", "knowledge", "skills", "assistants", "groups", "archive"]);
 
 type MoveKind = "dir" | "file";
 
@@ -83,8 +83,9 @@ export interface MigrateOptions {
 function readJsonFile<T>(path: string): T | undefined {
   try {
     return JSON.parse(readFileSync(path, "utf8")) as T;
-  } catch {
-    return undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error(`读取 ${path} 失败：${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
 }
 
@@ -204,7 +205,7 @@ export function isCurrentLayout(home: string): boolean {
 }
 
 function createFreshLayout(home: string): void {
-  for (const dir of ["system", "cache", "knowledge", "skills", "assistants", "archive/assistants"]) {
+  for (const dir of ["system", "cache", "knowledge", "skills", "assistants", "groups", "archive/assistants"]) {
     mkdirSync(join(home, dir), { recursive: true });
   }
   writeJsonAtomic(layoutFile(home), { version: LAYOUT_VERSION });
@@ -341,7 +342,13 @@ function jobDirs(home: string): JobDir[] {
   const out: JobDir[] = [];
   for (const id of readdirSync(root)) {
     const dir = join(root, id);
-    const stored = readJsonFile<{ assistantId?: unknown }>(join(dir, "job.json"));
+    let stored: { assistantId?: unknown } | undefined;
+    try { stored = readJsonFile<{ assistantId?: unknown }>(join(dir, "job.json")); }
+    catch (error) {
+      console.error(error);
+      out.push({ id, dir, assistantId: FALLBACK_OWNER });
+      continue;
+    }
     if (!stored) continue;
     out.push({ id, dir, assistantId: typeof stored.assistantId === "string" && stored.assistantId ? stored.assistantId : FALLBACK_OWNER });
   }
@@ -566,6 +573,8 @@ function jobJsonFiles(home: string): string[] {
 
 function rewriteStructuredData(home: string, map: PathMap, log: Log): void {
   for (const file of jobJsonFiles(home)) {
+    try { readJsonFile(file); }
+    catch (error) { log.write(`跳过损坏的任务记录：${error instanceof Error ? error.message : String(error)}`); continue; }
     const changed = rewritePaths(file, map);
     if (changed.length) log.write(`  改写 ${relative(home, file)}：${changed.length} 处路径`);
   }
@@ -687,8 +696,8 @@ export function migrateHome(home: string, options: MigrateOptions = {}): Migrati
     }
     writeJsonAtomic(split.to, merged);
     log.write(`拆 ${relative(home, split.from)}：${split.items.length} 条 → ${relative(home, split.to)}`);
-    rmSync(split.from, { force: true });
   }
+  for (const source of new Set(plan.splits.map((split) => split.from))) rmSync(source, { force: true });
   for (const orphan of plan.orphans) {
     log.write(`孤儿助手 ${orphan}：任务、审批、定时搬进 ${relative(home, join(archiveAssistantsDir(home), `${orphan}-orphan`))}`);
   }
@@ -697,7 +706,7 @@ export function migrateHome(home: string, options: MigrateOptions = {}): Migrati
   cleanupLegacyDirs(home, log);
 
   writeJsonAtomic(movesFile(home), { version: LAYOUT_VERSION, home, movedAt: new Date().toISOString(), entries: map.toJSON() } satisfies MovesFile);
-  for (const dir of ["cache", "knowledge", "skills", "assistants", "archive/assistants"]) mkdirSync(join(home, dir), { recursive: true });
+  for (const dir of ["cache", "knowledge", "skills", "assistants", "groups", "archive/assistants"]) mkdirSync(join(home, dir), { recursive: true });
   writeJsonAtomic(layoutFile(home), { version: LAYOUT_VERSION });
   log.write("写完 system/moves.json 和 layout.json，迁移结束");
 

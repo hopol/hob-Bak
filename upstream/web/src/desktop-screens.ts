@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import type { DesktopScreen } from "../../shared/types.ts";
 import { desktopMockScene } from "./mock.ts";
+import { realApi as api } from "./api.ts";
 import { MOCK } from "./store.ts";
 
-interface Snapshot { screens: DesktopScreen[]; profiles: Record<string, string> }
+interface Snapshot { screens: DesktopScreen[]; profiles: Record<string, string>; error?: string }
 
 /** 首次和 SSE 重连拉快照，其余变化由服务端推送。 */
 export function useDesktopScreens(): Snapshot {
@@ -20,11 +21,9 @@ export function useDesktopScreens(): Snapshot {
     const refresh = async () => {
       const current = version;
       try {
-        const response = await fetch("/api/desktop/screens");
-        if (!response.ok) throw new Error("无法读取屏幕状态。");
-        const result = await response.json() as Snapshot;
+        const result = await api.desktopScreens();
         if (alive) setSnapshot((old) => ({ profiles: result.profiles, screens: version === current ? result.screens : old.screens }));
-      } catch { if (alive) setSnapshot({ screens: [], profiles: {} }); }
+      } catch (error) { if (alive) setSnapshot((old) => ({ ...old, error: error instanceof Error ? error.message : String(error) })); }
     };
     const events = new EventSource("/api/events");
     events.onopen = () => { void refresh(); };

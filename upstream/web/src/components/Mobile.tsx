@@ -1,14 +1,16 @@
 // 手机（宽 < 768px）：列表页 + 右栏内容的整页。
-import { pinList } from "../home.ts";
+import { conversations, pinList } from "../home.ts";
 import { Icon } from "../icons.tsx";
-import { newAssistant, openKnowledge, openSettings, setQuery, setSearch, useApp, type PanelPage } from "../store.ts";
+import { openKnowledge, openSettings, setQuery, setSearch, useApp, type PanelPage } from "../store.ts";
 import { HomeSections, pinLayout, Pin } from "./HomeSections.tsx";
+import { GroupPin } from "./Groups.tsx";
+import { PlusButton } from "./GroupCreate.tsx";
 import { Panel } from "./Panel.tsx";
 import { usePinDrag } from "./PinDrag.ts";
 
 export function MobileList() {
   const s = useApp();
-  const pins = pinList(s.assistants, s.query);
+  const pins = pinList(conversations(s.assistants, s.groups, s.groupPrefs), s.query);
   const drag = usePinDrag(pins, s.query.trim().length > 0);
   const layout = pinLayout(pins.length);
 
@@ -35,16 +37,18 @@ export function MobileList() {
             <button className="hob-icon-btn" title="搜索助手" onClick={() => setSearch(true)}>
               <Icon name="search" size={19} />
             </button>
-            <button className="hob-icon-btn" title="创建专属助手" onClick={newAssistant}>
-              <Icon name="plus" size={21} />
-            </button>
+            <PlusButton size={21} />
           </>
         )}
       </div>
       <div className={`mpins${layout.cls}${drag.locked ? " locked" : ""}`} ref={drag.grid}>
-        {drag.order.map((a) => (
-          <div className={["pinslot", drag.className(a.id)].filter(Boolean).join(" ")} key={a.id} data-pin={a.id}>
-            <Pin a={a} size={layout.size} drag={drag.target(a.id)} />
+        {drag.order.map((row) => (
+          <div className={["pinslot", drag.className(row.id)].filter(Boolean).join(" ")} key={row.id} data-pin={row.id}>
+            {row.kind === "assistant" ? (
+              <Pin a={row.a} size={layout.size} drag={drag.target(row.id)} />
+            ) : (
+              <GroupPin g={row.g} size={layout.size} drag={drag.target(row.id)} />
+            )}
           </div>
         ))}
       </div>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Approval, AssistantSummary, Job, Routine } from "../../shared/types.ts";
-import { homeGroups, pinList, RECENT } from "../src/home.ts";
+import type { Approval, AssistantSummary, GroupSummary, Job, Routine } from "../../shared/types.ts";
+import { conversations, homeGroups, pinList, RECENT } from "../src/home.ts";
 
 const NOW = Date.UTC(2026, 10, 2, 12, 0, 0);
 /** n 分钟前（ISO，和接口给的一致用 Z）。 */
@@ -68,6 +68,23 @@ function index<T extends { id: string }>(list: T[]): Record<string, T> {
   const out: Record<string, T> = {};
   for (const x of list) out[x.id] = x;
   return out;
+}
+
+/** 首页把助手和群归一成一种行；置顶、排先后都在这一层。 */
+const rows = (list: AssistantSummary[]) => conversations(list, [], {});
+
+function group(id: string, extra: Partial<GroupSummary> = {}): GroupSummary {
+  return {
+    id,
+    name: id,
+    purpose: "",
+    ownerId: "hob",
+    members: ["hob"],
+    createdAt: minsAgo(60 * 24 * 20),
+    unread: 0,
+    busy: [],
+    ...extra,
+  };
 }
 
 describe("首页分组", () => {
@@ -150,7 +167,7 @@ describe("首页分组", () => {
 });
 
 describe("置顶先后", () => {
-  const at = (list: AssistantSummary[]) => pinList(list, "").map((a) => a.id);
+  const at = (list: AssistantSummary[]) => pinList(rows(list), "").map((row) => row.id);
 
   it("都没排过时按创建时间，先建的在前", () => {
     expect(at([
@@ -181,8 +198,8 @@ describe("置顶先后", () => {
       asst("folded", { pinned: true, hidden: true }),
       asst("wifi", { pinned: true, pinOrder: 1, name: "网络管家", duty: "网络" }),
     ];
-    expect(pinList(list, "").map((a) => a.id)).toEqual(["hob", "wifi"]);
-    expect(pinList(list, "网络").map((a) => a.id)).toEqual(["wifi"]);
+    expect(pinList(rows(list), "").map((row) => row.id)).toEqual(["hob", "wifi"]);
+    expect(pinList(rows(list), "网络").map((row) => row.id)).toEqual(["wifi"]);
   });
 
   it("首页分组里的置顶也跟着位置走", () => {
@@ -196,6 +213,98 @@ describe("置顶先后", () => {
       routines: [],
       query: "",
     });
-    expect(groups.pins.map((a) => a.id)).toEqual(["b", "a"]);
+    expect(groups.pins.map((row) => row.id)).toEqual(["b", "a"]);
+  });
+});
+
+describe("群和助手混在一起", () => {
+  const source = (assistants: AssistantSummary[], groups: GroupSummary[], groupPrefs: Record<string, { pinned: boolean; pinOrder?: number }> = {}) =>
+    homeGroups({ assistants, groups, groupPrefs, jobs: {}, approvals: {}, routines: [], query: "" }, NOW);
+
+  it("对话里群和助手按最近消息排在一起", () => {
+    const result = source(
+      [
+        asst("hob", { name: "Hob", last: { text: "刚看完了", at: minsAgo(30) } }),
+        asst("house", { name: "家里 NAS", last: { text: "备份好了", at: minsAgo(2) } }),
+      ],
+      [group("g-home", { name: "家里机器", last: { at: minsAgo(10), speaker: "server", text: "开始检查下载目录" } })],
+    );
+    expect(result.rows.map((row) => row.id)).toEqual(["house", "g-home", "hob"]);
+    expect(result.rows.map((row) => row.kind)).toEqual(["assistant", "group", "assistant"]);
+  });
+
+  it("群置顶后排进头部那一排，位置和助手共用一条数轴", () => {
+    const result = source(
+      [
+        asst("hob", { pinned: true, pinOrder: 1 }),
+        asst("page", { pinned: true, pinOrder: 0 }),
+      ],
+      [group("g-home", { last: { at: minsAgo(1), speaker: "user", text: "在吗" } })],
+      { "g-home": { pinned: true, pinOrder: 2 } },
+    );
+    expect(result.pins.map((row) => row.id)).toEqual(["page", "hob", "g-home"]);
+  });
+
+  it("没排过位置的群排在排过的后面，按最近消息", () => {
+    const result = source(
+      [asst("hob", { last: { text: "旧消息", at: minsAgo(90) } })],
+      [
+        group("g-old", { last: { at: minsAgo(60), speaker: "user", text: "旧" } }),
+        group("g-new", { last: { at: minsAgo(3), speaker: "user", text: "新" } }),
+      ],
+    );
+    expect(result.rows.map((row) => row.id)).toEqual(["g-new", "g-old", "hob"]);
+  });
+
+  it("搜索同时命中群名和负责什么", () => {
+    const result = homeGroups(
+      {
+        assistants: [asst("hob", { name: "Hob" })],
+        groups: [group("g-home", { name: "家里机器", purpose: "存储、备份和服务" })],
+        groupPrefs: {},
+        jobs: {},
+        approvals: {},
+        routines: [],
+        query: "备份",
+      },
+      NOW,
+    );
+    expect(result.searching).toBe(true);
+    expect(result.rows.map((row) => row.id)).toEqual(["g-home"]);
+  });
+
+  it("有开着的话题在等你回答，群那行记成等你；关了的话题不算", () => {
+    const project = { id: "p-1", title: "筛选", stage: "clarify" as const, done: 0, total: 0, waitingUser: true };
+    const rows = (topics: GroupSummary[]) => conversations([], [group("g-team"), ...topics], {});
+    const waiting = (list: ReturnType<typeof rows>) => (list[0]?.kind === "group" ? list[0].g.waiting : null);
+    expect(waiting(rows([group("t-ask", { parentId: "g-team", project })]))).toBe(true);
+    expect(waiting(rows([group("t-closed", { parentId: "g-team", project, closedAt: minsAgo(1) })]))).toBe(false);
+  });
+
+  it("话题不进首页，群的未读、忙和最近一条把各话题的算进来", () => {
+    const result = source(
+      [asst("hob", { last: { text: "刚看完了", at: minsAgo(30) } })],
+      [
+        group("g-topics", { unread: 1, busy: [], last: { at: minsAgo(20), speaker: "po", text: "综合里的最后一句" } }),
+        group("t-one", { parentId: "g-topics", unread: 2, busy: ["dev"], last: { at: minsAgo(1), speaker: "dev", text: "话题里的新消息" } }),
+        group("t-two", { parentId: "g-topics", unread: 0, busy: ["qa"], last: { at: minsAgo(5), speaker: "qa", text: "验收中" } }),
+      ],
+    );
+    // 只剩群和助手两行；置顶那一排也不列话题
+    expect(result.rows.map((row) => row.id)).toEqual(["g-topics", "hob"]);
+    const row = result.rows.find((entry) => entry.id === "g-topics");
+    expect(row?.kind === "group" ? row.g.unread : null).toBe(3);
+    expect(row?.kind === "group" ? row.g.busy : null).toEqual(["dev", "qa"]);
+    // 预览和时间取综合和各话题里最新的那条，出自话题就带上话题名；有话题在动，群在首页里跟着往上排
+    expect(row?.kind === "group" ? row.g.last?.text : null).toBe("话题里的新消息");
+    expect(row?.kind === "group" ? row.g.lastTopic : null).toBe("t-one");
+    expect(row?.at).toBe(minsAgo(1));
+    expect(row?.kind === "group" ? row.g.waiting : null).toBe(false);
+    expect(
+      pinList(
+        conversations([], [group("g-topics"), group("t-one", { parentId: "g-topics" })], { "g-topics": { pinned: true }, "t-one": { pinned: true } }),
+        "",
+      ).map((entry) => entry.id),
+    ).toEqual(["g-topics"]);
   });
 });

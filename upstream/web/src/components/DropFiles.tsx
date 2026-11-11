@@ -50,7 +50,7 @@ export function DropFiles() {
       clearTimeout(idle.current);
       setOver(false);
       const files = droppedFiles(event.dataTransfer);
-      if (files.length && s.sel) attach(files, s.sel);
+      if (files.length) attach(files);
     };
     // 捕获阶段：对话里谁先拦了拖动都不影响这里接住文件
     const opts = { capture: true } as const;

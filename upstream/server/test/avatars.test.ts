@@ -16,9 +16,19 @@ import { createFromDraft } from "../src/actions.ts";
 import { createApp } from "../src/http.ts";
 import { buildSystemPrompt } from "../src/prompt.ts";
 import { buildRouterTools } from "../src/router-tools.ts";
+import { propArtSchema } from "../src/prop-art-schema.ts";
 import { call, makeHob, text } from "./helpers.ts";
 
 describe("头像数据", () => {
+  it("两个头像工具共用完整的自画道具参数定义", () => {
+    const hob = makeHob();
+    try {
+      const tools = buildRouterTools(hob.runtime, "hob");
+      for (const name of ["create_assistant", "set_avatar"]) {
+        expect(tools.find((tool) => tool.name === name)!.parameters.properties.prop_art).toEqual(propArtSchema);
+      }
+    } finally { hob.close(); }
+  });
   it("道具 id 和「道具:颜色」都认；自画的记成 custom / custom:颜色；其它一律不认", () => {
     expect(parseSprite("server")).toEqual({ prop: "server", color: "slate" });
     expect(parseSprite("hob")).toEqual({ prop: "hob", color: "orange" });
@@ -366,29 +376,28 @@ describe("set_avatar 工具", () => {
     }
   });
 
-  it("propose_assistant 带 prop_art：草稿存自画道具，建出来的助手头像正确；画错的不出草稿", async () => {
+  it("create_assistant 带 prop_art：直接建好的助手头像正确；画错的不建", async () => {
     const hob = makeHob();
     try {
       hob.faux.setResponses([
-        call("propose_assistant", { name: "代理", duty: "代理转发", dutyLong: "负责代理和转发。", sprite: "custom", prop_art: GOOD, facts: ["负责代理"] }),
-        text("草稿好了。"),
+        call("create_assistant", { name: "代理", duty: "代理转发", dutyLong: "负责代理和转发。", sprite: "custom", prop_art: GOOD, facts: ["负责代理"] }),
+        text("建好了。"),
       ]);
       await hob.runtime.router.send("hob", { text: "代理和转发的事多，分个助手吧" });
       await hob.runtime.router.waitIdle("hob");
       const draft = hob.runtime.store.drafts()[0];
-      expect(draft).toMatchObject({ sprite: "custom", prop: GOOD });
+      expect(draft).toMatchObject({ sprite: "custom", prop: GOOD, status: "created" });
+      expect(hob.runtime.store.assistant(draft.createdAssistantId!)?.sprite).toBe("custom");
+      expect(hob.runtime.store.assistant(draft.createdAssistantId!)?.prop).toEqual(GOOD);
 
       hob.faux.appendResponses([
-        call("propose_assistant", { name: "错了", duty: "试试", dutyLong: "试试。", sprite: "custom", prop_art: { ...GOOD, pal: { h: "yellow" } } }),
+        call("create_assistant", { name: "错了", duty: "试试", dutyLong: "试试。", sprite: "custom", prop_art: { ...GOOD, pal: { h: "yellow" } }, facts: ["试试"] }),
         text("重画了。"),
       ]);
       await hob.runtime.router.send("hob", { text: "再画一个试试" });
       await hob.runtime.router.waitIdle("hob");
       expect(hob.runtime.store.drafts().find((item) => item.name === "错了")).toBeUndefined();
-
-      const result = await createFromDraft(hob.runtime, draft.id);
-      expect(result.status).toBe(200);
-      expect((result.body as { assistant: Assistant }).assistant).toMatchObject({ sprite: "custom", prop: GOOD });
+      expect(hob.runtime.store.assistants().find((item) => item.name === "错了")).toBeUndefined();
     } finally {
       hob.close();
     }

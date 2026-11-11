@@ -241,7 +241,7 @@ export interface Assistant {
   /** 知识库二期：绑定的用户知识库 id。缺省 = 没绑定：不自动查，也没有 search_knowledge */
   knowledge?: string[];
   createdAt: Iso;
-  splitFrom?: { from: string; at: Iso; conversations: number };
+  splitFrom?: { from: string; at: Iso; readonly conversations?: number }; // conversations 仅供读取旧数据
 }
 
 export type RouterActivity = { state: "thinking" | "tool"; label: string };
@@ -253,6 +253,122 @@ export interface AssistantSummary extends Assistant {
   busy: boolean; // Router 正在回复（在跑的任务不算，任务状态看任务卡）
   activity?: RouterActivity | null;
 }
+
+/** 群的工作方式：software 是「软件开发」，群主有事项（需求澄清 → 任务拆分 → 执行 → 验收）。没有就是「无」。 */
+export type WorkflowId = "software";
+
+/**
+ * 群：多个助手和用户一起说话的地方，长期留着，用户点「结束这个群」才归档。
+ * 话题是挂在群下面的群（有 parentId）：一件事一条时间线，成员在每个话题里各有一份会话；
+ * 群自己的那条时间线就是「综合」。话题的成员、群主、负责什么、工作方式都取所属的群。
+ */
+export interface Group {
+  id: string; // "g-" + 短 id；话题也是
+  name: string; // 话题：话题名
+  purpose: string; // 负责什么，一句话
+  instructions?: string; // 本群补充说明，话题继承所属群
+  ownerId: string; // 群主，必须在 members 里
+  members: string[]; // assistantId，含群主，顺序就是成员列表的顺序
+  models?: { conversation?: ModelPick; work?: ModelPick }; // 本群模型默认值
+  memberModels?: Record<string, { conversation?: ModelPick; work?: ModelPick }>; // 各成员在本群的模型覆盖
+  createdAt: Iso;
+  workflow?: WorkflowId; // 工作方式；没有就是「无」
+  parentId?: string; // 有它的是话题：所属的群
+  createdBy?: string; // 话题：谁开的，"user" 或成员 assistantId
+  closedAt?: Iso; // 话题：关了的时间；关了不能再发消息，能重新打开
+  closeNote?: string; // 话题：关的时候写的结论或原因
+}
+
+/** 话题里的事项：左栏话题行、综合的话题卡、话题顶上的进度条用。 */
+export interface TopicProject {
+  id: string;
+  title: string;
+  stage: ProjectStage;
+  done: number; // 完成的子任务数
+  total: number; // 子任务总数
+  waitingUser: boolean; // 有等用户回答的提问卡，轮到用户做的子任务，或者子任务拆好了等用户点开始
+  current?: string; // 现在轮到谁（assistantId）：澄清、拆分是负责人，执行是正在做子任务的成员，验收是验收的成员
+}
+
+export type InheritedGroupModel = { source: "group" | "assistant" | "global"; pick: ModelPick };
+export type GroupMemberModel = { source: "member" | InheritedGroupModel["source"]; pick: ModelPick; inherited: InheritedGroupModel };
+export interface GroupProfile {
+  group: Group;
+  rules: Rule[];
+  memberModels: Record<string, Record<"conversation" | "work", GroupMemberModel>>;
+}
+
+/** 左栏里的一行群，或者群里的一个话题。 */
+export interface GroupSummary extends Group {
+  last?: { at: Iso; speaker: string | "user"; text: string }; // 左栏预览「服务器：…」
+  unread: number;
+  busy: string[]; // 正在这个群（话题）里说话、或者有任务在跑的成员
+  project?: TopicProject; // 话题里有事项时
+}
+
+/**
+ * 群里的条目：在 Item 上加发言人。user 条目的 speaker 是 "user"。id 是 "g-<序号>"。
+ * forwardedFrom：从综合转进话题的用户消息，记着原来那条在哪。
+ */
+export type GroupItem = Item & { speaker: string | "user"; forwardedFrom?: { groupId: string; itemId: string } };
+
+export interface GroupItemsPage extends Omit<ItemsPage, "items" | "drafts" | "delegations" | "pageLive"> {
+  items: GroupItem[]; // 旧 → 新
+}
+
+/** 事项走到哪一步。只能按顺序走：需求澄清 → 任务拆分 → 执行 → 验收。 */
+export type ProjectStage = "clarify" | "plan" | "doing" | "review" | "done" | "dropped";
+
+/** 群里的一个事项：原始需求、问答、需求说明、子任务、验收结果和结论都记在它里面。 */
+export interface Project {
+  id: string; // "p-" + 短 id
+  groupId: string; // 事项所在的话题（以前直接立在群里的是群 id）
+  title: string;
+  ownerId: string; // 负责的成员：立事项的群主
+  stage: ProjectStage;
+  /** 原始需求：叫到群主的那条用户消息，原样 */
+  request: { text: string; files?: string[]; quote?: { itemId: string; text: string }; itemId?: string; at: Iso };
+  clarify: ProjectQuestion[]; // 需求澄清的问答
+  requirements?: { content: string; acceptance: string[]; updatedAt: Iso };
+  subtasks: Subtask[];
+  cwd?: string; // 所有子任务共用的工作目录；不填则各自在任务自己的目录里做
+  startedAt?: Iso; // 开始执行的时间
+  checks?: ProjectCheck[]; // 逐条验收结果，index 是验收标准的序号（从 1 开始）；同一条以最新的为准
+  summary?: string; // 结束时给用户的结论；放弃时是原因
+  itemId: string; // 群时间线里事项卡的条目 id
+  createdAt: Iso;
+  updatedAt: Iso;
+  endedAt?: Iso;
+}
+
+/** 需求澄清里问用户的一个问题。 */
+export interface ProjectQuestion {
+  title: string;
+  why?: string; // 为什么要定它
+  options?: string[];
+  recommended?: string;
+  answer?: string;
+  askedBy: string; // 问的人（成员 assistantId）
+  at: Iso;
+  answeredAt?: Iso;
+}
+
+/** 事项拆出来的一份工作；执行时就是一个任务。 */
+export interface Subtask {
+  n: number; // 序号，从 1 开始
+  title: string;
+  assignee: string; // 成员 assistantId，或 "user"
+  brief: string;
+  after: number[]; // 前置子任务的序号
+  check?: boolean; // 验收子任务
+  jobId?: string; // 成员的子任务对应的任务
+  doneAt?: Iso; // 用户的子任务：点了完成的时间
+  notifiedAt?: Iso; // 轮到它时通知过被分到的人（或用户）的时间，重启后不会重复通知
+  startError?: string; // 任务没能开起来时的原因；重新拆分会替换这个还没开始的子任务
+}
+
+/** 一条验收标准的验收结果；index 是验收标准的序号，从 1 开始（和事项页上的编号一致）。 */
+export interface ProjectCheck { index: number; passed: boolean; evidence: string; files?: string[]; jobId: string; at: Iso }
 
 export interface Rule {
   id: string;
@@ -269,9 +385,9 @@ export interface WorklogEntry {
 }
 
 export interface RoutineRun {
-  jobId: string;
+  jobId?: string;
   at: Iso;
-  status: JobStatus;
+  status: JobStatus | "handed";
   durationMs?: number; // 技能二期：这次用时
   tools?: number; // 技能二期：工具调用次数
   tokens?: number; // 技能二期：输入加输出 token
@@ -291,14 +407,15 @@ export interface RoutineChecks {
 
 /** 定时到点（或点「立即运行」）这一次的结果。 */
 export interface RoutineTick {
-  outcome: "job" | "notify" | "quiet" | "failed"; // job 开了任务；notify 已发到对话；quiet 没变化；failed 检查失败
+  outcome: "job" | "notify" | "quiet" | "failed" | "handed";
   job?: Job;
   reason?: string; // failed 时的原因
 }
 
 export interface Routine {
   id: string;
-  assistantId: string;
+  assistantId: string; // 谁来做
+  groupId?: string; // 结果发到的群或话题
   name: string; // 如 "每日简报"
   instruction: string; // 要做什么
   schedules: string[]; // cron 表达式（如 "0 9 * * *"）或具体时间（如 "2026-11-08T09:00"）；可多个（"再加一个"）
@@ -424,10 +541,14 @@ export interface Job {
   modelReason?: string; // 换了模型的原因，如「需要看图，换成了 X」
   inputs?: string[]; // 交给任务的附件（绝对路径）
   routineId?: string; // 由定时触发
+  after?: string[]; // 前置任务：这些都做完了才开始，有一个没做成它就不开始
   sediment?: SedimentStatus; // 在原任务中沉淀技能，不改变任务状态
   skills?: string[]; // 派活时交给任务的本助手技能
   skillsUsed?: string[]; // 这次读过的本助手技能（AssistantSkill.name）
   delegationId?: string; // 转交回合创建的任务
+  groupId?: string; // 在群里开的任务：卡片进群的时间线，结果回到这个成员在群里的会话
+  /** 事项里某个子任务的任务：事项 id 和子任务序号 */
+  project?: { id: string; n: number };
   /** 续做前每一轮结束时的样子（第 0 轮起）。对话里前面几张任务卡照它显示，最后一张跟着任务实时变 */
   rounds?: JobRound[];
   activity: ActivityLine[]; // 最近 200 行
@@ -444,6 +565,7 @@ export interface JobRound {
   startedAt?: Iso;
   endedAt?: Iso;
   durationMs?: number;
+  sediment?: SedimentStatus; // 这一轮沉淀出来什么了（续做后回头看这一轮时用）
 }
 
 export interface ApprovalOption {
@@ -452,18 +574,39 @@ export interface ApprovalOption {
   always?: boolean; // 选中后写一条 allow 规则
 }
 
+/** 一张卡里的一个问题（ask_user 的 questions）：选项 key 照旧 A、B、C。 */
+export interface ApprovalQuestion {
+  title: string; // 问题
+  why?: string; // 为什么要定它
+  options: ApprovalOption[]; // 2 到 3 个
+  recommended?: ApprovalOption["key"]; // 推荐哪个选项
+}
+
+/** 一个问题答了什么：选了选项（key），或者自己写了一句（text）。 */
+export interface ApprovalAnswer {
+  key?: ApprovalOption["key"];
+  text?: string;
+}
+
 export interface Approval {
   id: string;
   assistantId: string; // 提问的助手
-  title: string; // 如 "发到公众号吗？"
+  title: string; // 如 "发到公众号吗？"；有 questions 时是整张卡的标题
   detail?: string; // 如 "发出去就撤不回了。你选之前我不会发。"
+  /** 单问题卡的选项；有 questions 时是空数组 */
   options: ApprovalOption[];
+  recommended?: ApprovalOption["key"]; // 单问题卡推荐哪个选项
+  /** 一张卡问几个问题（ask_user 的 questions）；每个问题的选项 key 照旧 A、B、C */
+  questions?: ApprovalQuestion[];
+  /** 多问题卡的答案，和 questions 一一对应 */
+  answers?: ApprovalAnswer[];
   status: "pending" | "answered" | "expired";
   chosen?: ApprovalOption["key"];
   /** 用户没选选项、而是自己写的那句（走 chosen 时没有这个字段） */
   answerText?: string;
   source: "router" | "job";
   jobId?: string;
+  groupId?: string; // 在群里提的问题：卡片进群的时间线
   ruleText?: string; // always 选项要写进规则的文字，如 "发布公众号"
   createdAt: Iso;
   answeredAt?: Iso;
@@ -475,7 +618,7 @@ export interface Draft {
   status: "pending" | "created" | "dismissed";
   name: string;
   sprite: SpriteId;
-  /** sprite 是 custom 时的画法（propose_assistant 的 prop_art） */
+  /** sprite 是 custom 时的画法（create_assistant / set_avatar 的 prop_art） */
   prop?: CustomProp;
   duty: string; // 一句话职责
   dutyLong: string; // 草稿卡 "职责" 行
@@ -483,7 +626,7 @@ export interface Draft {
   routinesText: string; // 草稿卡 "定时任务" 行的展示文字
   askFirst: string[]; // 执行前确认的事项
   instructions: string[]; // 补充说明（建好后写进新助手的 instructions）
-  carry: { conversations: number }; // 迁移几段对话（记忆是所有助手共用的一份，不用迁移）
+  readonly carry?: { readonly conversations?: number }; // 仅供读取旧数据，未实际迁移对话
   createdAssistantId?: string;
   createdAt: Iso;
 }
@@ -492,14 +635,16 @@ export type NoteIcon = "memory" | "rule" | "routine" | "split" | "info" | "skill
 
 export type Item = (
   | { kind: "user"; id: string; at: Iso; text: string; quote?: { itemId: string; text: string }; files?: string[]; from?: { assistantId: string; name: string; delegationId: string } }
-  | { kind: "assistant"; id: string; at: Iso; text: string; streaming?: boolean; routine?: { id: string; name: string; jobId?: string } }
-  | { kind: "note"; id: string; at: Iso; icon: NoteIcon; text: string; handbackId?: string; path?: string } // path：点了预览这个文件（如技能的 SKILL.md） // 居中灰色一行，如 "记忆已更新 · 不看融资新闻"
+  | { kind: "assistant"; id: string; at: Iso; text: string; streaming?: boolean; routine?: { id: string; name: string; jobId?: string }; quote?: { itemId: string; text: string } }
+  | { kind: "note"; id: string; at: Iso; icon: NoteIcon; text: string; handbackId?: string; path?: string; targetGroupId?: string } // path：点了预览这个文件（如技能的 SKILL.md） // 居中灰色一行，如 "记忆已更新 · 不看融资新闻"
   | { kind: "question"; id: string; at: Iso; approvalId: string }
   | { kind: "job"; id: string; at: Iso; jobId: string; round?: number } // 第几轮（续做一次 +1），缺省是第 0 轮
   | { kind: "delegation"; id: string; at: Iso; delegationId: string }
   | { kind: "draft"; id: string; at: Iso; draftId: string }
   | { kind: "image"; id: string; at: Iso; prompt: string; size?: string; startedAt: Iso; status: "pending" | "done" | "failed"; path?: string; error?: string }
   | { kind: "file"; id: string; at: Iso; path: string; name: string; meta?: string } // meta 如 "3200 字 · 4 张图"
+  | { kind: "project"; id: string; at: Iso; projectId: string } // 群时间线里的事项卡
+  | { kind: "topic"; id: string; at: Iso; topicId: string } // 综合时间线里的话题卡：开了话题、立事项开的话题
 ) & {
   /** 这条开启新的一组，前端在它上面拉开间距：事件触发的新一轮回复，或任务直接发进对话的图片、提问卡 */
   lead?: true;
@@ -803,6 +948,12 @@ export type HobEvent =
   | ({ type: "page-live" } & PageLive)
   | { type: "assistant"; assistant: AssistantSummary } // 新建或变化
   | { type: "assistant_removed"; id: string }
+  | { type: "group"; group: GroupSummary } // 新建或变化
+  | { type: "group_removed"; id: string }
+  | { type: "group-item"; groupId: string; item: GroupItem } // 新条目，或按 id 替换
+  | { type: "group-delta"; groupId: string; itemId: string; text: string } // 流式追加
+  | { type: "group-activity"; groupId: string; speaker: string; activity: RouterActivity | null }
+  | { type: "project"; project: Project } // 事项新建或变化
   | { type: "item"; assistantId: string; item: Item } // 新条目，或按 id 替换
   | { type: "delta"; assistantId: string; itemId: string; text: string } // 流式追加到 assistant 条目
   | { type: "job"; job: Job }
@@ -828,5 +979,8 @@ export interface SendMessageBody {
 /** POST /api/approvals/:id 的请求体：选一个选项（key），或者用户自己写的一段（text）。 */
 export interface AnswerApprovalBody {
   key?: ApprovalOption["key"];
+  /** 单问题卡：用户自己写的一段；多问题卡：整张卡的补充说明（可选） */
   text?: string;
+  /** 多问题卡：每个问题的答案，和 questions 一一对应 */
+  answers?: ApprovalAnswer[];
 }

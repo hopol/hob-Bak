@@ -71,22 +71,17 @@ describe("Router 上下文边界", () => {
     } finally { hob.close(); }
   });
 
-  it("模型切换时按全部注册模型计算预算，Worker 不覆盖", async () => {
+  it("对话和任务一样，接近模型上下文上限才压缩", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
-      const faux = fauxProvider({ provider: "budget", models: [{ id: "small", contextWindow: 360_000 }, { id: "large", contextWindow: 1_000_000 }] });
+      const faux = fauxProvider({ provider: "budget", models: [{ id: "large", contextWindow: 1_000_000 }] });
       const host = new PiHost({ engineDir: join(hob.home, "budget-engine"), nativeProviders: [faux.provider] });
-      const options = { cwd: hob.home, model: "budget/small", thinking: "off" as const, memory: "off" as const, systemPrompt: () => "测试", tools: [], customTools: [] };
+      const options = { cwd: hob.home, model: "budget/large", thinking: "off" as const, memory: "off" as const, systemPrompt: () => "测试", tools: [], customTools: [] };
       const router = await host.open({ ...options, file: join(hob.home, "budget-router.jsonl"), spillDir: join(hob.home, "spill") });
-      const runtime = await host.runtime();
-      const small = runtime.getModel("budget", "small")!;
-      const large = runtime.getModel("budget", "large")!;
-      expect(router.session.settingsManager.getCompactionSettings(small).reserveTokens).toBe(260000);
-      expect(router.session.settingsManager.getCompactionSettings(large).reserveTokens).toBe(900000);
-      await router.session.setModel(large);
-      expect(router.session.settingsManager.getCompactionSettings(router.session.model).reserveTokens).toBe(900000);
       const worker = await host.open({ ...options, file: join(hob.home, "budget-worker.jsonl") });
-      expect(worker.session.settingsManager.getCompactionSettings(large).reserveTokens).not.toBe(900000);
+      const large = (await host.runtime()).getModel("budget", "large")!;
+      expect(router.session.settingsManager.getCompactionSettings(large)).toEqual(worker.session.settingsManager.getCompactionSettings(large));
+      expect(router.session.settingsManager.getCompactionSettings(large).reserveTokens).toBeLessThan(100_000);
       router.session.dispose(); worker.session.dispose();
     } finally { hob.close(); }
   });

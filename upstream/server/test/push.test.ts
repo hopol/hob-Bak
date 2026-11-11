@@ -146,7 +146,7 @@ describe("推送触发规则", () => {
       pushApproval(deps, approvalOf("hob", "发到公众号吗？"));
       await flush();
       expect(fake.sent).toHaveLength(1);
-      expect(fake.sent[0]?.payload).toMatchObject({ title: "Hob", body: "发到公众号吗？", url: "/?a=hob" });
+      expect(fake.sent[0]?.payload).toMatchObject({ title: "发到公众号吗？", body: "Hob · 等待你的回答", url: "/?a=hob" });
 
       // 页面在前台：一个可见客户端就够了
       hob.runtime.push.setVisibility("c1", true);
@@ -160,12 +160,17 @@ describe("推送触发规则", () => {
       await flush();
       expect(fake.sent).toHaveLength(2);
 
+      // 群里提的问题：点开去群聊页
+      pushApproval(deps, { ...approvalOf("hob", "群里问"), groupId: "g-1" });
+      await flush();
+      expect(fake.sent[2]?.payload).toMatchObject({ title: "群里问", body: "Hob · 等待你的回答", url: "/#/group/g-1" });
+
       // 助手关了「需要我拍板时通知我」
       const hobAssistant = hob.runtime.store.assistant("hob")!;
       hob.runtime.store.saveAssistant({ ...hobAssistant, notify: false });
       pushApproval(deps, approvalOf("hob", "不该推"));
       await flush();
-      expect(fake.sent).toHaveLength(2);
+      expect(fake.sent).toHaveLength(3);
     } finally {
       hob.close();
     }
@@ -189,6 +194,11 @@ describe("推送触发规则", () => {
       pushJobEnd(deps, jobOf("hob", { status: "done" }));
       await flush();
       expect(fake.sent).toHaveLength(2);
+
+      // 群里的任务：点开去它所在的群
+      pushJobEnd(deps, jobOf("hob", { status: "stuck", statusReason: "卡住了", groupId: "g-1" }));
+      await flush();
+      expect(fake.sent[2]?.payload).toMatchObject({ url: "/#/group/g-1" });
     } finally {
       hob.close();
     }
