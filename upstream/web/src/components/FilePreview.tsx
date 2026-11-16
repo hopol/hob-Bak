@@ -1,4 +1,5 @@
 // 文件预览：桌面右侧抽屉（可切全宽），手机全屏页。按类型选展示方式，元数据来自 /api/files/meta。
+import { t } from "../../../shared/i18n.ts";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { FileMeta, PageLive } from "../../../shared/types.ts";
 import { livePageHtml } from "../../../shared/page-shell.ts";
@@ -62,16 +63,16 @@ function LivePreview({ page }: { page: PageLive }) {
   }, []);
   useEffect(() => {
     let active = true;
-    if (page.path) void fetchFileMeta(page.path).then((value) => { if (active) setMeta(value); }).catch((error: unknown) => setNotice(`无法加载文件信息：${error instanceof Error ? error.message : String(error)}`));
+    if (page.path) void fetchFileMeta(page.path).then((value) => { if (active) setMeta(value); }).catch((error: unknown) => setNotice(t("无法加载文件信息：{error}", { error: error instanceof Error ? error.message : String(error) })));
     return () => { active = false; };
   }, [page.path]);
   const writing = page.state !== "done";
   return <>
-    <Head name={page.title || "正在写页面…"} meta={meta} path={page.path || "page.html"} liveStatus={page.state === "writing" ? "正在生成…" : page.state === "failed" ? `生成失败：${page.error}` : undefined} disabled={writing} />
+    <Head name={page.title || t("正在写页面…")} meta={meta} path={page.path || "page.html"} liveStatus={page.state === "writing" ? t("正在生成…") : page.state === "failed" ? t("生成失败：{error}", { error: page.error ?? "" }) : undefined} disabled={writing} />
     <div className="fp-body">
       {page.state === "done" && /<\s*script\b/i.test(page.html) && meta ? <HtmlBody meta={meta} /> : <>
-        <div className="fp-note">网页在隔离环境中显示，不能访问 Hob 的数据。</div>
-        <iframe ref={frame} className="fp-frame" sandbox="allow-scripts" srcDoc={shell} onLoad={send} title={page.title || "正在写页面"} />
+        <div className="fp-note">{t("网页在隔离环境中显示，不能访问 Hob 的数据。")}</div>
+        <iframe ref={frame} className="fp-frame" sandbox="allow-scripts" srcDoc={shell} onLoad={send} title={page.title || t("正在写页面")} />
       </>}
     </div>
   </>;
@@ -107,19 +108,19 @@ function FilePreview({ path, title, find, page }: { path: string; title?: string
       <Head name={name} meta={meta} path={path} />
       <div className="fp-body">
         {load.state === "loading" ? (
-          <div className="fp-center dim"><DelayedText text="正在读取文件信息…" /></div>
+          <div className="fp-center dim"><DelayedText text={t("正在读取文件信息…")} /></div>
         ) : load.state === "error" ? (
           <div className="fp-center">
             <div className="fp-nofile">
               <Icon name="doc" size={22} />
-              <div>{load.outside ? "这个文件不在 Hob 的数据目录或任务的工作目录里，无法预览" : load.message}</div>
+              <div>{load.outside ? t("这个文件不在 Hob 的数据目录或任务的工作目录里，无法预览") : load.message}</div>
               <button
                 className="hob-btn"
                 onClick={() =>
-                  void copyText(path).then((ok) => setNotice(ok ? "路径已复制" : "复制失败：浏览器不允许写入剪贴板"))
+                  void copyText(path).then((ok) => setNotice(ok ? t("路径已复制") : t("复制失败：浏览器不允许写入剪贴板")))
                 }
               >
-                复制路径
+                {t("复制路径")}
               </button>
             </div>
           </div>
@@ -148,18 +149,18 @@ function Head({ name, meta, path, liveStatus, disabled }: { name: string; meta: 
           </div>
         ) : null}
       </div>
-      {disabled ? <button className="hob-icon-btn fp-act" title="下载" disabled><Icon name="dl" size={17} /></button> : <a className="hob-icon-btn fp-act" title="下载" href={fileUrl(path)} download={name}>
+      {disabled ? <button className="hob-icon-btn fp-act" title={t("下载")} disabled><Icon name="dl" size={17} /></button> : <a className="hob-icon-btn fp-act" title={t("下载")} href={fileUrl(path)} download={name}>
         <Icon name="dl" size={17} />
       </a>}
       <button
         className="hob-icon-btn fp-act"
-        title="在新窗口打开"
+        title={t("在新窗口打开")}
         disabled={disabled}
         onClick={() => window.open(fileUrl(path, { inline: true }), "_blank", "noopener")}
       >
         <Icon name="out" size={17} />
       </button>
-      <button className="hob-icon-btn fp-act fp-wide-btn" title="切换全宽" onClick={togglePreviewFull}>
+      <button className="hob-icon-btn fp-act fp-wide-btn" title={t("切换全宽")} onClick={togglePreviewFull}>
         <Icon name={full ? "shrink" : "expand"} size={17} />
       </button>
     </PanelHead>
@@ -179,7 +180,7 @@ function HtmlBody({ meta }: { meta: FileMeta }) {
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [meta.page]);
-  return <><div className="fp-note">网页在隔离环境中显示，不能访问 Hob 的数据。</div><iframe ref={frame} className="fp-frame" sandbox="allow-scripts" src={fileUrl(meta.path, { inline: true }) + (meta.page ? (document.documentElement.classList.contains("dark") ? "#dark" : "#light") : "")} title={meta.name} /></>;
+  return <><div className="fp-note">{t("网页在隔离环境中显示，不能访问 Hob 的数据。")}</div><iframe ref={frame} className="fp-frame" sandbox="allow-scripts" src={fileUrl(meta.path, { inline: true }) + (meta.page ? (document.documentElement.classList.contains("dark") ? "#dark" : "#light") : "")} title={meta.name} /></>;
 }
 
 function Body({ meta, find, page }: { meta: FileMeta; find?: string; page?: number }) {
@@ -210,9 +211,9 @@ function Body({ meta, find, page }: { meta: FileMeta; find?: string; page?: numb
         <div className="fp-center">
           <div className="fp-nofile">
             <Icon name="doc" size={22} />
-            <div>这种文件不在浏览器里预览，可以下载后打开。</div>
+            <div>{t("这种文件不在浏览器里预览，可以下载后打开。")}</div>
             <a className="hob-btn hob-btn-primary" href={fileUrl(meta.path)} download={meta.name}>
-              下载
+              {t("下载")}
             </a>
           </div>
         </div>
@@ -245,11 +246,11 @@ function ImageBody({ path, name, svg }: { path: string; name: string; svg: boole
   return (
     <>
       <div className="fp-img">
-        <button onClick={() => setOpen(true)} title="放大" className={loading ? "fp-img-loading" : undefined}>
+        <button onClick={() => setOpen(true)} title={t("放大")} className={loading ? "fp-img-loading" : undefined}>
           {loading ? <img className="fp-img-thumb" src={thumb} alt="" aria-hidden="true" /> : null}
           <img src={src} alt={name} onLoad={() => setStatus("loaded")} onError={() => setStatus("error")} style={loading ? { position: "absolute", opacity: 0 } : undefined} />
-          {loading ? <span className="fp-img-spin" aria-label="图片加载中"><Icon name="spin" size={18} w={2.2} className="spin" /></span> : null}
-          {status === "error" ? <span>图片加载失败</span> : null}
+          {loading ? <span className="fp-img-spin" aria-label={t("图片加载中")}><Icon name="spin" size={18} w={2.2} className="spin" /></span> : null}
+          {status === "error" ? <span>{t("图片加载失败")}</span> : null}
         </button>
       </div>
       {open ? <ImageViewer src={src} thumb={svg ? undefined : thumb} name={name} onClose={() => setOpen(false)} /> : null}
@@ -271,7 +272,7 @@ function TextBody({ meta, find }: { meta: FileMeta; find?: string }) {
     void (async () => {
       try {
         const res = await fetch(fileUrl(meta.path, { truncate: true }));
-        if (!res.ok) throw new Error(`读取失败（${res.status}）`);
+        if (!res.ok) throw new Error(t("读取失败（{status}）", { status: res.status }));
         if (live) setText(await res.text());
       } catch (e) {
         if (live) setError(e instanceof Error ? e.message : String(e));
@@ -283,11 +284,11 @@ function TextBody({ meta, find }: { meta: FileMeta; find?: string }) {
   }, [meta.path]);
 
   if (error) return <div className="fp-center fp-nofile">{error}</div>;
-  if (text === null) return <div className="fp-center dim"><DelayedText text="正在读取内容…" /></div>;
+  if (text === null) return <div className="fp-center dim"><DelayedText text={t("正在读取内容…")} /></div>;
 
   const notice =
     meta.size > MAX_TEXT ? (
-      <div className="fp-note">文件有 {fmtBytes(meta.size)}，只显示前 1 MB，完整内容请下载。</div>
+      <div className="fp-note">{t("文件有 {size}，只显示前 1 MB，完整内容请下载。", { size: fmtBytes(meta.size) })}</div>
     ) : null;
 
   if (meta.kind === "markdown") {
@@ -354,9 +355,9 @@ function CodeView({ text }: { text: string }) {
   return (
     <>
       <div className="fp-codebar">
-        <span className="dim">{lines.length} 行</span>
+        <span className="dim">{t("{n} 行", { n: lines.length })}</span>
         <button className="hob-btn" onClick={() => setWrap(!wrap)}>
-          {wrap ? "不自动换行" : "自动换行"}
+          {wrap ? t("不自动换行") : t("自动换行")}
         </button>
       </div>
       <div className={`fp-code mono${wrap ? " wrap" : ""}`}>
@@ -381,7 +382,7 @@ export function CsvView({ text, tsv }: { text: string; tsv: boolean }) {
     <>
       <div className="fp-codebar">
         <span className="dim">
-          {rows.length} 行{rows.length > 1000 ? "（只显示前 1000 行）" : ""}
+          {t("{n} 行", { n: rows.length })}{rows.length > 1000 ? t("（只显示前 1000 行）") : ""}
         </span>
       </div>
       <div className="fp-table-wrap">

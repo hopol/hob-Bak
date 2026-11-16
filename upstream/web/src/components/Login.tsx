@@ -1,7 +1,8 @@
 // 登录页：GET /api/me 401 时显示。
 import { useEffect, useState } from "react";
+import { localeName, t } from "../../../shared/i18n.ts";
 import { Avatar } from "../sprites.tsx";
-import { login, useApp } from "../store.ts";
+import { login, setLocale, useApp } from "../store.ts";
 
 export function Login() {
   const s = useApp();
@@ -24,13 +25,13 @@ export function Login() {
       <div className="card">
         <Avatar sprite="hob" size={88} free motion="home" />
         <div className="nm">Hob</div>
-        <div className="ds">请输入密码</div>
+        <div className="ds">{t("请输入密码")}</div>
         <label className={`field${shake ? " shake" : ""}`}>
           <input
             type="password"
             autoFocus
             value={pw}
-            placeholder="密码"
+            placeholder={t("密码")}
             onChange={(e) => setPw(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") go();
@@ -38,7 +39,10 @@ export function Login() {
           />
         </label>
         <button className="hob-btn hob-btn-primary" onClick={go} disabled={s.loggingIn}>
-          {s.loggingIn ? "正在登录…" : "登录"}
+          {s.loggingIn ? t("正在登录…") : t("登录")}
+        </button>
+        <button className="lang" type="button" onClick={() => setLocale(s.locale === "en" ? "zh-CN" : "en", false)}>
+          {s.locale === "en" ? "中文" : "English"}
         </button>
         {s.error ? (
           <div className="err" style={{ width: "100%" }}>

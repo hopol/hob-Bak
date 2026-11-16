@@ -8,7 +8,7 @@ vi.mock("./api.ts", async (importOriginal) => {
   const original = await importOriginal<typeof import("./api.ts")>();
   return { ...original, realApi: { ...original.realApi, putSettings, patchAssistant, jobs } };
 });
-vi.mock("./theme.ts", () => ({ resolveTheme: () => ({ dark: false }), updateStatusColor: () => undefined }));
+vi.mock("./theme.ts", () => ({ resolveTheme: () => ({ dark: false }), updateStatusColor: () => undefined, updateManifest: () => undefined, isNarrow: () => window.innerWidth < 768 }));
 
 let store: typeof import("./store.ts");
 beforeAll(async () => {

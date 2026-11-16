@@ -11,7 +11,7 @@ vi.mock("../store.ts", () => ({
 vi.mock("./ImageGen.tsx", () => ({ ImageGenCard: ({ itemId }: { itemId: string }) => <div data-item-id={itemId}>生成的图片</div> }));
 vi.mock("./Markdown.tsx", () => ({ Markdown: () => null }));
 
-import { ItemList } from "./Items.tsx";
+import { ItemList, visibleItems } from "./Items.tsx";
 
 const card = () => renderToStaticMarkup(<ItemList items={[{ kind: "job", id: "item", at: "2026-01-01T00:00:00Z", jobId: "t-1" }]} />);
 
@@ -119,6 +119,16 @@ describe("对话卡片出处", () => {
     } finally { vi.unstubAllGlobals(); }
   });
 
+  it("没办成的提示点开才看原因：一行文字，原因是工具报错的原文", () => {
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
+    try {
+      const at = "2026-01-01T00:00:00Z";
+      const failed: Item = { kind: "note", id: "n4", at, icon: "info", text: "「创建任务」没有成功", detail: "备注 401 字，最多 400 字。" };
+      const html = renderToStaticMarkup(<ItemList items={[failed]} />);
+      expect(html).toMatch(/<details><summary>「创建任务」没有成功<\/summary><div class="why">备注 401 字，最多 400 字。<\/div><\/details>/);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it("文件条目没存 path 时不崩，仍然显示名字", () => {
     vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
     const at = "2026-01-01T00:00:00Z";
@@ -128,5 +138,29 @@ describe("对话卡片出处", () => {
     expect(html).toContain("旧文件.pdf");
     expect(html).toContain("12 KB");
     vi.unstubAllGlobals();
+  });
+});
+
+describe("对话里只放用户要看的", () => {
+  const at = "2026-01-01T00:00:00Z";
+  it("记忆写入、技能沉淀和改版的老记录滤掉；删技能这类回执和其他提示行留着", () => {
+    const items: Item[] = [
+      { kind: "note", id: "m", at, icon: "memory", text: "记忆已更新 · 不看体育新闻" },
+      { kind: "note", id: "s", at, icon: "skill", text: "已沉淀技能「周报」", path: "/x/SKILL.md" },
+      { kind: "note", id: "d", at, icon: "skill", text: "已删除技能「旧周报」" },
+      { kind: "note", id: "r", at, icon: "rule", text: "已记入规则 · 发邮件前先问" },
+    ];
+    expect(visibleItems(items).map((item) => item.id)).toEqual(["d", "r"]);
+  });
+
+  it("同一个任务续做几轮只留最新那一轮的卡，别的任务不受影响", () => {
+    const items: Item[] = [
+      { kind: "job", id: "a0", at, jobId: "t-a" },
+      { kind: "job", id: "b0", at, jobId: "t-b" },
+      { kind: "user", id: "u", at, text: "再改一下" },
+      { kind: "job", id: "a1", at, jobId: "t-a", round: 1 },
+      { kind: "job", id: "a2", at, jobId: "t-a", round: 2 },
+    ];
+    expect(visibleItems(items).map((item) => item.id)).toEqual(["b0", "u", "a2"]);
   });
 });

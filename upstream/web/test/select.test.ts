@@ -10,7 +10,7 @@ beforeAll(async () => {
   server = await createServer({ server: { port: 0, host: "127.0.0.1" } });
   await server.listen();
   browser = await chromium.launch({ executablePath: "/usr/bin/google-chrome", args: ["--no-sandbox"] });
-  page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  page = await browser.newPage({ viewport: { width: 1440, height: 900 }, locale: "zh-CN" });
   page.setDefaultTimeout(4000);
 });
 afterAll(async () => { await browser?.close(); await server?.close(); });
@@ -37,7 +37,7 @@ describe("Select", () => {
   it("建群弹层里的选项可见且只列已有群", async () => {
     const address = server.httpServer!.address();
     if (!address || typeof address === "string") throw new Error("测试服务器没有端口");
-    await page.goto(`http://127.0.0.1:${address.port}/?mock=1&scene=topics`);
+    await page.goto(`http://127.0.0.1:${address.port}/?mock=1&lang=zh-CN&scene=topics`);
     await page.getByTitle("返回首页").click();
     await page.waitForTimeout(600);
     await page.getByTitle("新建助手或建群").click();

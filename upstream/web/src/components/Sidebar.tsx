@@ -1,5 +1,6 @@
 // 左栏：搜索和回首页 + 置顶助手和群 + 首页各组（待确认 / 进行中 / 对话 / 最近任务 / 定时任务）+ 底部设置。
 // 置顶跟着整栏一起滚，「设置」固定在底部；置顶头像可以按住拖着换位置。
+import { t } from "../../../shared/i18n.ts";
 import { conversations, pinList } from "../home.ts";
 import { Icon } from "../icons.tsx";
 import { useRows } from "../motion.ts";
@@ -21,9 +22,9 @@ export function Sidebar() {
       <div className="side-top">
         <div className="search">
           <Icon name="search" size={15} />
-          <input value={s.query} placeholder="搜索助手" onChange={(e) => setQuery(e.target.value)} />
+          <input value={s.query} placeholder={t("搜索助手")} onChange={(e) => setQuery(e.target.value)} />
         </div>
-        <button className={`hob-icon-btn side-home${!s.sel && !s.gsel ? " on" : ""}`} title="首页" onClick={goHome}>
+        <button className={`hob-icon-btn side-home${!s.sel && !s.gsel ? " on" : ""}`} title={t("首页")} onClick={goHome}>
           <Icon name="home" size={18} />
         </button>
         <PlusButton />
@@ -51,11 +52,11 @@ export function Sidebar() {
       <div className="side-foot">
         <button className="frow" onClick={openKnowledge}>
           <Icon name="archive" size={18} />
-          <span className="sp">知识库</span>
+          <span className="sp">{t("知识库")}</span>
         </button>
         <button className="frow" onClick={openSettings}>
           <Icon name="gear" size={18} />
-          <span className="sp">设置</span>
+          <span className="sp">{t("设置")}</span>
         </button>
       </div>
     </aside>

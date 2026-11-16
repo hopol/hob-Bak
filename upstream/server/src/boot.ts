@@ -46,11 +46,17 @@ const INHERITED_MODEL_ENV = [
   "CLAUDE_CONFIG_DIR",
 ];
 
+/**
+ * 启动方式带来的运行模式（pm2、Docker 里是 NODE_ENV=production）：服务端自己不读它。
+ * 留着的话会传给任务的 shell，任务在用户的项目里跑 `npm install` / `npm ci` 就会悄悄跳过 devDependencies。
+ */
+const INHERITED_MODE_ENV = ["NODE_ENV"];
+
 /** 按前缀删：CLAUDE_CODE_OAUTH_TOKEN 这类 Claude Code 自己的变量一个不留。 */
 const INHERITED_ENV_PREFIXES = ["CLAUDE_CODE_"];
 
 /**
- * 把引擎和记忆的环境变量指到 HOB_HOME，删掉从 shell 继承的 Lore 凭据、模型密钥和 Claude Code 的变量，
+ * 把引擎和记忆的环境变量指到 HOB_HOME，删掉从 shell 继承的 Lore 凭据、模型密钥、Claude Code 的变量和 NODE_ENV，
  * 返回本机配置的目录。纯函数：只改传进来的 env，不读 process.env。
  */
 export function applyEngineEnv(env: NodeJS.ProcessEnv, home: string): LocalConfigDirs {
@@ -61,7 +67,7 @@ export function applyEngineEnv(env: NodeJS.ProcessEnv, home: string): LocalConfi
   env.PI_CODING_AGENT_DIR = engineDir(home);
   env.PI_MEMORY_DIR = memoryDir(home);
   env.LORE_HOME = loreDir(home);
-  for (const key of [...INHERITED_CONFIG_ENV, ...INHERITED_MODEL_ENV]) delete env[key];
+  for (const key of [...INHERITED_CONFIG_ENV, ...INHERITED_MODEL_ENV, ...INHERITED_MODE_ENV]) delete env[key];
   for (const key of Object.keys(env)) {
     if (INHERITED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) delete env[key];
   }

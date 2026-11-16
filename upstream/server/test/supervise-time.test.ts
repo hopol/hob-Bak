@@ -97,10 +97,10 @@ describe("任务耗时督办", () => {
   });
 
   it("结果事件沿用统一时长格式，旧任务不变", () => {
-    const job = { id: "t-1", assistantId: "hob", title: "测试", instruction: "", status: "done" as const, createdAt: "", durationMs: 900_000, stats: { reads: 0, commands: 0, edits: 0 }, activity: [], expect: { minutes: 5, source: "assistant" as const } };
-    expect(jobResultEvent(job).split("\n")[0]).toBe("任务「测试」（t-1）已完成，用时 15 分钟，预计 5 分钟。");
+    const job = { id: "t-1", assistantId: "hob", assistantName: "Hob", title: "测试", instruction: "", status: "done" as const, createdAt: "", durationMs: 900_000, stats: { reads: 0, commands: 0, edits: 0 }, activity: [], expect: { minutes: 5, source: "assistant" as const } };
+    expect(jobResultEvent(job).split("\n")[0]).toBe("「Hob」的任务「测试」（t-1）已完成，用时 15 分钟，预计 5 分钟。");
     expect(jobResultEvent({ ...job, status: "failed", durationMs: 3_660_000 }).split("\n")[0]).toContain("失败，用时 1 小时 1 分钟");
     expect(jobResultEvent({ ...job, durationMs: 12_000 }).split("\n")[0]).toContain("用时 12 秒");
-    expect(jobResultEvent({ ...job, expect: undefined }).split("\n")[0]).toBe("任务「测试」（t-1）已完成，用时 15 分钟。");
+    expect(jobResultEvent({ ...job, expect: undefined }).split("\n")[0]).toBe("「Hob」的任务「测试」（t-1）已完成，用时 15 分钟。");
   });
 });

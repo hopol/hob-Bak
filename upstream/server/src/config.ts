@@ -90,14 +90,14 @@ export function groupFilesDir(home: string, gid: string, kind?: "uploads" | "ima
   return kind ? join(groupDir(home, gid), "files", kind) : join(groupDir(home, gid), "files");
 }
 
-/** 这个群里的事项：一个事项一份 json 和一份 md 记录。 */
-export function groupProjectsDir(home: string, gid: string): string {
-  return join(groupDir(home, gid), "projects");
+/** 这个助手单聊里的待办：一份 json。 */
+export function assistantTodosPath(home: string, id: string): string {
+  return join(assistantDir(home, id), "todos.json");
 }
 
-/** 事项的记录文件：成员和任务读的就是它。 */
-export function projectRecordPath(home: string, gid: string, pid: string): string {
-  return join(groupProjectsDir(home, gid), `${pid}.md`);
+/** 这个群（话题）的待办：一份 json，群里的人共用。 */
+export function groupTodosPath(home: string, gid: string): string {
+  return join(groupDir(home, gid), "todos.json");
 }
 
 /** 归档群的地方：一个群一个目录，目录名是 <gid>-<归档时间>。 */

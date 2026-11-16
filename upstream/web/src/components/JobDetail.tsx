@@ -1,7 +1,7 @@
 // 任务详情（桌面右侧宽抽屉 / 手机全屏）和任务记录（全部任务）。
+import { t } from "../../../shared/i18n.ts";
 import { Select } from "./Select.tsx";
 import { DelayedText, Empty } from "./Empty.tsx";
-import { ReplyInput } from "./ReplyInput.tsx";
 import { Suspense, lazy, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Job, JobFilesView, JobStatus, JobStep, ModelInfo } from "../../../shared/types.ts";
 import { Icon, type IconName } from "../icons.tsx";
@@ -14,12 +14,10 @@ import {
   fetchFileMeta,
   loadJobFiles,
   loadModels,
-  loadProjects,
   loadWorklog,
   moreWorklog,
   openFilePreview,
   openJob,
-  openProject,
   replyJob,
   select,
   selectGroup,
@@ -32,20 +30,24 @@ import {
 import { fmtBytes, fmtDuration, fmtElapsed, fmtTokens, fmtWhen } from "../util.ts";
 import { Markdown } from "./Markdown.tsx";
 import { PanelHead } from "./PanelHead.tsx";
+import { Brief } from "./Brief.tsx";
 import { useDesktopScreens } from "../desktop-screens.ts";
 import { JOB_STATUS, StatusTag, jobStatusIcon, jobStatusMeta, sedimentText } from "./status-meta.tsx";
 const DesktopScreen = lazy(() => import("./DesktopView.tsx").then((module) => ({ default: module.DesktopView })));
 
 
-const THINKING: Record<string, string> = {
-  off: "关",
-  minimal: "最低",
-  low: "低",
-  medium: "中",
-  high: "高",
-  xhigh: "很高",
-  max: "最高",
-};
+function thinkingLabel(level: string): string {
+  const labels: Record<string, string> = {
+    off: t("关"),
+    minimal: t("最低"),
+    low: t("低"),
+    medium: t("中"),
+    high: t("高"),
+    xhigh: t("很高"),
+    max: t("最高"),
+  };
+  return labels[level] ?? level;
+}
 
 const FILTER_STATUS: JobStatus[] = ["running", "waiting", "queued", "done", "stuck", "failed", "stopped"];
 
@@ -69,23 +71,6 @@ function active(job: Job): boolean {
   return job.status === "running" || job.status === "queued" || job.status === "waiting";
 }
 
-/** 子任务的任务：写事项名和序号，点了打开事项页（事项还没拉到时先只写序号）。 */
-function SubtaskTag({ groupId, projectId, n }: { groupId: string; projectId: string; n: number }) {
-  const s = useApp();
-  const project = (s.projects[groupId] ?? []).find((item) => item.id === projectId);
-  useEffect(() => {
-    if (!s.projects[groupId]) void loadProjects(groupId, true);
-  }, [groupId, s.projects]);
-  const text = project ? `事项「${project.title}」· 子任务 ${n}` : `子任务 ${n}`;
-  return project ? (
-    <button className="jd-subtask" onClick={() => openProject(groupId, project.id)}>
-      {text}
-    </button>
-  ) : (
-    <span>{text}</span>
-  );
-}
-
 /** 桌面主界面嵌入右栏；手机和设置页保留全屏 / 覆盖层。 */
 export function JobOverlay({ embedded = false, page }: { embedded?: boolean; page?: PanelPage }) {
   const s = useApp();
@@ -100,7 +85,7 @@ export function JobOverlay({ embedded = false, page }: { embedded?: boolean; pag
   return (
     <div className={`${embedded ? "jd-embedded" : "jd-overlay"}${presence.leaving ? " leaving" : ""}`} onClick={embedded ? undefined : closePanelPages}>
       <div className="jd" onClick={(event) => event.stopPropagation()}>
-        {shown.kind === "jobs" ? <><PanelHead className="jdhead" title={<span className="t">任务记录</span>} close /><WorklogPage /></> : <JobDetail key={`${shown.id}-${shown.round ?? "default"}`} id={shown.id} round={shown.round} />}
+        {shown.kind === "jobs" ? <><PanelHead className="jdhead" title={<span className="t">{t("任务记录")}</span>} close /><WorklogPage /></> : <JobDetail key={`${shown.id}-${shown.round ?? "default"}`} id={shown.id} round={shown.round} />}
       </div>
     </div>
   );
@@ -117,7 +102,7 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
   const [showDesktop, setShowDesktop] = useState(false);
   // 看桌面看的是这个任务所属助手的那块屏幕，不是默认的主助手
   const desktop = useDesktopScreens();
-  // 续做过的任务：看第几轮。没点过就跟着最新一轮；从对话里第 N 张卡点进来就是第 N 轮
+  // 续做过的任务：看第几轮。没点过就跟着最新一轮；从对话里的卡点进来，就是那张卡那一轮
   const [picked, setPicked] = useState(round);
 
   useEffect(() => {
@@ -148,8 +133,8 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
   if (!job) {
     return (
       <div className="jdbody">
-        <PanelHead className="jdhead" title={<span className="t">任务</span>} close />
-        <Empty>无法读取这个任务。</Empty>
+        <PanelHead className="jdhead" title={<span className="t">{t("任务")}</span>} close />
+        <Empty>{t("无法读取这个任务。")}</Empty>
       </div>
     );
   }
@@ -166,10 +151,10 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
 
   return (
     <>
-      <PanelHead className="jdhead" title={<span className="t">任务</span>} close>
-        {job.status === "done" ? <button className="hob-btn hob-btn-compact" disabled={job.sediment?.status === "running"} onClick={() => { void sedimentJob(job.id); }}><Icon name="mem" size={14} />{job.sediment?.status === "running" ? "正在沉淀…" : "沉淀成技能"}</button> : null}
-        {steps?.some((step) => step.name?.startsWith("browser_") || step.name?.startsWith("desktop_")) ? <button className="hob-btn hob-btn-compact" onClick={() => setShowDesktop(true)}><Icon name="pointer" size={14} />看桌面</button> : null}
-        <button className="hob-icon-btn fp-act fp-wide-btn" title="切换全宽" onClick={togglePreviewFull}>
+      <PanelHead className="jdhead" title={<span className="t">{t("任务")}</span>} close>
+        {job.status === "done" ? <button className="hob-btn hob-btn-compact" disabled={job.sediment?.status === "running"} onClick={() => { void sedimentJob(job.id); }}><Icon name="mem" size={14} />{job.sediment?.status === "running" ? t("正在沉淀…") : t("沉淀成技能")}</button> : null}
+        {steps?.some((step) => step.name?.startsWith("browser_") || step.name?.startsWith("desktop_")) ? <button className="hob-btn hob-btn-compact" onClick={() => setShowDesktop(true)}><Icon name="pointer" size={14} />{t("看桌面")}</button> : null}
+        <button className="hob-icon-btn fp-act fp-wide-btn" title={t("切换全宽")} onClick={togglePreviewFull}>
           <Icon name={full ? "shrink" : "expand"} size={17} />
         </button>
       </PanelHead>
@@ -183,10 +168,9 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
               {owner?.name ?? job.assistantName}
             </span>
           ) : null}
-          {job.groupId ? <span>{group ? `来自「${group.name}」` : "来自已结束的群"}</span> : null}
-          {job.project && job.groupId ? <SubtaskTag groupId={job.groupId} projectId={job.project.id} n={job.project.n} /> : null}
+          {job.groupId ? <span>{group ? t("来自「{name}」", { name: group.name }) : t("来自已结束的群")}</span> : null}
           <span>{fmtWhen(started)}</span>
-          {elapsed !== undefined ? <span>用时 {fmtDuration(elapsed)}</span> : null}
+          {elapsed !== undefined ? <span>{t("用时 {duration}", { duration: fmtDuration(elapsed) })}</span> : null}
         </div>
         {job.model || usage ? (
           <div className="jd-meta dim">
@@ -195,11 +179,11 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
                 {modelName}
               </span>
             ) : null}
-            {job.thinking ? <span>思考 {THINKING[job.thinking] ?? job.thinking}</span> : null}
+            {job.thinking ? <span>{t("思考 {level}", { level: thinkingLabel(job.thinking) })}</span> : null}
             {job.modelReason ? <span>{job.modelReason}</span> : null}
             {usage ? (
               <span>
-                输入 {fmtTokens(usage.input)} · 输出 {fmtTokens(usage.output)}
+                {t("输入 {input} · 输出 {output}", { input: fmtTokens(usage.input), output: fmtTokens(usage.output) })}
                 {usage.cost > 0 ? ` · $${usage.cost.toFixed(4)}` : ""}
               </span>
             ) : null}
@@ -213,11 +197,11 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
           // 轮次多了「第 N 轮」一排放不下：超过 4 轮只写数字，上面一行写「轮次」
           const compact = parts.length > 4;
           return <>
-            {compact ? <div className="lbl">轮次</div> : null}
+            {compact ? <div className="lbl">{t("轮次")}</div> : null}
             <div className={`seg jd-rounds${compact ? " compact" : ""}`} role="tablist" style={{ "--seg-count": parts.length, "--seg-index": current } as CSSProperties}>
               {parts.map((_, index) => (
-                <button key={index} role="tab" aria-selected={index === current} aria-label={`第 ${index + 1} 轮`} className={index === current ? "on" : undefined} onClick={() => setPicked(index)}>
-                  {compact ? index + 1 : `第 ${index + 1} 轮`}
+                <button key={index} role="tab" aria-selected={index === current} aria-label={t("第 {n} 轮", { n: index + 1 })} className={index === current ? "on" : undefined} onClick={() => setPicked(index)}>
+                  {compact ? index + 1 : t("第 {n} 轮", { n: index + 1 })}
                 </button>
               ))}
             </div>
@@ -230,23 +214,23 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
       </div>
 
       <ReplyBox job={job} />
-      {showDesktop ? <Suspense fallback={<div>正在打开云桌面…</div>}><DesktopScreen initialScreen={desktop.profiles[job.assistantId] ?? job.assistantId} onClose={() => setShowDesktop(false)} /></Suspense> : null}
+      {showDesktop ? <Suspense fallback={<div>{t("正在打开云桌面…")}</div>}><DesktopScreen initialScreen={desktop.profiles[job.assistantId] ?? job.assistantId} onClose={() => setShowDesktop(false)} /></Suspense> : null}
     </>
   );
 }
 
-/** 前置任务：等谁做完才开始，点了打开那一个。 */
+/** 要等的任务：等谁做完才开始，点了打开那一个。 */
 function AfterList({ ids }: { ids: string[] }) {
   const s = useApp();
   return <>
-    <div className="lbl">前置任务</div>
+    <div className="lbl">{t("要等的")}</div>
     <div className="jd-files">
       {ids.map((id) => {
         const before = s.jobs[id];
         return <button className="jd-file-row" key={id} onClick={() => openJob(id)}>
           {before ? jobStatusIcon(before.status, 14) : <Icon name="doc" size={14} />}
           <span>{before?.title ?? id}</span>
-          <small>{before ? JOB_STATUS[before.status].text : "找不到"}</small>
+          <small>{before ? JOB_STATUS[before.status].text : t("找不到")}</small>
         </button>;
       })}
     </div>
@@ -267,21 +251,21 @@ function RoundBody({ part, last, index }: { part: { job: Job; instruction?: stri
       {last ? null : (
         <div className="jd-meta">
           <StatusTag meta={JOB_STATUS[part.job.status]} />
-          {part.job.durationMs !== undefined ? <span>用时 {fmtDuration(part.job.durationMs)}</span> : null}
+          {part.job.durationMs !== undefined ? <span>{t("用时 {duration}", { duration: fmtDuration(part.job.durationMs) })}</span> : null}
         </div>
       )}
       {reason && !last ? <div className="jd-reason">{reason}</div> : null}
       {ended ? <><Report job={part.job} /><Outputs job={part.job} /></> : null}
-      {part.instruction ? <><div className="lbl">{index === 0 ? "任务内容" : "这一轮的要求"}</div><div className="jd-instruction">{part.instruction}</div></> : null}
-      <div className="lbl">执行过程</div>
+      {part.instruction ? <><div className="lbl">{index === 0 ? t("任务内容") : t("这一轮的要求")}</div><div className="jd-instruction"><Brief text={part.instruction} /></div></> : null}
+      <div className="lbl">{t("执行过程")}</div>
       <div className="jd-timeline">
-        {timeline === undefined ? <Empty><DelayedText text="正在读取执行过程…" /></Empty> : timeline.rows.length || timeline.thinking ? <>
+        {timeline === undefined ? <Empty><DelayedText text={t("正在读取执行过程…")} /></Empty> : timeline.rows.length || timeline.thinking ? <>
           {visibleSteps(timeline.rows, ended, expanded).rows.map((step) => expanded && !initiallyVisible.has(step.id) ? <div className="jd-unfold" key={step.id}><div><Step step={step} cwd={part.job.cwd} /></div></div> : <Step key={step.id} step={step} cwd={part.job.cwd} />)}
-          {visibleSteps(timeline.rows, ended, expanded).remaining ? <div className="jd-tool"><button className="jd-tool-head" onClick={() => setExpanded(true)}><span className="ico"><Icon name="more" size={14} /></span><span className="tt">还有 {visibleSteps(timeline.rows, ended, expanded).remaining} 步</span></button></div> : null}
+          {visibleSteps(timeline.rows, ended, expanded).remaining ? <div className="jd-tool"><button className="jd-tool-head" onClick={() => setExpanded(true)}><span className="ico"><Icon name="more" size={14} /></span><span className="tt">{t("还有 {n} 步", { n: visibleSteps(timeline.rows, ended, expanded).remaining })}</span></button></div> : null}
           {timeline.thinking ? <ThinkingLive text={timeline.thinking} /> : null}
-        </> : <Empty>还没有执行步骤。</Empty>}
+        </> : <Empty>{t("还没有执行步骤。")}</Empty>}
       </div>
-      {sediment || part.job.sediment ? <><div className="lbl">沉淀技能{part.job.sediment ? ` · ${sedimentText(part.job.sediment)}` : ""}</div><div className="jd-timeline">{sediment?.rows.map((step) => <Step key={step.id} step={step} cwd={part.job.cwd} />)}{sediment?.thinking ? <ThinkingLive text={sediment.thinking} /> : null}</div></> : null}
+      {sediment || part.job.sediment ? <><div className="lbl">{t("沉淀技能")}{part.job.sediment ? ` · ${sedimentText(part.job.sediment)}` : ""}</div><div className="jd-timeline">{sediment?.rows.map((step) => <Step key={step.id} step={step} cwd={part.job.cwd} />)}{sediment?.thinking ? <ThinkingLive text={sediment.thinking} /> : null}</div></> : null}
       {last ? <Directory jobId={part.job.id} /> : null}
     </>
   );
@@ -297,14 +281,30 @@ function ReplyBox({ job }: { job: Job }) {
     // 发不出去就把字还回输入框，不让它悄悄丢掉
     void replyJob(job.id, value).then((ok) => { if (!ok) setText((current) => current || value); });
   };
+  // 和对话的输入框一个样子：一颗胶囊，右边一个圆钮。有字时是发送；没字、任务还在跑时是停止
+  const stop = !sendable && job.status === "running";
   return (
     <div className="jd-foot">
-      <ReplyInput value={text} onChange={setText} sending={false} placeholder={active(job) ? "补充说明或更正方向" : "接着说…"} onSend={submit} />
-      {job.status === "running" ? (
-        <button className="hob-btn" onClick={() => void stopJob(job.id)}>
-          停止
-        </button>
-      ) : null}
+      <div className="jd-comp">
+        <input
+          value={text}
+          placeholder={active(job) ? t("补充说明或更正方向") : t("接着说…")}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) submit();
+          }}
+        />
+        {stop ? (
+          <button className="sendbtn stop" title={t("停止")} aria-label={t("停止")} onClick={() => void stopJob(job.id)}>
+            <Icon name="stop" size={16} />
+          </button>
+        ) : (
+          <button className="sendbtn" title={t("发送")} aria-label={t("发送")} disabled={!sendable} onClick={submit}>
+            <Icon name="send" size={16} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -318,7 +318,7 @@ function Step({ step, cwd }: { step: StepRow; cwd?: string }) {
       return (
         <div className={`jd-mine${step.queued ? " queued" : ""}`}>
           {step.text}
-          {step.queued ? <div className="jd-mine-note">已送达，当前这一步做完后读取</div> : null}
+          {step.queued ? <div className="jd-mine-note">{t("已送达，当前这一步做完后读取")}</div> : null}
         </div>
       );
     }
@@ -350,11 +350,11 @@ function Step({ step, cwd }: { step: StepRow; cwd?: string }) {
           ))}
         </span>
         {step.thinking ? (
-          <span className="blb" title="有思考过程">
+          <span className="blb" title={t("有思考过程")}>
             <Icon name="bulb" size={13} />
           </span>
         ) : null}
-        <span className="tm">{step.isError ? "出错" : step.durationMs && step.durationMs >= 1000 ? fmtDuration(step.durationMs) : ""}</span>
+        <span className="tm">{step.isError ? t("出错") : step.durationMs && step.durationMs >= 1000 ? fmtDuration(step.durationMs) : ""}</span>
         <Icon name={open ? "down" : "chev"} size={13} />
       </button>
       <div className={`expand${open ? " open" : ""}`} inert={!open}>
@@ -374,13 +374,13 @@ function ThinkingBlock({ text, open: startOpen }: { text: string; open: boolean 
     <div className="jd-think-in">
       <button
         className="jd-think-head"
-        title={open ? "收起思考过程" : "展开思考过程"}
+        title={open ? t("收起思考过程") : t("展开思考过程")}
         onClick={() => setOpen((value) => !value)}
       >
         <span className="ico">
           <Icon name="bulb" size={13} />
         </span>
-        <span className="tt">思考过程</span>
+        <span className="tt">{t("思考过程")}</span>
         <Icon name={open ? "down" : "chev"} size={12} />
       </button>
       {open ? <div className="jd-think-body">{text}</div> : null}
@@ -397,7 +397,7 @@ function ThinkingLive({ text }: { text: string }) {
         <span className="ico">
           <Icon name="bulb" size={14} />
         </span>
-        <span className="tt">思考中</span>
+        <span className="tt">{t("思考中")}</span>
         <Icon name={open ? "down" : "chev"} size={13} />
       </button>
       {open ? <div className="jd-think-body">{text}</div> : null}
@@ -446,7 +446,7 @@ function StepBody({ step, cwd }: { step: StepRow; cwd?: string }) {
       {step.outputPath ? (
         <button className="jd-file" onClick={() => openFilePreview(step.outputPath!)}>
           <Icon name="doc" size={12} />
-          完整输出
+          {t("完整输出")}
         </button>
       ) : null}
     </div>
@@ -459,7 +459,7 @@ function Args({ step, args, cwd }: { step: JobStep; args: Record<string, unknown
     return (
       <div className="jd-kv-wrap">
         <PathLink path={String(args.path ?? "")} cwd={cwd} />
-        <span className="jd-kv-len">{String(args.contentLength ?? 0)} 字</span>
+        <span className="jd-kv-len">{t("{n} 字", { n: String(args.contentLength ?? 0) })}</span>
       </div>
     );
   }
@@ -485,7 +485,7 @@ function Diff({ before, after }: { before: string; after: string }) {
       ))}
       {lines.length > shown.length ? (
         <button className="jd-more" onClick={() => setAll(true)}>
-          展开全部 {lines.length} 行
+          {t("展开全部 {n} 行", { n: lines.length })}
         </button>
       ) : null}
     </div>
@@ -502,7 +502,7 @@ function LongText({ text, className, lines = 12 }: { text: string; className: st
       </pre>
       {count > lines ? (
         <button className="jd-more" onClick={() => setAll(!all)}>
-          {all ? "收起" : `展开全部 ${count} 行`}
+          {all ? t("收起") : t("展开全部 {n} 行", { n: count })}
         </button>
       ) : null}
     </>
@@ -514,7 +514,7 @@ function Report({ job }: { job: Job }) {
   if (!job.summary) return null;
   return (
     <>
-      <div className="lbl">报告</div>
+      <div className="lbl">{t("报告")}</div>
       <Markdown className="jd-report" text={job.summary} />
     </>
   );
@@ -523,7 +523,7 @@ function Report({ job }: { job: Job }) {
 /** 只展示报告交回的文件，大小通过文件元数据取得。 */
 function Outputs({ job }: { job: Job }) {
   const paths = [...new Set(job.files ?? [])];
-  return paths.length ? <><div className="lbl">产出文件</div><div className="jd-files">{paths.map((path) => <OutputFile key={path} path={path} />)}</div></> : null;
+  return paths.length ? <><div className="lbl">{t("产出文件")}</div><div className="jd-files">{paths.map((path) => <OutputFile key={path} path={path} />)}</div></> : null;
 }
 
 function OutputFile({ path }: { path: string }) {
@@ -534,7 +534,7 @@ function OutputFile({ path }: { path: string }) {
     void fetchFileMeta(path).then((meta) => { if (live) setSize(meta.size); }).catch((e: unknown) => { if (live) setError(e instanceof Error ? e.message : String(e)); });
     return () => { live = false; };
   }, [path]);
-  return <button className="jd-file-row" onClick={() => openFilePreview(path)}><Icon name={fileIcon(path)} size={18} /><span>{path.split("/").pop()}</span>{error ? <small title={error}>大小读取失败</small> : size !== undefined ? <small>{fmtBytes(size)}</small> : null}</button>;
+  return <button className="jd-file-row" onClick={() => openFilePreview(path)}><Icon name={fileIcon(path)} size={18} /><span>{path.split("/").pop()}</span>{error ? <small title={error}>{t("大小读取失败")}</small> : size !== undefined ? <small>{fmtBytes(size)}</small> : null}</button>;
 }
 
 function Directory({ jobId }: { jobId: string }) {
@@ -551,8 +551,8 @@ function Directory({ jobId }: { jobId: string }) {
   // 还没建出来或是空的：整行不出现
   if (view && !view.total && !error) return null;
   return <div className="jd-directory">
-    <button className="jd-directory-head" onClick={() => setOpen(!open)}><Icon name={open ? "down" : "chev"} size={15} />工作目录{view ? ` · ${view.fileCount} 个文件、${view.directoryCount} 个文件夹` : ""}</button>
-    {error ? <div className="jd-dir-error">{error} <button className="jd-more" onClick={() => setAttempt(attempt + 1)}>重试</button></div> : null}
+    <button className="jd-directory-head" onClick={() => setOpen(!open)}><Icon name={open ? "down" : "chev"} size={15} />{t("工作目录")}{view ? ` · ${view.fileCount} ${t("个文件")}、${view.directoryCount} ${t("个文件夹")}` : ""}</button>
+    {error ? <div className="jd-dir-error">{error} <button className="jd-more" onClick={() => setAttempt(attempt + 1)}>{t("重试")}</button></div> : null}
     {open && view ? <DirectoryRows jobId={jobId} view={view} /> : null}
   </div>;
 }
@@ -561,7 +561,7 @@ function DirectoryRows({ jobId, view }: { jobId: string; view: JobFilesView }) {
   return <div className="jd-files">{view.files.map((entry) => entry.type === "file" ?
     <button className="jd-file-row" key={entry.rel} onClick={() => openFilePreview(entry.path)}><Icon name={fileIcon(entry.name)} size={18} /><span>{entry.name}</span><small>{fmtBytes(entry.size)}</small></button> :
     <DirectoryFolder key={entry.rel} jobId={jobId} entry={entry} />)}
-    {view.total > view.files.length ? <div className="jd-dir-more">还有 {view.total - view.files.length} 项</div> : null}
+    {view.total > view.files.length ? <div className="jd-dir-more">{t("还有 {n} 项", { n: view.total - view.files.length })}</div> : null}
   </div>;
 }
 
@@ -577,8 +577,8 @@ function DirectoryFolder({ jobId, entry }: { jobId: string; entry: Extract<JobFi
     void loadJobFiles(jobId, entry.rel).then((result) => { if (live) setView(result); }).catch((e: unknown) => { if (live) setError(e instanceof Error ? e.message : String(e)); });
     return () => { live = false; };
   }, [open, view, jobId, entry.rel, attempt]);
-  return <div><button className="jd-file-row" onClick={() => setOpen(!open)}><Icon name={open ? "down" : "chev"} size={14} /><Icon name="folder" size={18} /><span>{entry.name}</span><small>{entry.count} 项</small></button>
-    {open ? <div className="jd-dir-child">{error ? <div className="jd-dir-error">{error} <button className="jd-more" onClick={() => setAttempt(attempt + 1)}>重试</button></div> : view ? <DirectoryRows jobId={jobId} view={view} /> : <div className="jd-dir-more">正在读取…</div>}</div> : null}
+  return <div><button className="jd-file-row" onClick={() => setOpen(!open)}><Icon name={open ? "down" : "chev"} size={14} /><Icon name="folder" size={18} /><span>{entry.name}</span><small>{entry.count} {t("项")}</small></button>
+    {open ? <div className="jd-dir-child">{error ? <div className="jd-dir-error">{error} <button className="jd-more" onClick={() => setAttempt(attempt + 1)}>{t("重试")}</button></div> : view ? <DirectoryRows jobId={jobId} view={view} /> : <div className="jd-dir-more">{t("正在读取…")}</div>}</div> : null}
   </div>;
 }
 
@@ -597,14 +597,14 @@ function WorklogPage() {
   return (
     <div className="jdbody" onScroll={(event) => { const el = event.currentTarget; if (log?.hasMore && !log.loading && el.scrollHeight - el.scrollTop - el.clientHeight < 100) void moreWorklog(); }}>
       <div className="jd-filters">
-        <Select value={assistantId ?? ""} onChange={(value) => void loadWorklog({ assistantId: value || null, status })} options={[{ value: "", label: "全部助手" }, ...s.assistants.map((assistant) => ({ value: assistant.id, label: assistant.name }))]} />
-        <Select value={status ?? ""} onChange={(value) => void loadWorklog({ assistantId, status: (value || null) as JobStatus | null })} options={[{ value: "", label: "全部状态" }, ...FILTER_STATUS.map((value) => ({ value, label: JOB_STATUS[value].text }))]} />
+        <Select value={assistantId ?? ""} onChange={(value) => void loadWorklog({ assistantId: value || null, status })} options={[{ value: "", label: t("全部助手") }, ...s.assistants.map((assistant) => ({ value: assistant.id, label: assistant.name }))]} />
+        <Select value={status ?? ""} onChange={(value) => void loadWorklog({ assistantId, status: (value || null) as JobStatus | null })} options={[{ value: "", label: t("全部状态") }, ...FILTER_STATUS.map((value) => ({ value, label: JOB_STATUS[value].text }))]} />
         <span className="sp" />
-        {log ? <span className="dim">{log.jobs.length} 个</span> : null}
+        {log ? <span className="dim">{t("{n} 个", { n: log.jobs.length })}</span> : null}
       </div>
 
       {log === null ? (
-        <Empty><DelayedText text="正在读取任务记录…" /></Empty>
+        <Empty><DelayedText text={t("正在读取任务记录…")} /></Empty>
       ) : log.jobs.length ? (
         <div className="jd-rows">
           {log.jobs.map((row) => {
@@ -630,12 +630,12 @@ function WorklogPage() {
           })}
         </div>
       ) : (
-        <Empty>没有符合条件的任务。</Empty>
+        <Empty>{t("没有符合条件的任务。")}</Empty>
       )}
 
       {log?.hasMore ? (
         <button className="hob-btn jd-morebtn" onClick={() => void moreWorklog()}>
-          {log.loading ? "正在读取…" : "加载更多"}
+          {log.loading ? t("正在读取…") : t("加载更多")}
         </button>
       ) : null}
     </div>

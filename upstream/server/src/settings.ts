@@ -28,6 +28,7 @@ import { checkProvider } from "./providers.ts";
 import { checkTimezone } from "./time.ts";
 import { systemDir } from "./config.ts";
 import { checkPrice } from "./usage-prices.ts";
+import type { Locale } from "../../shared/i18n.ts";
 
 const FILE = "settings.json";
 const THEMES: Theme[] = ["system", "light", "dark"];
@@ -223,6 +224,7 @@ function normalize(raw: unknown, base: Settings): Settings {
   return {
     general: {
       theme: THEMES.includes(theme) ? theme : base.general.theme,
+      ...(general.locale === "zh-CN" || general.locale === "en" ? { locale: general.locale as Locale } : base.general.locale ? { locale: base.general.locale } : {}),
       timezone: checkTimezone(text(general.timezone, "") || base.general.timezone),
       showPage: typeof general.showPage === "boolean" ? general.showPage : base.general.showPage !== false,
       avatarBackground: typeof general.avatarBackground === "boolean" ? general.avatarBackground : base.general.avatarBackground !== false,
@@ -315,12 +317,15 @@ export class SettingsStore {
       throw new Error(`读取 ${path} 失败：${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
     if (isMemoryProvider(stored.memory?.provider)) this.memoryProvider = stored.memory.provider;
+    const legacyLocale = !stored.settings?.general?.locale
+      && (existsSync(join(this.home, "system", "seeded.json")) || existsSync(join(this.home, "rules.json")));
+    const normalized = normalize(stored.settings, this.base);
     this.file = {
       revision: Number.isFinite(stored.revision) ? Number(stored.revision) : 1,
-      settings: normalize(stored.settings, this.base),
+      settings: legacyLocale ? { ...normalized, general: { ...normalized.general, locale: "zh-CN" } } : normalized,
     };
-    // 旧文件没有 models 节：搬来的模型马上落盘，config.json 里的旧键已经删了，下次启动就读不到了
-    if (!stored.settings?.models) this.write();
+    // 旧文件没有 models 节，或旧安装还没有 locale：迁移结果立即落盘。
+    if (!stored.settings?.models || legacyLocale) this.write();
   }
 
   private write(): void {

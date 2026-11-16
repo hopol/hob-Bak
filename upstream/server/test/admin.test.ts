@@ -1,4 +1,6 @@
 // 票 153：主助手管理助手、群和话题。工具级测试，不走真实模型。
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Assistant, Group } from "../../shared/types.ts";
 import { saveAssistantSkill } from "../src/assistant-skills.ts";
@@ -35,7 +37,7 @@ function setup(): { hob: TestHob; group: Group } {
   const hob = makeHob({}, { memory: "off" });
   addAssistant(hob, "ops", "服务器", "机器");
   addAssistant(hob, "write", "写作", "周报和文章");
-  const group = hob.runtime.groups.create({ name: "交付小组", purpose: "一起做软件", ownerId: "hob", members: ["hob", "ops", "write"], workflow: "software" });
+  const group = hob.runtime.groups.create({ name: "交付小组", purpose: "一起做软件", ownerId: "hob", members: ["hob", "ops", "write"] });
   return { hob, group };
 }
 
@@ -195,35 +197,29 @@ describe("show_assistant", () => {
 });
 
 describe("show_group", () => {
-  it("列出全部群，带群主、成员、工作方式和进行中的话题数；query 按群名、成员和话题名找", async () => {
+  it("列出全部群，带群主、成员和进行中的话题数；query 按群名、成员和话题名找", async () => {
     const { hob, group } = setup();
     try {
       const topic = hob.runtime.groups.createTopic(group.id, "导出筛选", "user");
       hob.runtime.groups.closeByOwner(topic.id, undefined);
       hob.runtime.groups.createTopic(group.id, "相册备份", "user");
       const lines = said(await run(hob, "hob", "show_group", {})).split("\n");
-      expect(lines).toContain(`交付小组（${group.id}）：群主 Hob；成员 Hob、服务器、写作；工作方式 软件开发；进行中的话题 1 个`);
+      expect(lines).toContain(`交付小组（${group.id}）：群主 Hob；成员 Hob、服务器、写作；进行中的话题 1 个`);
       expect(lines.at(-1)).toMatch(/^共 \d+ 个$/);
       expect(said(await run(hob, "hob", "show_group", { query: "服务器" }))).toContain("交付小组");
       expect(said(await run(hob, "hob", "show_group", { query: "相册" }))).toContain("交付小组");
       expect(said(await run(hob, "hob", "show_group", { query: "不存在的" }))).toBe("没有找到含「不存在的」的群");
-      // 没工作方式、没进行中的话题，就不写那两段
+      // 没有进行中的话题，就不写那一段
       hob.runtime.groups.create({ name: "闲聊", purpose: "闲聊", ownerId: "hob", members: ["hob"] });
       expect(said(await run(hob, "hob", "show_group", { query: "闲聊" }))).toMatch(/^闲聊（g-\w+）：群主 Hob；成员 Hob\n共 1 个$/);
     } finally { hob.close(); }
   });
 
-  it("群详情：负责什么、群主、成员、工作方式、话题和事项进度、消息", async () => {
+  it("群详情：负责什么、群主、成员、话题、消息", async () => {
     const { hob, group } = setup();
     try {
       const topic = hob.runtime.groups.createTopic(group.id, "导出筛选", "user");
       say(hob, topic.id, "导出要能按月筛选");
-      const project = hob.runtime.projects.open({ group: hob.runtime.store.group(topic.id)!, ownerId: "hob", title: "按月筛选导出" });
-      hob.runtime.projects.writeRequirements(topic.id, project.id, { content: "加一个月筛选", acceptance: ["能按月筛选"] });
-      hob.runtime.projects.plan(topic.id, project.id, [
-        { title: "加筛选", assignee: "ops", brief: "加一个月份筛选" },
-        { title: "验收", assignee: "write", brief: "验一遍", after: [1], check: true },
-      ]);
       say(hob, group.id, "大家好");
       say(hob, group.id, "这个月先做导出");
       const text = said(await run(hob, "hob", "show_group", { groupId: group.id }));
@@ -231,8 +227,7 @@ describe("show_group", () => {
       expect(text).toContain("负责什么：一起做软件");
       expect(text).toContain("群主：Hob");
       expect(text).toContain("成员：Hob、服务器、写作");
-      expect(text).toContain("工作方式：软件开发");
-      expect(text).toContain(`- 导出筛选（${topic.id}）· 进行中 · 事项「按月筛选导出」· 任务拆分 · 子任务 0/2`);
+      expect(text).toContain(`- 导出筛选（${topic.id}）· 进行中`);
       expect(text).toContain("消息：");
       expect(text).toMatch(/\[\d+月\d+日 \d{2}:\d{2}\] 用户：这个月先做导出/);
       expect(text.split("\n").at(-1)).toBe("共 3 条");
@@ -241,7 +236,6 @@ describe("show_group", () => {
       expect(topicText).toContain(`导出筛选（${topic.id}）`);
       expect(topicText).toContain(`所属的群：交付小组（${group.id}）`);
       expect(topicText).toContain("状态：进行中");
-      expect(topicText).toContain("事项：「按月筛选导出」· 任务拆分 · 子任务 0/2");
       expect(topicText).toContain("用户：导出要能按月筛选");
       expect(said(await run(hob, "hob", "show_group", { groupId: "nope" }))).toBe("没有这个群：nope");
     } finally { hob.close(); }
@@ -365,24 +359,25 @@ describe("create_group", () => {
       const result = await run(hob, "hob", "create_group", { name: "家里设备", purpose: "NAS 和设备", members: ["ops"], ownerId: "ops", workflow: "software" });
       const created = hob.runtime.store.groups().find((group) => group.name === "家里设备")!;
       expect(said(result)).toBe(`已建好群「家里设备」（${created.id}）。`);
-      expect(created).toMatchObject({ ownerId: "ops", members: ["ops"], workflow: "software" });
+      expect(created).toMatchObject({ ownerId: "ops", members: ["ops"] });
+      expect((JSON.parse(readFileSync(join(hob.home, "groups", created.id, "group.json"), "utf8")) as Record<string, unknown>).workflow).toBeUndefined();
       expect(hobNotes(hob)).toContain("已建好群「家里设备」");
       expect(hob.runtime.router.items("hob").items).toContainEqual(expect.objectContaining({ kind: "note", text: "已建好群「家里设备」", targetGroupId: created.id }));
       expect(said(await run(hob, "hob", "create_group", { name: "空群", purpose: "没人", members: [], ownerId: "ops" }))).toBe("群里至少要有一个助手");
       expect(said(await run(hob, "hob", "create_group", { name: "错群主", purpose: "不在里面", members: ["ops"], ownerId: "write" }))).toBe("群主要在成员里");
     } finally { hob.close(); }
   });
-  it("模型把没用的项填成空串或 none：当没填，建成普通群；乱填的工作方式说清怎么填", async () => {
+  it("模型把没用的项填成空串或 none：当没填，建成普通群；旧字段不改变群", async () => {
     const { hob } = setup();
     try {
       for (const [name, workflow] of [["空串群", ""], ["无群", "none"]] as const) {
         expect(said(await run(hob, "hob", "create_group", { name, purpose: "试试", members: ["ops"], ownerId: "ops", workflow }))).toContain("已建好群");
         expect(hob.runtime.store.groups().find((group) => group.name === name)?.workflow).toBeUndefined();
       }
-      expect(said(await run(hob, "hob", "create_group", { name: "错的", purpose: "试试", members: ["ops"], ownerId: "ops", workflow: "agile" }))).toBe("workflow 要填 software（软件开发），普通群不填，收到「agile」。");
+      expect(said(await run(hob, "hob", "create_group", { name: "错的", purpose: "试试", members: ["ops"], ownerId: "ops", workflow: "agile" }))).toContain("已建好群");
       const plain = hob.runtime.store.groups().find((group) => group.name === "无群")!;
       const result = await run(hob, "hob", "update_group", { groupId: plain.id, name: "", purpose: "", addMembers: [], removeMembers: [], ownerId: "", workflow: "software" });
-      expect(said(result)).toBe("已修改群「无群」：工作方式。");
+      expect(said(result)).toBe("没有要改的项：至少填一项和现在不一样的。");
       expect(said(await run(hob, "hob", "update_group", { groupId: plain.id, name: "", workflow: "" }))).toBe("没有要改的项：至少填一项和现在不一样的。");
     } finally { hob.close(); }
   });
@@ -415,22 +410,21 @@ describe("update_group", () => {
       await run(hob, "hob", "update_group", { groupId: group.id, addMembers: ["net"] });
       expect(hobNotes(hob)).toEqual(["已把网络拉进敏捷小团队"]);
       expect(notesOf(hob, group.id)).toContain("Hob 把网络拉进了群");
+      // 改补充说明、负责什么：对话那行也带群名，不然读着像改了自己的
+      await run(hob, "hob", "update_group", { groupId: group.id, instructions: "先只读核实", purpose: "做软件" });
+      expect(hobNotes(hob).at(-1)).toBe("已改了敏捷小团队的负责什么；改了敏捷小团队的补充说明");
+      expect(notesOf(hob, group.id)).toContain("Hob 改了负责什么；改了补充说明");
     } finally { hob.close(); }
   });
 
-  it("话题 id 说清楚不是群；workflow 能改成 none，有没结束的事项时拦住", async () => {
+  it("话题 id 说清楚不是群；旧 workflow 入参不会改变群", async () => {
     const { hob, group } = setup();
     try {
       const topic = hob.runtime.groups.createTopic(group.id, "导出筛选", "user");
       expect(said(await run(hob, "hob", "update_group", { groupId: topic.id, name: "改名" }))).toBe(`${topic.id} 是话题，不是群；改话题名用 manage_topic。`);
-      expect(said(await run(hob, "hob", "update_group", { groupId: group.id, workflow: "none" }))).toBe("已修改群「交付小组」：工作方式。");
+      expect(said(await run(hob, "hob", "update_group", { groupId: group.id, workflow: "none" }))).toBe("没有要改的项：至少填一项和现在不一样的。");
       expect(hob.runtime.store.group(group.id)?.workflow).toBeUndefined();
-      expect(said(await run(hob, "hob", "update_group", { groupId: group.id, workflow: "nope" }))).toBe("workflow 要填 software（软件开发）或 none（普通群），收到「nope」。");
       expect(said(await run(hob, "hob", "update_group", { groupId: "nope", name: "x" }))).toBe("没有这个群：nope");
-      // 有没结束的事项时不能改工作方式
-      hob.runtime.groups.update(group.id, { workflow: "software" });
-      hob.runtime.projects.open({ group: hob.runtime.store.group(topic.id)!, ownerId: "hob", title: "按月筛选导出" });
-      expect(said(await run(hob, "hob", "update_group", { groupId: group.id, workflow: "none" }))).toBe("这个群还有没结束的事项，结束以后才能改工作方式");
     } finally { hob.close(); }
   });
 });
@@ -447,21 +441,19 @@ describe("manage_topic", () => {
       // 没有把用户的话转进去
       expect(hob.runtime.groups.timeline(other.id).filter((item) => item.kind === "user")).toHaveLength(0);
       expect(notesOf(hob, other.id)).toContain("Hob 开了话题「NAS 备份」");
-      expect(hobNotes(hob)).toContain("已开话题「NAS 备份」");
-      expect(hob.runtime.router.items("hob").items).toContainEqual(expect.objectContaining({ kind: "note", text: "已开话题「NAS 备份」", targetGroupId: other.id }));
+      expect(hobNotes(hob)).toContain("已在家里设备开了话题「NAS 备份」");
+      expect(hob.runtime.router.items("hob").items).toContainEqual(expect.objectContaining({ kind: "note", text: "已在家里设备开了话题「NAS 备份」", targetGroupId: other.id }));
       expect(hob.runtime.store.groupItems(other.id)).toContainEqual(expect.objectContaining({ kind: "note", text: "Hob 开了话题「NAS 备份」", targetGroupId: other.id }));
       // Hob 是这个群的群主，又在这个群的会话里
       expect(said(await run(hob, "hob", "manage_topic", { action: "open", groupId: group.id, title: "新话题" }, group.id))).toBe("在这个群开话题用 open_topic，它会把用户的原话转进话题。");
     } finally { hob.close(); }
   });
 
-  it("close / reopen / rename，以及有没结束事项不能关", async () => {
+  it("close / reopen / rename", async () => {
     const { hob, group } = setup();
     try {
       const topic = hob.runtime.groups.createTopic(group.id, "导出筛选", "user");
-      const project = hob.runtime.projects.open({ group: hob.runtime.store.group(topic.id)!, ownerId: "hob", title: "按月筛选导出" });
-      expect(said(await run(hob, "hob", "manage_topic", { action: "close", topicId: topic.id }))).toBe("话题「导出筛选」里的事项「按月筛选导出」还没结束，事项由群主「Hob」结束。");
-      hob.runtime.projects.close(topic.id, project.id, "done", "做完了");
+      expect(said(await run(hob, "hob", "manage_topic", { action: "close", topicId: topic.id }))).toBe("已关闭话题「导出筛选」。");
       expect(said(await run(hob, "hob", "manage_topic", { action: "close", topicId: topic.id, note: "筛选做完了" }))).toBe("已关闭话题「导出筛选」。");
       expect(hob.runtime.store.group(topic.id)).toMatchObject({ closeNote: "筛选做完了" });
       expect(notesOf(hob, group.id)).toContain("Hob 关闭了话题「导出筛选」");
@@ -471,7 +463,7 @@ describe("manage_topic", () => {
       expect(said(await run(hob, "hob", "manage_topic", { action: "rename", topicId: topic.id, title: "导出按月筛选" }))).toBe("已把话题改名为「导出按月筛选」。");
       expect(hob.runtime.store.group(topic.id)?.name).toBe("导出按月筛选");
       expect(notesOf(hob, group.id)).toContain("Hob 把话题改名为「导出按月筛选」");
-      for (const text of ["已关闭话题「导出筛选」", "已重开话题「导出筛选」", "已把话题改名为「导出按月筛选」"]) {
+      for (const text of ["已关闭交付小组的话题「导出筛选」", "已重开交付小组的话题「导出筛选」", "已把交付小组的话题「导出筛选」改名为「导出按月筛选」"]) {
         expect(hob.runtime.router.items("hob").items).toContainEqual(expect.objectContaining({ kind: "note", text, targetGroupId: group.id }));
       }
       for (const text of ["Hob 关闭了话题「导出筛选」", "Hob 重开了话题「导出筛选」", "Hob 把话题改名为「导出按月筛选」"]) {
@@ -497,9 +489,11 @@ describe("七个老工具带 assistantId", () => {
       await run(hob, "hob", "create_routine", { name: "周报", instruction: "写周报", schedules: ["0 17 * * 5"], assistantId: "write" });
       const created = hob.runtime.store.routines().find((item) => item.name === "周报")!;
       expect(created.assistantId).toBe("write");
+      // id 填错了：失败里列出现有的，带 id
+      expect(said(await run(hob, "hob", "update_routine", { routineId: "r-周报", name: "每周周报", assistantId: "write" }))).toContain(`没有这个定时任务：r-周报。「写作」现在的定时任务：「周报」（${created.id}）。`);
       expect(said(await run(hob, "hob", "update_routine", { routineId: created.id, name: "每周周报", assistantId: "write" }))).toContain("已修改");
       expect(hob.runtime.store.routine(created.id)?.name).toBe("每周周报");
-      expect(said(await run(hob, "hob", "delete_routine", { routineId: created.id, assistantId: "write" }))).toBe("已删除「每周周报」。「写作」现在没有定时任务了。");
+      expect(said(await run(hob, "hob", "delete_routine", { routineId: created.id, assistantId: "write" }))).toBe("已删除「每周周报」。「写作」现在没有定时任务。");
       expect(hob.runtime.store.routine(created.id)).toBeUndefined();
 
       saveAssistantSkill(hob.home, "write", { name: "weekly", title: "每周周报", description: "写周报", content: "步骤一" });
@@ -522,7 +516,7 @@ describe("七个老工具带 assistantId", () => {
 });
 
 describe("系统提示词", () => {
-  it("「助手」每行不带详细职责，最后是管理那段；「群」一节列群主和成员", () => {
+  it("「助手」每行不带详细职责，管理那段后面接挑群主；「群」一节写负责什么、群主和成员", () => {
     const { hob, group } = setup();
     try {
       const write = hob.runtime.store.assistant("write")!;
@@ -535,7 +529,7 @@ describe("系统提示词", () => {
       expect(prompt).toContain(ADMIN_LINE);
       expect(ADMIN_LINE).toBe("助手、群和话题，你都能直接建和改，和用户在界面上操作一样。用户要你改的，直接改，改完说一句改了什么。你自己觉得该改的，比如同类的事反复出现又没有合适的助手管、某个群缺了该在的成员，先跟用户说你的想法，用户同意了再改。归档助手和群由用户在界面上操作。");
       expect(prompt).toContain(`\n## 群\n`);
-      expect(prompt).toContain(`- 交付小组（${group.id}）：群主 Hob；成员 Hob、服务器、写作`);
+      expect(prompt).toContain(`- 交付小组（${group.id}）：负责一起做软件；群主 Hob；成员 Hob、服务器、写作`);
       expect(prompt).not.toContain("propose_assistant");
       // 话题不列；别的助手的提示词里没有这两节
       hob.runtime.groups.createTopic(group.id, "导出筛选", "user");

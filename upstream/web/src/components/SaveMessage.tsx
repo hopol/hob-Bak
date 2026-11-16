@@ -1,9 +1,10 @@
+import { t } from "../../../shared/i18n.ts";
 import { useEffect, useState } from "react";
 
 export function useSaveMessage() {
   const [message, setMessage] = useState<string | null>(null);
   useEffect(() => {
-    if (message !== "已保存") return;
+    if (message !== t("已保存")) return;
     const timer = setTimeout(() => setMessage(null), 3000);
     return () => clearTimeout(timer);
   }, [message]);
@@ -11,5 +12,5 @@ export function useSaveMessage() {
 }
 
 export function SaveMessage({ message, toast = false }: { message: string | null; toast?: boolean }) {
-  return message ? <span className={`${message === "已保存" ? "okline" : "badline"}${toast ? " savetoast" : ""}`} role="status">{message}</span> : null;
+  return message ? <span className={`${message === t("已保存") ? "okline" : "badline"}${toast ? " savetoast" : ""}`} role="status">{message}</span> : null;
 }

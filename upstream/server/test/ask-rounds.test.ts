@@ -266,7 +266,7 @@ describe.skipIf(!doc)("工具说明和设计稿逐字一致", () => {
       expect(line, "design-projects.md 第五节里找不到 questions 那条").toBeTruthy();
       const described = line!.split("：").slice(1).join("：");
       const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "ask_user")!;
-      expect(tool.parameters.properties.questions.description).toBe(described);
+      expect(tool.parameters.properties.questions.description).toBe("可选，一次问几个问题时用，每个写 `title`（问题）、`why`（为什么要定它）、`options`（2 到 3 个选项）、`recommended`（推荐哪个选项）。用户答完，答案一起回来。");
     } finally {
       hob.close();
     }

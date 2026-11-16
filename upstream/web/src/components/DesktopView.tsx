@@ -7,6 +7,7 @@ import { desktopMockScene } from "../mock.ts";
 import { MOCK, useApp } from "../store.ts";
 import { characterKeysym, compositionInput, isPasteShortcut, keyboardKeysym, textInputMethod } from "../desktop-input.ts";
 import { startDesktopScreen, useDesktopScreens } from "../desktop-screens.ts";
+import { t } from "../../../shared/i18n.ts";
 
 type Control = { taken: boolean; mine: boolean };
 /** 连接状态：连接中 / 已连上 / 断开或失败（可以重试） */
@@ -66,7 +67,7 @@ export function DesktopMini({ screen }: { screen: string }) {
     <>
       <div className="desktop-canvas" ref={target} />
       {MOCK ? <img className="desktop-shot" src={MOCK_SHOT} alt="" /> : null}
-      {phase === "ready" ? null : <div className="now-msg">{phase === "connecting" ? "正在连接云桌面…" : "云桌面连接已断开，正在重连…"}</div>}
+      {phase === "ready" ? null : <div className="now-msg">{phase === "connecting" ? t("正在连接云桌面…") : t("云桌面连接已断开，正在重连…")}</div>}
     </>
   );
 }
@@ -164,14 +165,14 @@ export function DesktopView({ onClose, takeOver = false, initialScreen = "hob" }
     if (MOCK) {
       if (desktopMockScene() === "failed") {
         setPhase("lost");
-        setError("无法连接云桌面，请确认云桌面已部署并启动。");
+        setError(t("无法连接云桌面，请确认云桌面已部署并启动。"));
       } else { setPhase("ready"); if (takeOver) setControl({ taken: true, mine: true }); }
       return;
     }
     const release = () => fetch("/api/desktop/control", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ client: id, screen, action: "release" }) }).catch(() => undefined);
     const refresh = async () => {
       const res = await fetch(`/api/desktop/control?client=${encodeURIComponent(id)}&screen=${encodeURIComponent(screen)}`);
-      if (!res.ok) throw new Error("无法读取接管状态。");
+      if (!res.ok) throw new Error(t("无法读取接管状态。"));
       const next = (await res.json()) as Control;
       owned = next.mine;
       if (active) setControl(next);
@@ -208,7 +209,7 @@ export function DesktopView({ onClose, takeOver = false, initialScreen = "hob" }
         client.addEventListener("disconnect", () => {
           if (!active) return;
           setPhase("lost");
-          setError("云桌面连接已断开，请重试；仍无法连接时请确认云桌面已启动。");
+          setError(t("云桌面连接已断开，请重试；仍无法连接时请确认云桌面已启动。"));
         });
         client.addEventListener("clipboard", (event: Event) => {
           if (!mine.current) return;
@@ -245,7 +246,7 @@ export function DesktopView({ onClose, takeOver = false, initialScreen = "hob" }
       body: JSON.stringify({ client: id, screen: targetScreen, action }),
     });
     const data = (await res.json()) as Control & { error?: string };
-    if (!res.ok) throw new Error(data.error ?? "操作失败。");
+    if (!res.ok) throw new Error(data.error ?? t("操作失败。"));
     if (viewActive.current && currentScreen.current === targetScreen) {
       mine.current = data.mine;
       setControl(data);
@@ -305,7 +306,7 @@ export function DesktopView({ onClose, takeOver = false, initialScreen = "hob" }
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error ?? "云桌面粘贴失败。");
+        throw new Error(body.error ?? t("云桌面粘贴失败。"));
       }
     });
   }
@@ -355,36 +356,36 @@ export function DesktopView({ onClose, takeOver = false, initialScreen = "hob" }
   const canToggle = control.mine || (MOCK ? !takenByOther : phase === "ready" && !takenByOther);
 
   return createPortal(
-    <div className="desktop-overlay" role="dialog" aria-label="云桌面">
+    <div className="desktop-overlay" role="dialog" aria-label={t("云桌面")}>
       <div className="desktop-bar">
-        <span className="desktop-title">云桌面</span>
-        <span className={`desktop-tag${control.mine ? " live" : ""}`}>{control.mine ? "你在操作" : "只看"}</span>
-        {takenByOther ? <span className="desktop-note">其他人正在接管</span> : null}
-        {control.mine && clipboard ? <span className="desktop-clipboard">云桌面复制了文字 <button className="hob-btn" onClick={() => {
-          if (!navigator.clipboard) return setError("复制失败，请使用支持剪贴板的安全连接。");
-          void navigator.clipboard.writeText(clipboard).then(() => setClipboard("")).catch(() => setError("复制失败，请检查浏览器的剪贴板权限。"));
-        }}>复制到本机</button></span> : null}
+        <span className="desktop-title">{t("云桌面")}</span>
+        <span className={`desktop-tag${control.mine ? " live" : ""}`}>{control.mine ? t("你在操作") : t("只看")}</span>
+        {takenByOther ? <span className="desktop-note">{t("其他人正在接管")}</span> : null}
+        {control.mine && clipboard ? <span className="desktop-clipboard">{t("云桌面复制了文字")} <button className="hob-btn" onClick={() => {
+          if (!navigator.clipboard) return setError(t("复制失败，请使用支持剪贴板的安全连接。"));
+          void navigator.clipboard.writeText(clipboard).then(() => setClipboard("")).catch(() => setError(t("复制失败，请检查浏览器的剪贴板权限。")));
+        }}>{t("复制到本机")}</button></span> : null}
         {phase === "ready" && error ? <span className="desktop-note bad" role="alert">{error}</span> : null}
         <span className="sp" />
-        <Select className="desktop-open" aria-label="屏幕" value={screen} onChange={setScreen} options={[
+        <Select className="desktop-open" aria-label={t("屏幕")} value={screen} onChange={setScreen} options={[
           ...(!Object.values(desktop.profiles).includes(screen) && screen !== "public" ? [{ value: screen, label: screen }] : []),
           ...assistants.filter((assistant) => desktop.profiles[assistant.id]).map((assistant) => {
             const id = desktop.profiles[assistant.id];
             const running = desktop.screens.some((entry) => entry.id === id && entry.running);
-            return { value: id, label: `${assistant.name} · ${running ? "运行中" : "未启动"}` };
+            return { value: id, label: `${assistant.name} · ${running ? t("运行中") : t("未启动")}` };
           }),
-          { value: "public", label: `公共屏幕 · ${desktop.screens.some((entry) => entry.id === "public" && entry.running) ? "运行中" : "未启动"}` }
+          { value: "public", label: `${t("公共屏幕")} · ${desktop.screens.some((entry) => entry.id === "public" && entry.running) ? t("运行中") : t("未启动")}` }
         ]} />
-        {control.mine && touch ? <button className="hob-btn" onClick={() => input.current?.focus()}>键盘</button> : null}
+        {control.mine && touch ? <button className="hob-btn" onClick={() => input.current?.focus()}>{t("键盘")}</button> : null}
         <button
           className="hob-btn hob-btn-primary"
           disabled={!canToggle}
-          title={takenByOther ? "其他人正在接管" : undefined}
+          title={takenByOther ? t("其他人正在接管") : undefined}
           onClick={() => void toggle()}
         >
-          {control.mine ? "交还" : "接管"}
+          {control.mine ? t("交还") : t("接管")}
         </button>
-        <button className="hob-icon-btn" title="关闭" aria-label="关闭云桌面" onClick={onClose}>
+        <button className="hob-icon-btn" title={t("关闭")} aria-label={t("关闭云桌面")} onClick={onClose}>
           <Icon name="close" size={18} />
         </button>
       </div>
@@ -404,7 +405,7 @@ export function DesktopView({ onClose, takeOver = false, initialScreen = "hob" }
           {control.mine ? <textarea
             ref={input}
             className="desktop-input"
-            aria-label="云桌面输入"
+            aria-label={t("云桌面输入")}
             autoCapitalize="off"
             autoComplete="off"
             spellCheck={false}
@@ -446,19 +447,19 @@ export function DesktopView({ onClose, takeOver = false, initialScreen = "hob" }
               {phase === "connecting" ? (
                 <>
                   <Icon name="spin" size={20} className="spin" />
-                  <span>正在连接云桌面…</span>
+                  <span>{t("正在连接云桌面…")}</span>
                 </>
               ) : (
                 <>
                   <div className="badline" role="alert">{error}</div>
-                  <button className="hob-btn" onClick={() => setAttempt((n) => n + 1)}>重试</button>
+                  <button className="hob-btn" onClick={() => setAttempt((n) => n + 1)}>{t("重试")}</button>
                 </>
               )}
             </div>
           )}
         </div>
       </div>
-      {tip ? <div className="desktop-tip">双指缩放，单指拖动画面</div> : null}
+      {tip ? <div className="desktop-tip">{t("双指缩放，单指拖动画面")}</div> : null}
     </div>,
     document.body,
   );

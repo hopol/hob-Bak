@@ -65,10 +65,9 @@ describe("建群", () => {
     expect(dialog()).not.toContain("照着已有的群建");
   });
 
-  it("照着某个群建：成员、群主和工作方式照它勾好", () => {
+  it("照着某个群建：成员和群主照它勾好", () => {
     const picked = membersOfGroup(groups[0]!);
-    expect(picked).toEqual({ members: ["po", "dev"], ownerId: "po", workflow: null });
-    expect(membersOfGroup({ ...groups[0]!, workflow: "software" }).workflow).toBe("software");
+    expect(picked).toEqual({ members: ["po", "dev"], ownerId: "po" });
     const html = members(picked.members, picked.ownerId);
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(2);
     expect(html).toContain(">群主<");
@@ -85,27 +84,23 @@ describe("建群", () => {
     expect(draftError("  ", ["write"])).toBe("给群起个名字。");
   });
 
-  it("建群带上选的工作方式：默认无，选了软件开发就带 software", () => {
-    expect(createBody(" Pix 开发 ", " 仓库的事 ", ["po", "dev"], "", null)).toEqual({
+  it("建群带着名字、负责什么、成员和群主，没有工作方式", () => {
+    expect(createBody(" Pix 开发 ", " 仓库的事 ", ["po", "dev"], "")).toEqual({
       name: "Pix 开发",
       purpose: "仓库的事",
       ownerId: "po",
       members: ["po", "dev"],
-      workflow: null,
     });
-    expect(createBody("Pix 开发", "", ["po"], "po", "software").workflow).toBe("software");
   });
 
-  it("对话框标题是新建群，工作方式两张卡默认「无」，照着的下拉只列群不列话题", () => {
+  it("对话框标题是新建群，没有工作方式，照着的下拉只列群不列话题", () => {
     state.groups = [...groups, { id: "t-1", name: "导出月度报表", purpose: "", ownerId: "po", members: ["po"], createdAt: "2026-11-10T01:00:00.000Z", parentId: "g-1" }];
     try {
       const html = dialog();
       expect(html).toContain("新建群");
-      // 两张选择卡：无、软件开发；默认选「无」
-      expect(html).toContain("软件开发");
-      expect(html.match(/aria-pressed="true"/g)).toHaveLength(1);
-      expect(html).toContain("大家在群里商量着办");
-      expect(html).toContain("需求澄清 → 需求说明 → 拆分 → 执行 → 验收，每件事一个话题");
+      expect(html).not.toContain("工作方式");
+      expect(html).not.toContain("软件开发");
+      expect(html).not.toContain("gcreate-wf");
       // 话题过滤由浏览器交互测试检查展开后的选项。
     } finally {
       state.groups = [];

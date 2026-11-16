@@ -1,5 +1,6 @@
 // 助手头像：Hob 的像素小火苗 + 颜色 + 道具，数据在 shared/sprites.ts；自画道具的数据跟着助手走。
 import { useRef } from "react";
+import { t } from "../../shared/i18n.ts";
 import { spriteArt, spriteEyes } from "../../shared/sprites.ts";
 import type { CustomProp, SpriteId } from "../../shared/types.ts";
 
@@ -86,7 +87,7 @@ export function Avatar({
           <SpritePixels art={art} />
         )}
       </svg>
-      <span className={`av-mark${mark ? " present" : ""}${displayedMark ? ` ${displayedMark}` : ""}`} aria-label={mark ? MARK_LABEL[mark] : undefined} aria-hidden={!mark}><span key={displayedMark} className="av-mark-icon">{displayedMark === "busy" ? <svg viewBox="0 0 13 5"><circle className="av-dot" cx="2.5" cy="2.5" r="1.5" /><circle className="av-dot" cx="6.5" cy="2.5" r="1.5" /><circle className="av-dot" cx="10.5" cy="2.5" r="1.5" /></svg> : displayedMark === "done" ? <svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg> : displayedMark === "ask" ? "?" : displayedMark === "stuck" ? "!" : null}</span></span>
+      <span className={`av-mark${mark ? " present" : ""}${displayedMark ? ` ${displayedMark}` : ""}`} aria-label={mark ? t(MARK_LABEL[mark]) : undefined} aria-hidden={!mark}><span key={displayedMark} className="av-mark-icon">{displayedMark === "busy" ? <svg viewBox="0 0 13 5"><circle className="av-dot" cx="2.5" cy="2.5" r="1.5" /><circle className="av-dot" cx="6.5" cy="2.5" r="1.5" /><circle className="av-dot" cx="10.5" cy="2.5" r="1.5" /></svg> : displayedMark === "done" ? <svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg> : displayedMark === "ask" ? "?" : displayedMark === "stuck" ? "!" : null}</span></span>
     </div>
   );
 }

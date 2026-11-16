@@ -1,5 +1,6 @@
 // 几张图片叠成一摞（微信的做法）：左右拖最上面那张，后面那张跟着手指慢慢浮上来；
 // 拖过一小段就换到下一张，被拖走的那张回到最底下。点一下打开当前这张。
+import { t } from "../../../shared/i18n.ts";
 import { useRef, useState } from "react";
 import { photoUrl } from "../store.ts";
 
@@ -31,7 +32,7 @@ export function PhotoStack({ photos, onOpen }: { photos: string[]; onOpen: (path
     <div
       className={`album-stack${dx ? " dragging" : ""}`}
       role="group"
-      aria-label={`${n} 张图片，左右滑动切换，点一下查看`}
+      aria-label={t("{n} 张图片，左右滑动切换，点一下查看", { n })}
       onPointerDown={(event) => {
         drag.current = { id: event.pointerId, x: event.clientX, moved: false };
         event.currentTarget.setPointerCapture(event.pointerId);

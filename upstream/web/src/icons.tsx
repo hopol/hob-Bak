@@ -15,6 +15,9 @@ const I = {
   pause: '<circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/>',
   check: '<path d="M5 12.5 10 17l9-10"/>',
   spin: '<path d="M12 3a9 9 0 1 0 9 9" />',
+  // 待办的状态：空圈是还没做，半实心圈是在做（静止的，不表示有人此刻正在做）
+  ring: '<circle cx="12" cy="12" r="8.5"/>',
+  half: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none"/>',
   out: '<path d="M7 17 17 7M8.5 7H17v8.5"/>',
   reply: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v3"/>',
   smile: '<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5s1.3 1.8 3.5 1.8 3.5-1.8 3.5-1.8M9 9.5h.01M15 9.5h.01"/>',

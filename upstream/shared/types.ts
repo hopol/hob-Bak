@@ -1,5 +1,6 @@
 // Hob 前后端共用的契约。改这里 = 两边一起改。说明见 docs/architecture.md。
 import type { SearchSettings } from "./search.ts";
+import type { Locale } from "./i18n.ts";
 
 export type Iso = string; // ISO 8601 时间
 
@@ -252,15 +253,13 @@ export interface AssistantSummary extends Assistant {
   readAt?: Iso; // 上次看这个助手的时间：之前结束的任务不再挂完成/受阻标记
   busy: boolean; // Router 正在回复（在跑的任务不算，任务状态看任务卡）
   activity?: RouterActivity | null;
+  todos?: TodoItem[]; // 这个助手单聊里的待办，按做的先后
 }
-
-/** 群的工作方式：software 是「软件开发」，群主有事项（需求澄清 → 任务拆分 → 执行 → 验收）。没有就是「无」。 */
-export type WorkflowId = "software";
 
 /**
  * 群：多个助手和用户一起说话的地方，长期留着，用户点「结束这个群」才归档。
  * 话题是挂在群下面的群（有 parentId）：一件事一条时间线，成员在每个话题里各有一份会话；
- * 群自己的那条时间线就是「综合」。话题的成员、群主、负责什么、工作方式都取所属的群。
+ * 群自己的那条时间线就是「综合」。话题的成员、群主、负责什么都取所属的群。
  */
 export interface Group {
   id: string; // "g-" + 短 id；话题也是
@@ -272,23 +271,36 @@ export interface Group {
   models?: { conversation?: ModelPick; work?: ModelPick }; // 本群模型默认值
   memberModels?: Record<string, { conversation?: ModelPick; work?: ModelPick }>; // 各成员在本群的模型覆盖
   createdAt: Iso;
-  workflow?: WorkflowId; // 工作方式；没有就是「无」
   parentId?: string; // 有它的是话题：所属的群
   createdBy?: string; // 话题：谁开的，"user" 或成员 assistantId
   closedAt?: Iso; // 话题：关了的时间；关了不能再发消息，能重新打开
   closeNote?: string; // 话题：关的时候写的结论或原因
+  handover?: TopicHandover; // 主助手交来的话题：谁交的，关的时候要送回给它的结论
 }
 
-/** 话题里的事项：左栏话题行、综合的话题卡、话题顶上的进度条用。 */
-export interface TopicProject {
-  id: string;
-  title: string;
-  stage: ProjectStage;
-  done: number; // 完成的子任务数
-  total: number; // 子任务总数
-  waitingUser: boolean; // 有等用户回答的提问卡，轮到用户做的子任务，或者子任务拆好了等用户点开始
-  current?: string; // 现在轮到谁（assistantId）：澄清、拆分是负责人，执行是正在做子任务的成员，验收是验收的成员
+/**
+ * 主助手把一件事交给群：话题上记着是它交来的，关话题时要送回一条结论。
+ * 先记下 result 再送，送到了记 deliveredAt；重新打开再关不再送。
+ */
+export interface TopicHandover {
+  by: string; // 交给群的主助手
+  at: Iso;
+  result?: string; // 关话题时送回给主助手的那句话
+  deliveredAt?: Iso; // 送到主助手的对话的时间；没有就是还没送到
 }
+
+/** 一份待办里的一项：做什么，做到哪儿。 */
+export interface TodoItem {
+  text: string;
+  status: "todo" | "doing" | "done";
+}
+
+/**
+ * 一份待办收起的原因：全做完了、模型清掉了、话题关了、搁久了。
+ * 收起时把当时那份清单记进时间线，当前这份清空。
+ */
+/** 收起的一份待办为什么收的。老数据里还有这种时间线条目；现在已经不再写入、界面也不显示。 */
+export type TodoArchiveWhy = "done" | "cleared" | "topicClosed" | "stale";
 
 export type InheritedGroupModel = { source: "group" | "assistant" | "global"; pick: ModelPick };
 export type GroupMemberModel = { source: "member" | InheritedGroupModel["source"]; pick: ModelPick; inherited: InheritedGroupModel };
@@ -303,72 +315,18 @@ export interface GroupSummary extends Group {
   last?: { at: Iso; speaker: string | "user"; text: string }; // 左栏预览「服务器：…」
   unread: number;
   busy: string[]; // 正在这个群（话题）里说话、或者有任务在跑的成员
-  project?: TopicProject; // 话题里有事项时
+  todos?: TodoItem[]; // 这个会话（综合、话题）的待办，按做的先后
 }
 
 /**
  * 群里的条目：在 Item 上加发言人。user 条目的 speaker 是 "user"。id 是 "g-<序号>"。
- * forwardedFrom：从综合转进话题的用户消息，记着原来那条在哪。
+ * forwardedFrom：转进话题的用户消息，记着原来那条在哪——综合里的哪一条，或者主助手对话里的哪一条。
  */
-export type GroupItem = Item & { speaker: string | "user"; forwardedFrom?: { groupId: string; itemId: string } };
+export type GroupItem = Item & { speaker: string | "user"; forwardedFrom?: { groupId: string; itemId: string } | { assistantId: string; itemId?: string } };
 
 export interface GroupItemsPage extends Omit<ItemsPage, "items" | "drafts" | "delegations" | "pageLive"> {
   items: GroupItem[]; // 旧 → 新
 }
-
-/** 事项走到哪一步。只能按顺序走：需求澄清 → 任务拆分 → 执行 → 验收。 */
-export type ProjectStage = "clarify" | "plan" | "doing" | "review" | "done" | "dropped";
-
-/** 群里的一个事项：原始需求、问答、需求说明、子任务、验收结果和结论都记在它里面。 */
-export interface Project {
-  id: string; // "p-" + 短 id
-  groupId: string; // 事项所在的话题（以前直接立在群里的是群 id）
-  title: string;
-  ownerId: string; // 负责的成员：立事项的群主
-  stage: ProjectStage;
-  /** 原始需求：叫到群主的那条用户消息，原样 */
-  request: { text: string; files?: string[]; quote?: { itemId: string; text: string }; itemId?: string; at: Iso };
-  clarify: ProjectQuestion[]; // 需求澄清的问答
-  requirements?: { content: string; acceptance: string[]; updatedAt: Iso };
-  subtasks: Subtask[];
-  cwd?: string; // 所有子任务共用的工作目录；不填则各自在任务自己的目录里做
-  startedAt?: Iso; // 开始执行的时间
-  checks?: ProjectCheck[]; // 逐条验收结果，index 是验收标准的序号（从 1 开始）；同一条以最新的为准
-  summary?: string; // 结束时给用户的结论；放弃时是原因
-  itemId: string; // 群时间线里事项卡的条目 id
-  createdAt: Iso;
-  updatedAt: Iso;
-  endedAt?: Iso;
-}
-
-/** 需求澄清里问用户的一个问题。 */
-export interface ProjectQuestion {
-  title: string;
-  why?: string; // 为什么要定它
-  options?: string[];
-  recommended?: string;
-  answer?: string;
-  askedBy: string; // 问的人（成员 assistantId）
-  at: Iso;
-  answeredAt?: Iso;
-}
-
-/** 事项拆出来的一份工作；执行时就是一个任务。 */
-export interface Subtask {
-  n: number; // 序号，从 1 开始
-  title: string;
-  assignee: string; // 成员 assistantId，或 "user"
-  brief: string;
-  after: number[]; // 前置子任务的序号
-  check?: boolean; // 验收子任务
-  jobId?: string; // 成员的子任务对应的任务
-  doneAt?: Iso; // 用户的子任务：点了完成的时间
-  notifiedAt?: Iso; // 轮到它时通知过被分到的人（或用户）的时间，重启后不会重复通知
-  startError?: string; // 任务没能开起来时的原因；重新拆分会替换这个还没开始的子任务
-}
-
-/** 一条验收标准的验收结果；index 是验收标准的序号，从 1 开始（和事项页上的编号一致）。 */
-export interface ProjectCheck { index: number; passed: boolean; evidence: string; files?: string[]; jobId: string; at: Iso }
 
 export interface Rule {
   id: string;
@@ -418,6 +376,8 @@ export interface Routine {
   groupId?: string; // 结果发到的群或话题
   name: string; // 如 "每日简报"
   instruction: string; // 要做什么
+  instructionBy?: string; // 「要做的事」是谁写的："user" 是用户自己写的（界面上建、改过它）；助手用工具写的存助手 id；旧数据没有
+  userWords?: { text: string; at: Iso }[]; // 助手用工具建、改这条定时任务时，那一轮用户的原话，按时间先后，留最近 3 条
   schedules: string[]; // cron 表达式（如 "0 9 * * *"）或具体时间（如 "2026-11-08T09:00"）；可多个（"再加一个"）
   active: boolean;
   createdAt: Iso;
@@ -543,13 +503,11 @@ export interface Job {
   routineId?: string; // 由定时触发
   after?: string[]; // 前置任务：这些都做完了才开始，有一个没做成它就不开始
   sediment?: SedimentStatus; // 在原任务中沉淀技能，不改变任务状态
-  skills?: string[]; // 派活时交给任务的本助手技能
-  skillsUsed?: string[]; // 这次读过的本助手技能（AssistantSkill.name）
+  skillsUsed?: string[]; // 这次读过的沉淀技能（AssistantSkill.name：助手自己的和群里沉淀的）
   delegationId?: string; // 转交回合创建的任务
   groupId?: string; // 在群里开的任务：卡片进群的时间线，结果回到这个成员在群里的会话
-  /** 事项里某个子任务的任务：事项 id 和子任务序号 */
-  project?: { id: string; n: number };
-  /** 续做前每一轮结束时的样子（第 0 轮起）。对话里前面几张任务卡照它显示，最后一张跟着任务实时变 */
+  startedBy?: string; // 群里派给别的成员时，派活的那个助手：结果和提问回到它，不回执行人的单聊
+  /** 续做前每一轮结束时的样子（第 0 轮起）。任务详情里切换着看前几轮；对话里只留最新一轮那张卡，跟着任务实时变 */
   rounds?: JobRound[];
   activity: ActivityLine[]; // 最近 200 行
 }
@@ -636,14 +594,14 @@ export type NoteIcon = "memory" | "rule" | "routine" | "split" | "info" | "skill
 export type Item = (
   | { kind: "user"; id: string; at: Iso; text: string; quote?: { itemId: string; text: string }; files?: string[]; from?: { assistantId: string; name: string; delegationId: string } }
   | { kind: "assistant"; id: string; at: Iso; text: string; streaming?: boolean; routine?: { id: string; name: string; jobId?: string }; quote?: { itemId: string; text: string } }
-  | { kind: "note"; id: string; at: Iso; icon: NoteIcon; text: string; handbackId?: string; path?: string; targetGroupId?: string } // path：点了预览这个文件（如技能的 SKILL.md） // 居中灰色一行，如 "记忆已更新 · 不看融资新闻"
+  | { kind: "note"; id: string; at: Iso; icon: NoteIcon; text: string; request?: string; handbackId?: string; path?: string; targetGroupId?: string; detail?: string } // request：定时任务到点时交给群主的全文，界面不显示，转进话题、派任务时带上 // path：点了预览这个文件（如技能的 SKILL.md） // detail：点开才看的原因（工具报错的原文） // 居中灰色一行，如 "记忆已更新 · 不看融资新闻"
+  | { kind: "todos"; id: string; at: Iso; items: TodoItem[]; why: TodoArchiveWhy } // 老数据：以前收起的一份待办。现在不再写入，界面不显示（对话里只放用户需要看的东西）
   | { kind: "question"; id: string; at: Iso; approvalId: string }
   | { kind: "job"; id: string; at: Iso; jobId: string; round?: number } // 第几轮（续做一次 +1），缺省是第 0 轮
   | { kind: "delegation"; id: string; at: Iso; delegationId: string }
   | { kind: "draft"; id: string; at: Iso; draftId: string }
   | { kind: "image"; id: string; at: Iso; prompt: string; size?: string; startedAt: Iso; status: "pending" | "done" | "failed"; path?: string; error?: string }
   | { kind: "file"; id: string; at: Iso; path: string; name: string; meta?: string } // meta 如 "3200 字 · 4 张图"
-  | { kind: "project"; id: string; at: Iso; projectId: string } // 群时间线里的事项卡
   | { kind: "topic"; id: string; at: Iso; topicId: string } // 综合时间线里的话题卡：开了话题、立事项开的话题
 ) & {
   /** 这条开启新的一组，前端在它上面拉开间距：事件触发的新一轮回复，或任务直接发进对话的图片、提问卡 */
@@ -711,6 +669,7 @@ export interface GeneralSettings {
   /** 头像带不带彩色圆底；旧设置缺省为带。 */
   avatarBackground?: boolean;
   theme: Theme;
+  locale?: Locale;
   timezone: string; // IANA 时区名，默认系统时区
   aboutYou: { name: string; language: string; notes: string }; // 空字符串 = 没填，提示词里就不出这一节
 }
@@ -953,7 +912,6 @@ export type HobEvent =
   | { type: "group-item"; groupId: string; item: GroupItem } // 新条目，或按 id 替换
   | { type: "group-delta"; groupId: string; itemId: string; text: string } // 流式追加
   | { type: "group-activity"; groupId: string; speaker: string; activity: RouterActivity | null }
-  | { type: "project"; project: Project } // 事项新建或变化
   | { type: "item"; assistantId: string; item: Item } // 新条目，或按 id 替换
   | { type: "delta"; assistantId: string; itemId: string; text: string } // 流式追加到 assistant 条目
   | { type: "job"; job: Job }

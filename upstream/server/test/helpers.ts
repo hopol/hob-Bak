@@ -34,6 +34,8 @@ export interface MakeHobOptions {
   pushSender?: PushSender;
   /** 测试注入假的服务商接口（拉模型列表用） */
   fetchImpl?: typeof fetch;
+  /** 引擎的重试预算：失败用例把间隔调小，不干等十几秒 */
+  retry?: { maxRetries?: number; baseDelayMs?: number };
 }
 
 /**
@@ -82,7 +84,7 @@ export function makeHob(overrides: Partial<HobConfig> = {}, options: MakeHobOpti
     work: { ref: defaultModel, thinking: "off" },
   };
   const merged = {
-    general: { ...settings.general, ...(options.settings?.general ?? {}) },
+    general: { ...settings.general, locale: "zh-CN", ...(options.settings?.general ?? {}) },
     providers: options.providers ?? [],
     models: options.settings?.models ? { ...seedModels, ...options.settings.models } : seedModels,
     work: { ...settings.work, ...(options.settings?.work ?? {}) },
@@ -102,6 +104,7 @@ export function makeHob(overrides: Partial<HobConfig> = {}, options: MakeHobOpti
   const pi = new PiHost({
     engineDir: join(home, "system", "engine"),
     nativeProviders: [faux.provider],
+    ...(options.retry ? { retry: options.retry } : {}),
   });
   const runtime = createRuntime({
     home,

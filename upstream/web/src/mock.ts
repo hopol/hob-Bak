@@ -25,12 +25,9 @@ import type {
   MemoryConfig,
   MemoryProvider,
   Profile,
-  Project,
-  ProjectStage,
   Routine,
   RoutineRun,
   Rule,
-  Subtask,
   ThinkingLevelMapSetting,
   ModelsView,
   ModelThinkingView,
@@ -48,28 +45,14 @@ import type {
   WorklogEntry,
 } from "../../shared/types.ts";
 import { defaultSearch } from "../../shared/search.ts";
-import { subtaskStatus } from "../../shared/project.ts";
 import { knowledgeGroup, type KnowledgeCollection, type KnowledgeEntry } from "../../shared/knowledge.ts";
 import type { McpView } from "../../shared/mcp.ts";
 import type { AssistantSkill } from "../../shared/skills.ts";
 import { ApiError, type HobApi } from "./api.ts";
+import { currentLocale } from "../../shared/i18n.ts";
 import { normalizeThinkingMap, thinkingPlan } from "../../shared/thinking.ts";
 
-export type SceneId = "g-owns" | "g-owns-dark" | "readme-chat" | "readme-cards" | "readme-desktop" | "readme-knowledge" | "readme-profile" | "readme-group-now" | "readme-mobile-list" | "readme-mobile-chat" | "readme-mobile-project" | "image" | "act-demo" | "act-think" | "act-tool" | "act-dark" | "act-home" | "boot" | "bubbles" | "bubbles-dark" | "card-130" | "card-130-dark" | "job-after" | "job-after-dark" | "routine-check-dark" | "routine-once" | "routine-once-dark" | "routine-once-list" | "ask-rounds" | "ask-rounds-answered" | "ask-rounds-group" | "ask-rounds-dark" | "ask-rounds-mobile" | "s1" | "s2" | "s3" | "s4" | "s6" | "mlist" | "mchat" | "d-running" | "d-waiting" | "d-done" | "d-dark" | "d-source" | "d-mobile" | "h-hob" | "h-dark" | "h-source" | "h-settings" | "h-mobile" | "g-chat" | "g-mention" | "g-mobile" | "g-dark" | "g-team" | "p-clarify" | "p-plan" | "p-doing" | "p-card" | "p-check" | "p-done" | "p-dropped" | "p-dark" | "p-mobile" | "topics" | "topics-plain";
-
-/** 演示场景对应的事项阶段（g6、g7 那件「登录页加「记住我」」）。 */
-const PROJECT_SCENES: Partial<Record<SceneId, ProjectStage>> = {
-  "g-team": "doing",
-  "p-doing": "doing",
-  "p-dark": "doing",
-  "p-mobile": "doing",
-  "p-clarify": "clarify",
-  "p-plan": "plan",
-  "p-card": "plan",
-  "p-check": "review",
-  "p-done": "done",
-  "p-dropped": "dropped",
-};
+export type SceneId = "g-owns" | "g-owns-dark" | "readme-chat" | "readme-cards" | "readme-desktop" | "readme-knowledge" | "readme-profile" | "readme-group-now" | "readme-mobile-list" | "readme-mobile-chat" | "readme-mobile-todos" | "image" | "act-demo" | "act-think" | "act-tool" | "act-dark" | "act-home" | "boot" | "bubbles" | "bubbles-dark" | "card-130" | "card-130-dark" | "job-after" | "job-after-dark" | "routine-check-dark" | "routine-once" | "routine-once-dark" | "routine-once-list" | "ask-rounds" | "ask-rounds-answered" | "ask-rounds-group" | "ask-rounds-dark" | "ask-rounds-mobile" | "s1" | "s2" | "s3" | "s4" | "s6" | "mlist" | "mchat" | "d-running" | "d-waiting" | "d-done" | "d-dark" | "d-source" | "d-mobile" | "h-hob" | "h-dark" | "h-source" | "h-settings" | "h-mobile" | "g-chat" | "g-mention" | "g-mobile" | "g-dark" | "g-team" | "todo-chat" | "todo-topic" | "todo-job" | "topics" | "topics-plain";
 
 /** 每个截图场景对应的界面状态（选中哪个助手或群、右栏开什么）。 */
 export const SCENE_UI: Record<
@@ -84,7 +67,7 @@ export const SCENE_UI: Record<
   "readme-group-now": { sel: null, gsel: "t-readme", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "readme-mobile-list": { sel: null, panel: "now", collapsed: false, dark: false, mobile: "list" },
   "readme-mobile-chat": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
-  "readme-mobile-project": { sel: null, gsel: "t-readme", panel: "project:t-readme/p-readme", collapsed: false, dark: false, mobile: "chat" },
+  "readme-mobile-todos": { sel: null, gsel: "t-readme", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   image: { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "act-demo": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "act-think": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
@@ -133,17 +116,11 @@ export const SCENE_UI: Record<
   "g-owns-dark": { sel: null, gsel: "g-dev", panel: "now", collapsed: false, dark: true, mobile: "chat" },
   "g-owns": { sel: null, gsel: "g-dev", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "g-team": { sel: null, gsel: "g-dev", panel: "now", collapsed: false, dark: false, mobile: "chat" },
-  // 事项：需求澄清中、拆好了等确认、执行中、验收中（一条没过）、已完成、已放弃、深色、手机
-  "p-clarify": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: false, mobile: "chat" },
-  "p-plan": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: false, mobile: "chat" },
-  "p-card": { sel: null, gsel: "g-dev", panel: "now", collapsed: false, dark: false, mobile: "chat" },
-  "p-doing": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: false, mobile: "chat" },
-  "p-check": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: false, mobile: "chat" },
-  "p-done": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: false, mobile: "chat" },
-  "p-dropped": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: false, mobile: "chat" },
-  "p-dark": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: true, mobile: "chat" },
-  "p-mobile": { sel: null, gsel: "g-dev", panel: "project:g-dev/p-remember", collapsed: false, dark: false, mobile: "chat" },
-  // 话题（票 152）：软件开发群、无工作方式的群
+  // 待办：单聊里一份在做、话题里一份在做、一张带进度的任务卡
+  "todo-chat": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "todo-topic": { sel: null, gsel: "t-remember", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "todo-job": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  // 话题（票 152）：一个敏捷团队群、一个家用群
   topics: { sel: null, gsel: "g-topics", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "topics-plain": { sel: null, gsel: "g-home", panel: "now", collapsed: false, dark: false, mobile: "chat" },
 };
@@ -255,7 +232,6 @@ interface Db {
   assistants: AssistantSummary[];
   groups: GroupSummary[];
   groupItems: Record<string, GroupItem[]>;
-  projects: Record<string, Project[]>;
   items: Record<string, Item[]>;
   jobs: Record<string, Job>;
   delegations: Record<string, Delegation>;
@@ -268,18 +244,34 @@ interface Db {
   settings: Bootstrap["settings"];
 }
 
-const HOB_TASK_ACTIVITY: Job["activity"] = [
-  { at: minsAgo(6), verb: "$", text: "npm run typecheck" },
-  { at: minsAgo(5), verb: "读", text: "protocol/src/projection.ts" },
-  { at: minsAgo(4), verb: "读", text: "client/src/runtime/store.ts" },
-  { at: minsAgo(3), verb: "跑", text: "浏览器 打开 http://localhost:3000/pricing" },
-  { at: minsAgo(3), verb: "跑", text: "npm test -w protocol" },
-  { at: minsAgo(2), verb: "读", text: "client/src/chat/Transcript.tsx" },
-  { at: minsAgo(1), verb: "读", text: "client/src/chat/ToolRow.tsx" },
-];
+/**
+ * 演示数据按界面语言出两份。只有 README 截图用到的场景有英文版：界面英文时这些场景的数据
+ * 也换成英文，免得截图里一半英文一半中文。别的场景照旧只有中文数据。
+ */
+const ENGLISH_DEMO_SCENES: SceneId[] = ["s1", "s6", "readme-group-now", "readme-mobile-list", "readme-mobile-chat", "readme-mobile-todos"];
+
+function englishDemo(scene: SceneId): boolean {
+  return currentLocale() === "en" && ENGLISH_DEMO_SCENES.includes(scene);
+}
+
+type Say = (zh: string, en: string) => string;
+
+function hobTaskActivity(L: Say): Job["activity"] {
+  return [
+    { at: minsAgo(6), verb: "$", text: "npm run typecheck" },
+    { at: minsAgo(5), verb: "读", text: "protocol/src/projection.ts" },
+    { at: minsAgo(4), verb: "读", text: "client/src/runtime/store.ts" },
+    { at: minsAgo(3), verb: "跑", text: L("浏览器 打开 http://localhost:3000/pricing", "open http://localhost:3000/pricing in the browser") },
+    { at: minsAgo(3), verb: "跑", text: "npm test -w protocol" },
+    { at: minsAgo(2), verb: "读", text: "client/src/chat/Transcript.tsx" },
+    { at: minsAgo(1), verb: "读", text: "client/src/chat/ToolRow.tsx" },
+  ];
+}
 
 function buildDb(scene: SceneId): Db {
   const s1 = scene === "s1" || scene === "s6";
+  const en = englishDemo(scene);
+  const L: Say = (zh, english) => (en ? english : zh);
   const draftPending = scene === "s4";
   // 需要演示“待确认”的场景：桌面的 s1 和手机列表的 mlist（两边截图看同一套内容）
   const pending = s1 || scene === "mlist";
@@ -289,73 +281,73 @@ function buildDb(scene: SceneId): Db {
     {
       id: "hob",
       name: "Hob",
-      duty: "主助手",
+      duty: L("主助手", "Main assistant"),
       sprite: "hob",
       primary: true,
       pinned: true,
       hidden: false,
       notify: true,
-      instructions: "输出用中文短句；编写代码的任务先询问项目目录。",
+      instructions: L("输出用中文短句；编写代码的任务先询问项目目录。", "Keep replies short; for coding jobs, ask for the project folder first."),
       createdAt: at(30, 9, 0),
-      last: { text: "已交给任务处理，完成后通知你。", at: at(0, 10, 5) },
+      last: { text: L("已交给任务处理，完成后通知你。", "Handed it to a job. I'll tell you when it's done."), at: at(0, 10, 5) },
       unread: 0,
       busy: true,
     },
     {
       id: "page",
-      name: "写作",
-      duty: "周报和文章",
+      name: L("写作", "Writing"),
+      duty: L("周报和文章", "Weekly reports and articles"),
       sprite: "page",
       primary: false,
       pinned: true,
       hidden: false,
       notify: true,
-      instructions: "口语化短句；标题不超过 20 字；配图自行生成；周报每周五提交。",
+      instructions: L("口语化短句；标题不超过 20 字；配图自行生成；周报每周五提交。", "Short, conversational lines; titles under 60 characters; make your own images; send the weekly report on Fridays."),
       models: {
         work: { ref: "faux/smart", thinking: "high" },
         allowed: ["faux/smart", "faux/vision"],
       },
       abilities: { exec: false, write: true, image: true },
       createdAt: at(30, 9, 0),
-      last: { text: "好的。每周五 17:00 撰写初稿，存入草稿箱，完成后通知你。", at: at(0, 10, 20) },
+      last: { text: L("好的。每周五 17:00 撰写初稿，存入草稿箱，完成后通知你。", "Sure. Every Friday at 17:00 I'll write the draft, save it to the drafts folder, and tell you when it's done."), at: at(0, 10, 20) },
       unread: 2,
       busy: false,
     },
     {
       id: "server",
-      name: "服务器",
-      duty: "线上和机器",
+      name: L("服务器", "Ops"),
+      duty: L("线上和机器", "Servers and machines"),
       sprite: "server",
       primary: false,
       pinned: true,
       hidden: false,
       notify: true,
-      instructions: "清理日志前先查看保留天数的规则。",
+      instructions: L("清理日志前先查看保留天数的规则。", "Check the retention rule before cleaning up logs."),
       createdAt: at(28, 9, 0),
-      last: { text: "凌晨 3 点清理 2.1GB 旧日志", at: at(1, 3, 5) },
+      last: { text: L("凌晨 3 点清理 2.1GB 旧日志", "Cleaned 2.1 GB of old logs at 3 am"), at: at(1, 3, 5) },
       unread: 0,
       busy: false,
     },
     {
       id: "bird",
-      name: "行业动态",
-      duty: "每天 6 条行业动态",
+      name: L("行业动态", "Industry news"),
+      duty: L("每天 6 条行业动态", "Six industry updates a day"),
       sprite: "bird",
       primary: false,
       pinned: false,
       hidden: false,
       notify: true,
-      instructions: "关注 agent 编排和本地部署，不包含融资新闻。",
+      instructions: L("关注 agent 编排和本地部署，不包含融资新闻。", "Follow agent orchestration and local deployment; skip funding news."),
       createdAt: at(7, 9, 0),
       splitFrom: { from: "hob", at: at(7, 9, 0), conversations: 8 },
-      last: { text: "今天 6 条，挑选了 2 条重点", at: at(0, 9, 0) },
+      last: { text: L("今天 6 条，挑选了 2 条重点", "Six items today, two worth your time"), at: at(0, 9, 0) },
       unread: 0,
       busy: false,
     },
     {
       id: "house",
-      name: "家里 NAS",
-      duty: "相册和备份",
+      name: L("家里 NAS", "Photos"),
+      duty: L("相册和备份", "Photos and backups"),
       sprite: "house",
       primary: false,
       pinned: false,
@@ -363,14 +355,14 @@ function buildDb(scene: SceneId): Db {
       notify: false,
       instructions: "",
       createdAt: at(25, 9, 0),
-      last: { text: "相册备份完成，新增 312 张", at: at(0, 7, 30) },
+      last: { text: L("相册备份完成，新增 312 张", "Photo backup done: 312 new photos"), at: at(0, 7, 30) },
       unread: 0,
       busy: false,
     },
     {
       id: "coin",
-      name: "记账",
-      duty: "账单和预算",
+      name: L("记账", "Budget"),
+      duty: L("账单和预算", "Bills and budgets"),
       sprite: "coin",
       primary: false,
       pinned: false,
@@ -378,14 +370,14 @@ function buildDb(scene: SceneId): Db {
       notify: false,
       instructions: "",
       createdAt: at(24, 9, 0),
-      last: { text: "10 月账单已整理完成，比上月减少 12%", at: at(1, 21, 10) },
+      last: { text: L("10 月账单已整理完成，比上月减少 12%", "October bills are done, 12% less than last month"), at: at(1, 21, 10) },
       unread: 0,
       busy: false,
     },
     {
       id: "book",
-      name: "读书",
-      duty: "读书笔记",
+      name: L("读书", "Reading"),
+      duty: L("读书笔记", "Reading notes"),
       sprite: "book",
       primary: false,
       pinned: false,
@@ -393,14 +385,14 @@ function buildDb(scene: SceneId): Db {
       notify: false,
       instructions: "",
       createdAt: at(20, 9, 0),
-      last: { text: "本周读书笔记已整理完成", at: at(3, 20, 0) },
+      last: { text: L("本周读书笔记已整理完成", "This week's reading notes are done"), at: at(3, 20, 0) },
       unread: 0,
       busy: false,
     },
     {
       id: "leaf",
-      name: "健身",
-      duty: "每周训练",
+      name: L("健身", "Fitness"),
+      duty: L("每周训练", "Weekly training"),
       sprite: "leaf",
       primary: false,
       pinned: false,
@@ -408,16 +400,16 @@ function buildDb(scene: SceneId): Db {
       notify: false,
       instructions: "",
       createdAt: at(18, 9, 0),
-      last: { text: "本周三次训练已记录", at: at(2, 19, 0) },
+      last: { text: L("本周三次训练已记录", "Three sessions recorded this week"), at: at(2, 19, 0) },
       unread: 0,
       busy: false,
     },
     // 自带的敏捷团队（收起的助手）：g6、g7 里的五个人
     {
       id: "po",
-      name: "产品负责人",
-      duty: "需求和优先级",
-      dutyLong: "把用户的想法问清楚，写成需求说明和验收标准，拆成子任务分给合适的成员；做完以后对照验收标准验收。拿不准用户要什么时先问用户。",
+      name: L("产品负责人", "Product owner"),
+      duty: L("统筹和优先级", "Coordination and priorities"),
+      dutyLong: L("接住用户和定时任务带来的事，按分量安排：一个任务能做完的，自己派任务或者叫合适的成员来做，结果回来核一遍再告诉用户；要几个人接力的，开一个话题，在里面安排，做完给用户一个结论。", "Take on what the user and the schedules bring and size it up: if one job can finish it, start that job yourself or bring in the right member, then check the result before telling the user; if it needs several people handing off, open a topic, run it there, and give the user a conclusion when it is done."),
       sprite: "sticky:purple",
       primary: false,
       pinned: false,
@@ -425,15 +417,15 @@ function buildDb(scene: SceneId): Db {
       notify: true,
       instructions: "",
       createdAt: at(5, 10, 0),
-      last: { text: "需求说明已完成，拆分为 4 个子任务", at: at(0, 9, 41) },
+      last: { text: L("列了 4 项待办，第 4 项要你在手机上试一下", "4 to-dos listed; item 4 is yours to try on a phone"), at: at(0, 9, 41) },
       unread: 0,
       busy: false,
     },
     {
       id: "arch",
-      name: "架构师",
-      duty: "方案和设计",
-      dutyLong: "定方案、拆边界，写清接口和数据结构，让动手的人不用猜。",
+      name: L("架构师", "Architect"),
+      duty: L("方案和设计", "Design and boundaries"),
+      dutyLong: L("定方案、拆边界，写清接口和数据结构，让动手的人不用猜。", "Settle the approach, draw the boundaries, and write down the interfaces and data structures so whoever builds it doesn't have to guess."),
       sprite: "blocks:slate",
       primary: false,
       pinned: false,
@@ -441,15 +433,15 @@ function buildDb(scene: SceneId): Db {
       notify: true,
       instructions: "",
       createdAt: at(5, 10, 0),
-      last: { text: "30 天的长效 token 放 httpOnly cookie", at: at(0, 9, 44) },
+      last: { text: L("30 天的长效 token 放 httpOnly cookie", "The 30-day token goes in an httpOnly cookie"), at: at(0, 9, 44) },
       unread: 0,
       busy: false,
     },
     {
       id: "dev",
-      name: "开发",
-      duty: "写代码",
-      dutyLong: "按需求和子任务实现，先写一个会失败的检查，做完自审。",
+      name: L("开发", "Developer"),
+      duty: L("写代码", "Code"),
+      dutyLong: L("按待办实现，先写一个会失败的测试，做完自审。", "Build what the to-dos ask for, start with a test that fails, and review your own work."),
       sprite: "code:green",
       primary: false,
       pinned: false,
@@ -457,15 +449,15 @@ function buildDb(scene: SceneId): Db {
       notify: true,
       instructions: "",
       createdAt: at(5, 10, 0),
-      last: { text: "开工", at: at(0, 9, 45) },
+      last: { text: L("开工", "Started"), at: at(0, 9, 45) },
       unread: 0,
       busy: true,
     },
     {
       id: "qa",
-      name: "测试",
-      duty: "验收和回归",
-      dutyLong: "没参与做的时候，对照需求说明和验收标准逐条查，附上证据。",
+      name: L("测试", "Tester"),
+      duty: L("测试和回归", "Testing and regression"),
+      dutyLong: L("没参与做的时候，对照要做成什么样逐条查，附上证据。", "When you didn't build it, go through what was asked, item by item, and attach evidence."),
       sprite: "bug:red",
       primary: false,
       pinned: false,
@@ -478,9 +470,9 @@ function buildDb(scene: SceneId): Db {
     },
     {
       id: "release",
-      name: "发布",
-      duty: "上线和回滚",
-      dutyLong: "发版、上线和回滚，写清这次上了什么、怎么退回去。",
+      name: L("发布", "Release"),
+      duty: L("上线和回滚", "Deploy and roll back"),
+      dutyLong: L("发版、上线和回滚，写清这次上了什么、怎么退回去。", "Ship, deploy and roll back; say what went out and how to undo it."),
       sprite: "rocket:orange",
       primary: false,
       pinned: false,
@@ -518,33 +510,33 @@ function buildDb(scene: SceneId): Db {
   });
 
   const publishOptions: Approval["options"] = [
-    { key: "A", label: "发布" },
-    { key: "B", label: "暂不发布" },
-    { key: "C", label: "以后同类内容直接发布，无需确认", always: true },
+    { key: "A", label: L("发布", "Publish") },
+    { key: "B", label: L("暂不发布", "Not now") },
+    { key: "C", label: L("以后同类内容直接发布，无需确认", "Always publish this kind of content without asking"), always: true },
   ];
 
   const approvals: Record<string, Approval> = {
     "ap-publish": approval(
       "ap-publish",
       "page",
-      "发到公众号吗？",
+      L("发到公众号吗？", "Publish it to the blog?"),
       undefined,
       clone(publishOptions),
       publishAnswered,
       "C",
       at(0, 7, 42),
-      "发公众号",
+      L("发公众号", "Publish to the blog"),
     ),
     "ap-split": approval(
       "ap-split",
       "hob",
-      "是否创建一个专属助手「行业动态」？",
+      L("是否创建一个专属助手「行业动态」？", "Create a dedicated \"Industry news\" assistant?"),
       s1
-        ? "这两周你让我查询了 8 次模型和 agent 产品的动态。创建后它会记住你关注的内容，每天早上 9 点提供一份简报。"
-        : "这两周你让我查询了 8 次模型和 agent 产品的动态。",
+        ? L("这两周你让我查询了 8 次模型和 agent 产品的动态。创建后它会记住你关注的内容，每天早上 9 点提供一份简报。", "You asked me for model and agent news 8 times in the last two weeks. Once it exists, it remembers what you follow and sends a brief at 9 every morning.")
+        : L("这两周你让我查询了 8 次模型和 agent 产品的动态。", "You asked me for model and agent news 8 times in the last two weeks."),
       [
-        { key: "A", label: "创建专属助手" },
-        { key: "B", label: "暂不创建" },
+        { key: "A", label: L("创建专属助手", "Create the assistant") },
+        { key: "B", label: L("暂不创建", "Not now") },
       ],
       !pending,
       "A",
@@ -572,42 +564,42 @@ function buildDb(scene: SceneId): Db {
   const jobRunning: Job = {
     id: "t-0931",
     assistantId: "hob",
-    title: "排查页面卡顿",
-    instruction: "排查页面卡顿的原因，不要修改代码。",
+    title: L("排查页面卡顿", "Why the page is slow"),
+    instruction: L("排查页面卡顿的原因，不要修改代码。", "Find out why the page is slow. Don't change any code."),
     status: "running",
     createdAt: minsAgo(6),
     startedAt: minsAgo(6),
     stats: { reads: 14, commands: 3, edits: 0 },
     cwd: "/srv/example/site",
-    activity: clone(HOB_TASK_ACTIVITY),
+    activity: hobTaskActivity(L),
   };
 
   const jobRounds: Job = {
-    id: "t-rounds", assistantId: "hob", title: "整理项目资料", instruction: "整理项目资料并列出缺失项。",
+    id: "t-rounds", assistantId: "hob", title: L("整理项目资料", "Tidy project files"), instruction: L("整理项目资料并列出缺失项。", "Tidy the project files and list what's missing."),
     status: "running", createdAt: minsAgo(40), startedAt: minsAgo(5),
     stats: { reads: 5, commands: 2, edits: 0 },
     rounds: [
-      { status: "done", startedAt: minsAgo(40), endedAt: minsAgo(30), durationMs: 600000, summary: "已整理资料清单。", files: ["/srv/example/list.md"], followUp: "核对缺失的文档。" },
-      { status: "stuck", startedAt: minsAgo(25), endedAt: minsAgo(15), durationMs: 600000, summary: "缺少接口文档，暂时无法核对。", followUp: "先根据现有资料继续。" },
+      { status: "done", startedAt: minsAgo(40), endedAt: minsAgo(30), durationMs: 600000, summary: L("已整理资料清单。", "Filed a list of the materials."), files: ["/srv/example/list.md"], followUp: L("核对缺失的文档。", "Check the missing documents.") },
+      { status: "stuck", startedAt: minsAgo(25), endedAt: minsAgo(15), durationMs: 600000, summary: L("缺少接口文档，暂时无法核对。", "No API docs, so I can't check them yet."), followUp: L("先根据现有资料继续。", "Carry on with what we have.") },
     ],
     activity: [
-      { at: minsAgo(35), verb: "读", text: "/srv/example/资料" },
-      { at: minsAgo(20), verb: "搜", text: "接口文档" },
-      { at: minsAgo(3), verb: "读", text: "/srv/example/项目说明" },
+      { at: minsAgo(35), verb: "读", text: L("/srv/example/资料", "/srv/example/docs") },
+      { at: minsAgo(20), verb: "搜", text: L("接口文档", "API docs") },
+      { at: minsAgo(3), verb: "读", text: L("/srv/example/项目资料", "/srv/example/project-docs") },
     ],
   };
 
   const jobDone: Job = {
     id: "t-0927",
     assistantId: "server",
-    title: "清理旧日志",
-    instruction: "清理三天前的旧日志，不要影响正在运行的服务。",
+    title: L("清理旧日志", "Clean old logs"),
+    instruction: L("清理三天前的旧日志，不要影响正在运行的服务。", "Delete logs older than three days without disturbing running services."),
     status: "done",
     createdAt: at(1, 3, 0),
     startedAt: at(1, 3, 0),
     endedAt: at(1, 3, 5),
     stats: { reads: 4, commands: 2, edits: 0 },
-    summary: "已清理 2.1GB 旧日志，服务均正常运行。",
+    summary: L("已清理 2.1GB 旧日志，服务均正常运行。", "Cleaned 2.1 GB of old logs; services are running normally."),
     cwd: "/srv/example/reports",
     files: ["/srv/example/reports/log-cleanup-1031.md", "/srv/example/reports/stats.csv"],
     activity: [
@@ -622,18 +614,18 @@ function buildDb(scene: SceneId): Db {
   const jobBackup: Job = {
     id: "t-0929",
     assistantId: "house",
-    title: "整理相册备份",
-    instruction: "把手机里这个月的照片备份到 NAS，重复的跳过。",
+    title: L("整理相册备份", "Photo backup"),
+    instruction: L("把手机里这个月的照片备份到 NAS，重复的跳过。", "Back up this month's photos from my phone; skip duplicates."),
     status: "done",
     createdAt: minsAgo(58),
     startedAt: minsAgo(58),
     endedAt: minsAgo(51),
     stats: { reads: 6, commands: 2, edits: 0 },
-    summary: "新增 312 张，重复跳过 87 张，占用 4.2GB。",
+    summary: L("新增 312 张，重复跳过 87 张，占用 4.2GB。", "312 new photos, 87 duplicates skipped, 4.2 GB."),
     activity: [
-      { at: minsAgo(57), verb: "读", text: "/mnt/nas/photos" },
-      { at: minsAgo(55), verb: "跑", text: "rsync -a --ignore-existing /sdcard/DCIM /mnt/nas/photos/" },
-      { at: minsAgo(51), verb: "说", text: "新增 312 张，占用 4.2GB。" },
+      { at: minsAgo(57), verb: "读", text: L("/mnt/nas/photos", "/srv/photos") },
+      { at: minsAgo(55), verb: "跑", text: L("rsync -a --ignore-existing /sdcard/DCIM /mnt/nas/photos/", "rsync -a --ignore-existing /sdcard/DCIM /srv/photos/") },
+      { at: minsAgo(51), verb: "说", text: L("新增 312 张，占用 4.2GB。", "312 new photos, 4.2 GB.") },
     ],
   };
 
@@ -641,8 +633,8 @@ function buildDb(scene: SceneId): Db {
     {
       id: "r-morning",
       assistantId: "hob",
-      name: "早报",
-      instruction: "汇总昨天交代的事项和今天的重要事项，早上汇报一次。",
+      name: L("早报", "Morning brief"),
+      instruction: L("汇总昨天交代的事和今天要紧的事，早上汇报一次。", "Summarize what you asked for yesterday and what matters today, once in the morning."),
       schedules: ["0 8 * * *"],
       active: true,
       createdAt: at(20, 21, 0),
@@ -651,8 +643,8 @@ function buildDb(scene: SceneId): Db {
     {
       id: "r-weekly-reminder",
       assistantId: "hob",
-      name: "周报提醒",
-      instruction: "周五下午提醒查看本周周报。",
+      name: L("周报提醒", "Weekly report reminder"),
+      instruction: L("周五下午提醒查看本周周报。", "On Friday afternoon, remind me to check this week's report."),
       schedules: ["0 17 * * 5"],
       active: true,
       createdAt: at(20, 21, 2),
@@ -661,8 +653,8 @@ function buildDb(scene: SceneId): Db {
     {
       id: "r-reconcile",
       assistantId: "hob",
-      name: "月底对账",
-      instruction: "月末核对账单，列出不一致的项目。",
+      name: L("月底对账", "Month-end check"),
+      instruction: L("月末核对账单，列出不一致的项目。", "At month end, check the bills and list anything that doesn't match."),
       schedules: ["0 9 28 * *"],
       active: false,
       createdAt: at(19, 10, 0),
@@ -672,9 +664,11 @@ function buildDb(scene: SceneId): Db {
       id: "r-daily",
       skill: "daily-brief",
       assistantId: "bird",
-      name: "每日简报",
-      instruction:
+      name: L("每日简报", "Daily brief"),
+      instruction: L(
         "挑模型发布、agent 产品和开源项目里最值得看的几条，每条一句话说清为什么重要。最多 6 条，不看融资新闻。",
+        "Pick the few most useful items from model releases, agent products and open-source projects, one line each on why it matters. Six items at most; skip funding news.",
+      ),
       schedules: ["0 9 * * *"],
       active: true,
       createdAt: at(7, 9, 0),
@@ -688,8 +682,8 @@ function buildDb(scene: SceneId): Db {
     {
       id: "r-weekly-draft",
       assistantId: "page",
-      name: "周报初稿",
-      instruction: "每周五 17:00 撰写周报初稿，存入草稿箱，完成后通知我。",
+      name: L("周报初稿", "Weekly report draft"),
+      instruction: L("每周五 17:00 撰写周报初稿，存入草稿箱，完成后通知我。", "Every Friday at 17:00 write the weekly report draft, save it to the drafts folder, and tell me when it's done."),
       schedules: ["0 17 * * 5"],
       active: true,
       createdAt: at(0, 10, 21),
@@ -698,8 +692,8 @@ function buildDb(scene: SceneId): Db {
     {
       id: "r-pr-watch",
       assistantId: "hob",
-      name: "盯新 PR",
-      instruction: "有新的 PR 就看改了哪些文件、值不值得细看，告诉我要不要评审。",
+      name: L("盯新 PR", "Watch new pull requests"),
+      instruction: L("有新的 PR 就看改了哪些文件、值不值得细看，告诉我要不要评审。", "When a new pull request opens, see which files changed and whether it's worth a close read, then tell me whether to review it."),
       schedules: ["*/10 * * * *"],
       active: true,
       createdAt: at(3, 14, 20),
@@ -720,8 +714,8 @@ cat now.txt >> "$seen"`,
     {
       id: "r-issue-watch",
       assistantId: "hob",
-      name: "盯 issue 回复",
-      instruction: "有新回复的 issue 看一下，要我回的就拟一份回复草稿。",
+      name: L("盯 issue 回复", "Watch issue replies"),
+      instruction: L("有新回复的 issue 看一下，要我回的就拟一份回复草稿。", "Read issues with new replies, and draft a reply when it's mine to answer."),
       schedules: ["*/30 * * * *"],
       active: true,
       createdAt: at(6, 9, 40),
@@ -732,8 +726,8 @@ cat now.txt >> "$seen"`,
     {
       id: "r-pay-rent",
       assistantId: "hob",
-      name: "交房租",
-      instruction: "提醒我这个月交房租，别忘了把转账截图存下来。",
+      name: L("交房租", "Pay rent"),
+      instruction: L("提醒我这个月交房租，别忘了把转账截图存下来。", "Remind me to pay rent this month, and keep the transfer screenshot."),
       schedules: [point(1, 9)],
       active: false,
       createdAt: at(5, 20, 12),
@@ -744,8 +738,8 @@ cat now.txt >> "$seen"`,
     {
       id: "r-watch-files",
       assistantId: "hob",
-      name: "盯下载目录",
-      instruction: "下载目录里出现新的报销单就告诉我一声。",
+      name: L("盯下载目录", "Watch the downloads folder"),
+      instruction: L("下载目录里出现新的报销单就告诉我一声。", "Tell me when a new expense form shows up in the downloads folder."),
       schedules: ["*/15 * * * *"],
       active: false,
       createdAt: at(2, 10, 5),
@@ -775,13 +769,15 @@ cp now.txt "$seen"`,
     routine,
   });
 
-  const morning =
-    "早上好。昨晚交代的两件事均已完成：\n\n- 写作已将周报初稿存入草稿箱\n- 服务器凌晨 3 点清理了 2.1GB 旧日志";
+  const morning = L(
+    "早上好。昨晚交代的两件事均已完成：\n\n- 写作已将周报初稿存入草稿箱\n- 服务器凌晨 3 点清理了 2.1GB 旧日志",
+    "Morning. Both things from last night are done:\n\n- Writing put the weekly report draft in the drafts folder\n- Ops cleaned 2.1 GB of old logs at 3 am",
+  );
 
   const hobItems: Item[] = [
     asst("i-h1", at(0, 8, 0), morning),
-    { kind: "user", id: "i-h3", at: at(0, 10, 5), text: "页面为什么这么卡？排查一下原因，不要修改代码。" },
-    asst("i-h4", at(0, 10, 5), "已交给任务处理，完成后通知你。"),
+    { kind: "user", id: "i-h3", at: at(0, 10, 5), text: L("页面为什么这么卡？排查一下原因，不要修改代码。", "Why is the page so slow? Find the cause, but don't change any code.") },
+    asst("i-h4", at(0, 10, 5), L("已交给任务处理，完成后通知你。", "Handed it to a job. I'll tell you when it's done.")),
     { kind: "job", id: "i-h5", at: at(0, 10, 5), jobId: "t-0931" },
     { kind: "question", id: "i-h6", at: at(0, 10, s1 ? 9 : 15), approvalId: "ap-split" },
     { kind: "job", id: "i-round-1", at: minsAgo(40), jobId: "t-rounds", round: 0 },
@@ -791,7 +787,7 @@ cp now.txt "$seen"`,
   if (!s1) {
     hobItems.push(
       { kind: "user", id: "i-h7", at: at(0, 10, 16), text: "创建专属助手吧。最多 6 条即可，不要包含融资新闻。" },
-      asst("i-h8", at(0, 10, 17), "草稿如下，需要修改请直接说明："),
+      asst("i-h8", at(0, 10, 17), "草稿如下，需要修改请直接说："),
       { kind: "draft", id: "i-h9", at: at(0, 10, 17), draftId: "d-bird" },
     );
   }
@@ -937,18 +933,20 @@ cp now.txt "$seen"`,
 
   const delegations: Record<string, Delegation> = {};
   const jobs: Record<string, Job> = { "t-0931": jobRunning, "t-rounds": jobRounds, "t-0927": jobDone, "t-0929": jobBackup,
-    "t-0926": { id: "t-0926", assistantId: "bird", title: "每日简报", instruction: "整理每日简报", status: "done", createdAt: at(0, 8, 54), startedAt: at(0, 8, 54), endedAt: at(0, 9, 0), durationMs: 372000, stats: { reads: 30, commands: 60, edits: 5 }, usage: { input: 180000, output: 18000, cost: 0 }, routineId: "r-daily", summary: "今天 6 条，挑选 2 条重点。", activity: [] },
+    "t-0926": { id: "t-0926", assistantId: "bird", title: L("每日简报", "Daily brief"), instruction: L("整理每日简报", "Put together the daily brief"), status: "done", createdAt: at(0, 8, 54), startedAt: at(0, 8, 54), endedAt: at(0, 9, 0), durationMs: 372000, stats: { reads: 30, commands: 60, edits: 5 }, usage: { input: 180000, output: 18000, cost: 0 }, routineId: "r-daily", summary: L("今天 6 条，挑选 2 条重点。", "Six items today, two worth your time."), activity: [] },
   };
   if (scene === "s1" || scene === "s6") {
-    delegations["dg-sidebar-running"] = { id: "dg-sidebar-running", from: "hob", to: "page", text: "整理文章。", createdAt: minsAgo(6), status: "running", jobIds: [] };
-    delegations["dg-sidebar-waiting"] = { id: "dg-sidebar-waiting", from: "hob", to: "server", text: "检查服务器。", createdAt: minsAgo(5), status: "waiting", jobIds: [] };
+    delegations["dg-sidebar-running"] = { id: "dg-sidebar-running", from: "hob", to: "page", text: L("整理文章。", "Tidy the articles."), createdAt: minsAgo(6), status: "running", jobIds: [] };
+    delegations["dg-sidebar-waiting"] = { id: "dg-sidebar-waiting", from: "hob", to: "server", text: L("检查服务器。", "Check the servers."), createdAt: minsAgo(5), status: "waiting", jobIds: [] };
     items.hob.push({ kind: "delegation", id: "sidebar-running", at: minsAgo(6), delegationId: "dg-sidebar-running" }, { kind: "delegation", id: "sidebar-waiting", at: minsAgo(5), delegationId: "dg-sidebar-waiting" });
   }
   if (scene.startsWith("d-")) {
     const status = scene === "d-waiting" || scene === "d-mobile" ? "waiting" : scene === "d-done" ? "done" : "running";
-    const delegation: Delegation = { id: "dg-demo", from: "hob", to: "server", text: "检查服务器磁盘和服务状态，清理前先确认，不要影响正在运行的服务。", createdAt: minsAgo(6), status, jobIds: ["t-delegated"], approvalIds: [] };
+    // 转过去的话和真的一样带着段头：原话、最近的对话（界面上折起来）、备注
+    const brief = L("用户原话（11月13日 09:13）：\n检查一下服务器的磁盘和服务状态。\n\n最近的对话：\n用户（09:10）：昨晚的备份好像跑得很慢\nHob（09:11）：我先看看备份任务的记录。\n\nHob 的备注：清理前先确认，不要影响正在运行的服务。", "Your words (Nov 13, 09:13):\nCheck the server disks and services.\n\nHob's note: confirm before cleaning; don't disturb running services.");
+    const delegation: Delegation = { id: "dg-demo", from: "hob", to: "server", text: brief, createdAt: minsAgo(6), status, jobIds: ["t-delegated"], approvalIds: [] };
     delegations[delegation.id] = delegation;
-    jobs["t-delegated"] = { ...jobRunning, id: "t-delegated", assistantId: "server", delegationId: delegation.id, title: "检查服务器状态", status: status === "waiting" ? "waiting" : status };
+    jobs["t-delegated"] = { ...jobRunning, id: "t-delegated", assistantId: "server", delegationId: delegation.id, title: "检查服务器状态", instruction: brief, status: status === "waiting" ? "waiting" : status };
     if (status === "waiting") approvals["ap-delegation"] = { id: "ap-delegation", assistantId: "server", title: "清理旧日志吗？", detail: "将清理七天前的日志。", options: [{ key: "A", label: "清理旧日志" }, { key: "B", label: "暂不清理" }], recommended: "A", status: "pending", source: "job", jobId: "t-delegated", createdAt: minsAgo(2) };
     items.hob = [{ kind: "user", id: "d-user", at: minsAgo(7), text: "检查一下服务器的磁盘和服务状态。" }, { kind: "delegation", id: "d-card", at: minsAgo(6), delegationId: delegation.id }];
     items.server = [{ kind: "user", id: "d-forward", at: minsAgo(6), text: delegation.text, from: { assistantId: "hob", name: "Hob", delegationId: delegation.id } }, { kind: "job", id: "d-job", at: minsAgo(5), jobId: "t-delegated" }, ...(status === "waiting" ? [{ kind: "question" as const, id: "d-question", at: minsAgo(2), approvalId: "ap-delegation" }] : [])];
@@ -979,43 +977,43 @@ cp now.txt "$seen"`,
 
   if (scene.startsWith("readme-")) {
     const writing = assistants.find((a) => a.id === "page")!;
-    writing.instructions = "周报发到团队群；素材在共享盘的周报文件夹。";
+    writing.instructions = L("周报发到团队群；素材在共享盘的周报文件夹。", "Post the weekly report to the team group; the source material is in the weekly folder on the shared drive.");
     writing.models = { work: { ref: "anthropic/claude-sonnet", thinking: "high" }, allowed: ["anthropic/claude-sonnet", "openai/gpt-5"] };
-    writing.last = { text: "周报已整理好，发送前请确认。", at: minsAgo(2) };
+    writing.last = { text: L("周报已整理好，发送前请确认。", "The weekly report is ready; check it before I send."), at: minsAgo(2) };
     const hob = assistants.find((a) => a.id === "hob")!;
     hob.busy = false;
     hob.instructions = "";
-    hob.last = { text: "整理好了，适合用共享文档协作。", at: minsAgo(1) };
+    hob.last = { text: L("整理好了，适合用共享文档协作。", "Done. A shared doc fits how your team works."), at: minsAgo(1) };
     assistants.splice(0, assistants.length, ...assistants.filter((a) => ["hob", "page", "bird", "coin"].includes(a.id)));
     const done: Job = {
-      id: "readme-job", assistantId: "hob", title: "比较团队知识整理方案", instruction: "比较团队资料的整理方式。",
+      id: "readme-job", assistantId: "hob", title: L("比较团队知识整理方案", "Compare ways to organize team docs"), instruction: L("比较团队资料的整理方式。", "Compare a few ways to organize the team's docs."),
       status: "done", createdAt: minsAgo(8), startedAt: minsAgo(8), endedAt: minsAgo(2), durationMs: 360000,
-      stats: { reads: 3, commands: 1, edits: 0 }, summary: "已比较三种方案并整理建议。",
+      stats: { reads: 3, commands: 1, edits: 0 }, summary: L("已比较三种方案并整理建议。", "Compared three options and wrote up a recommendation."),
       activity: [
-        { at: minsAgo(7), verb: "读", text: "团队资料/需求.md" },
-        { at: minsAgo(6), verb: "搜", text: "团队知识整理方案" },
-        { at: minsAgo(4), verb: "读", text: "团队资料/现有流程.md" },
-        { at: minsAgo(2), verb: "说", text: "已完成三种方案的比较。" },
+        { at: minsAgo(7), verb: "读", text: L("团队资料/资料清单.md", "team-docs/index.md") },
+        { at: minsAgo(6), verb: "搜", text: L("团队知识整理方案", "organize team docs") },
+        { at: minsAgo(4), verb: "读", text: L("团队资料/现有流程.md", "team-docs/current-process.md") },
+        { at: minsAgo(2), verb: "说", text: L("已完成三种方案的比较。", "Finished comparing the three options.") },
       ],
     };
-    const active: Job = { ...done, id: "readme-active", assistantId: "bird", title: "整理行业动态", status: "running", endedAt: undefined, durationMs: undefined, createdAt: minsAgo(4), startedAt: minsAgo(4), activity: [{ at: minsAgo(1), verb: "搜", text: "本周行业动态" }] };
+    const active: Job = { ...done, id: "readme-active", assistantId: "bird", title: L("整理行业动态", "Collect industry updates"), status: "running", endedAt: undefined, durationMs: undefined, createdAt: minsAgo(4), startedAt: minsAgo(4), activity: [{ at: minsAgo(1), verb: "搜", text: L("本周行业动态", "industry news this week") }] };
     for (const key of Object.keys(jobs)) delete jobs[key];
     jobs[done.id] = done;
     jobs["readme-weekly"] = {
-      id: "readme-weekly", assistantId: "page", title: "整理本周周报", instruction: "整理本周周报初稿。",
+      id: "readme-weekly", assistantId: "page", title: L("整理本周周报", "Draft this week's report"), instruction: L("整理本周周报初稿。", "Draft this week's weekly report."),
       status: "done", createdAt: minsAgo(5), startedAt: minsAgo(5), endedAt: minsAgo(3), durationMs: 120000,
-      stats: { reads: 3, commands: 0, edits: 1 }, summary: "已整理周报初稿，等待确认后发送。",
-      activity: [{ at: minsAgo(4), verb: "读", text: "周报/本周素材.md" }, { at: minsAgo(3), verb: "说", text: "周报初稿已整理。" }],
+      stats: { reads: 3, commands: 0, edits: 1 }, summary: L("已整理周报初稿，等待确认后发送。", "Draft is ready; waiting for your OK to send."),
+      activity: [{ at: minsAgo(4), verb: "读", text: L("周报/本周素材.md", "weekly/source.md") }, { at: minsAgo(3), verb: "说", text: L("周报初稿已整理。", "Draft is ready.") }],
     };
-    if (scene === "readme-chat") jobs["readme-active"] = { ...active, assistantId: "hob", title: "整理实施清单", instruction: "整理团队资料的实施清单。", activity: [{ at: minsAgo(1), verb: "读", text: "团队资料/需求.md" }] };
+    if (scene === "readme-chat") jobs["readme-active"] = { ...active, assistantId: "hob", title: L("整理实施清单", "Draft an implementation checklist"), instruction: L("整理团队资料的实施清单。", "Draft an implementation checklist for the team's docs."), activity: [{ at: minsAgo(1), verb: "读", text: L("团队资料/资料清单.md", "team-docs/index.md") }] };
     for (const key of Object.keys(approvals)) delete approvals[key];
-    approvals["readme-approval"] = { id: "readme-approval", assistantId: "page", title: "将周报发到团队群吗？", detail: "周报初稿已整理好，发送前请确认。", options: [{ key: "A", label: "发送" }, { key: "B", label: "暂不发送" }], status: "pending", source: "router", createdAt: minsAgo(1) };
+    approvals["readme-approval"] = { id: "readme-approval", assistantId: "page", title: L("将周报发到团队群吗？", "Send the weekly report to the team group?"), detail: L("周报初稿已整理好，发送前请确认。", "The draft is ready; check it before I send."), options: [{ key: "A", label: L("发送", "Send") }, { key: "B", label: L("暂不发送", "Not now") }], status: "pending", source: "router", createdAt: minsAgo(1) };
     items.hob = [
-      { kind: "user", id: "readme-user", at: minsAgo(9), text: "我们团队的资料有点散，比较几种整理方案，给我一个建议。" },
-      asst("readme-reply", minsAgo(8), "我会比较几种方式，整理成一页给你。"),
+      { kind: "user", id: "readme-user", at: minsAgo(9), text: L("我们团队的资料有点散，比较几种整理方案，给我一个建议。", "Our team's docs are scattered. Compare a few ways to organize them and tell me what you'd do.") },
+      asst("readme-reply", minsAgo(8), L("我会比较几种方式，整理成一页给你。", "I'll compare the options and put it on one page for you.")),
       { kind: "job", id: "readme-job-card", at: minsAgo(8), jobId: done.id },
-      asst("readme-result", minsAgo(1), "建议先用共享文档统一入口，现有资料不用搬家；下面是三种方案的比较。"),
-      { kind: "file", id: "readme-page-card", at: minsAgo(1), path: "/mock/readme-page.html", name: "团队资料整理方案", meta: "三种方式的对比与实施建议" },
+      asst("readme-result", minsAgo(1), L("建议先用共享文档统一入口，现有资料不用搬家；下面是三种方案的比较。", "Start with a shared doc as the single entry point; nothing has to move. The comparison is below.")),
+      { kind: "file", id: "readme-page-card", at: minsAgo(1), path: "/mock/readme-page.html", name: L("团队资料整理方案", "Organizing team docs"), meta: L("三种方式的对比与实施建议", "Three options compared, with a rollout plan") },
     ];
     if (scene === "readme-desktop") items.hob = [
       { kind: "user", id: "readme-browser-user", at: minsAgo(3), text: "打开示例网站，发一张截图给我看看。" },
@@ -1023,20 +1021,20 @@ cp now.txt "$seen"`,
       { kind: "file", id: "readme-browser-shot", at: minsAgo(1), path: "/mock/desktop.jpg", name: "网页截图.jpg" },
     ];
     if (scene === "readme-chat" || scene === "readme-mobile-chat") {
-      approvals["readme-chat-approval"] = { id: "readme-chat-approval", assistantId: "hob", title: "将方案发给团队吗？", options: [{ key: "A", label: "发送" }, { key: "B", label: "暂不发送" }], status: "pending", source: "router", createdAt: minsAgo(1) };
+      approvals["readme-chat-approval"] = { id: "readme-chat-approval", assistantId: "hob", title: L("将方案发给团队吗？", "Send the plan to the team?"), options: [{ key: "A", label: L("发送", "Send") }, { key: "B", label: L("暂不发送", "Not now") }], status: "pending", source: "router", createdAt: minsAgo(1) };
       items.hob = [
-        { kind: "user", id: "readme-user", at: minsAgo(9), text: "比较团队资料的整理方式，给我一个建议和实施清单。" },
+        { kind: "user", id: "readme-user", at: minsAgo(9), text: L("比较团队资料的整理方式，给我一个建议和实施清单。", "Compare ways to organize our team docs, then give me a recommendation and an implementation checklist.") },
         { kind: "job", id: "readme-job-card", at: minsAgo(8), jobId: done.id },
-        asst("readme-result", minsAgo(3), "建议先用**共享文档**统一入口，现有资料不用搬家。\n\n- 先建立目录，明确负责人\n- 再逐步整理高频使用的资料"),
-        { kind: "file", id: "readme-page-card", at: minsAgo(3), path: "/mock/readme-page.html", name: "团队资料整理方案", meta: "三种方式的对比与实施建议" },
-        { kind: "file", id: "readme-file-card", at: minsAgo(2), path: "/mock/knowledge/资料目录.md", name: "资料目录.md", meta: "团队常用资料入口" },
+        asst("readme-result", minsAgo(3), L("建议先用**共享文档**统一入口，现有资料不用搬家。\n\n- 先建立目录，明确负责人\n- 再逐步整理高频使用的资料", "Start with a **shared doc** as the single entry point; existing files don't have to move.\n\n- Set up the folders first and name an owner\n- Then tidy the docs people use most")),
+        { kind: "file", id: "readme-page-card", at: minsAgo(3), path: "/mock/readme-page.html", name: L("团队资料整理方案", "Organizing team docs"), meta: L("三种方式的对比与实施建议", "Three options compared, with a rollout plan") },
+        { kind: "file", id: "readme-file-card", at: minsAgo(2), path: "/mock/knowledge/资料目录.md", name: L("资料目录.md", "docs-index.md"), meta: L("团队常用资料入口", "Where the team's docs live") },
         { kind: "job", id: "readme-active-card", at: minsAgo(2), jobId: "readme-active" },
         { kind: "question", id: "readme-chat-question", at: minsAgo(1), approvalId: "readme-chat-approval" },
       ];
     }
     if (scene === "readme-cards") {
       Object.assign(draft, { status: "pending", createdAssistantId: undefined, name: "资料助手", dutyLong: "整理团队资料，维护共享目录", routinesText: "每周整理资料", askFirst: ["对外发送"], instructions: ["优先整理常用资料"], carry: { conversations: 3 } });
-      delegations["readme-delegation"] = { id: "readme-delegation", from: "hob", to: "page", text: "整理团队资料的使用说明。", createdAt: minsAgo(3), status: "running", jobIds: [] };
+      delegations["readme-delegation"] = { id: "readme-delegation", from: "hob", to: "page", text: "整理团队资料的使用方法。", createdAt: minsAgo(3), status: "running", jobIds: [] };
       items.hob = [
         { kind: "image", id: "readme-image", at: minsAgo(4), startedAt: minsAgo(4), status: "done", prompt: "团队资料封面", size: "1536x1024", path: "/mock/readme-cover.svg" },
         { kind: "delegation", id: "readme-delegation-card", at: minsAgo(3), delegationId: "readme-delegation" },
@@ -1045,9 +1043,9 @@ cp now.txt "$seen"`,
       ];
     }
     items.page = [
-      { kind: "user", id: "readme-weekly-user", at: minsAgo(5), text: "整理本周周报，完成后发到团队群。" },
+      { kind: "user", id: "readme-weekly-user", at: minsAgo(5), text: L("整理本周周报，完成后发到团队群。", "Draft this week's report, then send it to the team group.") },
       { kind: "job", id: "readme-weekly-card", at: minsAgo(5), jobId: "readme-weekly" },
-      asst("readme-weekly-reply", minsAgo(3), "周报初稿已整理好。对外发送前，请先确认。"),
+      asst("readme-weekly-reply", minsAgo(3), L("周报初稿已整理好。对外发送前，请先确认。", "The draft is ready. Please confirm before I send it out.")),
       { kind: "question", id: "readme-question-card", at: minsAgo(1), approvalId: "readme-approval" },
     ];
   }
@@ -1076,7 +1074,7 @@ cp now.txt "$seen"`,
   }
 
   if (scene === "job-after" || scene === "job-after-dark") {
-    // 票 142 的验收场景：排队里的任务卡在等前置任务
+    // 票 142 的验收场景：排队里的任务卡在等前面的任务
     const waiting = (id: string, title: string, after: string[]): Job => ({ id, assistantId: "hob", title, instruction: title, status: "queued", createdAt: minsAgo(3), stats: { reads: 0, commands: 0, edits: 0 }, activity: [], after });
     const first: Job = { id: "t-after-a", assistantId: "hob", title: "先查目录", instruction: "查一下目录里有几个文件", status: "running", createdAt: minsAgo(5), startedAt: minsAgo(5), stats: { reads: 1, commands: 1, edits: 0 }, activity: [{ at: minsAgo(1), verb: "跑", text: "ls /tmp/资料 | wc -l" }] };
     const second = waiting("t-after-b", "再写总结", [first.id]);
@@ -1106,14 +1104,14 @@ cp now.txt "$seen"`,
     ...patch,
   });
   const homeJobs = [
-    groupJob({ id: "t-g-log", assistantId: "house", title: "查看昨晚的备份日志", endedAt: at(0, 9, 14), durationMs: 60_000 }),
-    groupJob({ id: "t-g-clean", assistantId: "server", title: "清理 /backup 旧快照", startedAt: at(0, 9, 15), endedAt: at(0, 9, 17) }),
-    groupJob({ id: "t-g-backup", assistantId: "house", title: "重新备份相册", startedAt: at(0, 9, 19), endedAt: at(0, 9, 25), durationMs: 360_000 }),
+    groupJob({ id: "t-g-log", assistantId: "house", title: L("查看昨晚的备份日志", "Check last night's backup log"), endedAt: at(0, 9, 14), durationMs: 60_000 }),
+    groupJob({ id: "t-g-clean", assistantId: "server", title: L("清理 /backup 旧快照", "Clean old snapshots in /backup"), startedAt: at(0, 9, 15), endedAt: at(0, 9, 17) }),
+    groupJob({ id: "t-g-backup", assistantId: "house", title: L("重新备份相册", "Back up photos again"), startedAt: at(0, 9, 19), endedAt: at(0, 9, 25), durationMs: 360_000 }),
     {
-      ...groupJob({ id: "t-g-dl", assistantId: "server", title: "检查下载目录", startedAt: minsAgo(2) }),
+      ...groupJob({ id: "t-g-dl", assistantId: "server", title: L("检查下载目录", "Check the downloads folder"), startedAt: minsAgo(2) }),
       status: "running" as const,
       endedAt: undefined,
-      instruction: "看看下载目录里有什么能清，清之前列出来。",
+      instruction: L("看看下载目录里有什么能清，清之前列出来。", "See what can be cleaned from the downloads folder; list it before deleting."),
       stats: { reads: 2, commands: 4, edits: 0 },
       activity: [
         { at: minsAgo(2), verb: "$" as const, text: "du -sh /data/downloads/*" },
@@ -1153,7 +1151,7 @@ cp now.txt "$seen"`,
     { kind: "job", id: "gh-14", at: at(0, 9, 27), jobId: "t-g-dl", speaker: "server" },
   ];
 
-  jobs["t-g-dev"] = { ...groupJob({ id: "t-g-dev", assistantId: "server", title: "实现「记住我」", startedAt: minsAgo(6) }), groupId: "g-dev", status: "running", endedAt: undefined };
+  jobs["t-g-dev"] = { ...groupJob({ id: "t-g-dev", assistantId: "server", title: L("实现「记住我」", "Build \"Remember me\""), startedAt: minsAgo(6) }), groupId: "g-dev", status: "running", endedAt: undefined };
   approvals["ap-g-dev"] = {
     id: "ap-g-dev",
     assistantId: "po",
@@ -1168,141 +1166,68 @@ cp now.txt "$seen"`,
     answeredAt: at(0, 9, 41),
   };
 
-  // 事项：g6、g7 那件「登录页加「记住我」」。演示场景按阶段各给一套数据。
-  const demoStage = PROJECT_SCENES[scene];
-  const projectJobs: Job[] = [];
-  const projectJob = (n: number, assistantId: string, title: string, patch: Partial<Job>): Job => {
-    const job = groupJob({ id: `t-p-${n}`, assistantId, title, groupId: "g-dev", ...patch });
-    projectJobs.push(job);
-    return job;
-  };
-  const acceptance = ["勾选后关掉浏览器再打开，仍是登录状态", "不勾选时，关掉浏览器要重新登录", "退出登录后，旧的记住状态失效"];
-  const requirements = "# 登录页加「记住我」\n\n## 要解决的问题\n每次关掉浏览器都要重新登录，常用的人觉得麻烦。\n\n## 做成什么样\n- 勾选「记住我」后 30 天内免登录\n- 换设备、换浏览器要重新登录\n- 退出登录后，这台设备的记住状态马上失效\n\n## 定下来的做法\n1. **存在哪里**：30 天的长效 token 放 `httpOnly` cookie，库里只存哈希（架构师定）。\n2. **换设备**：不跨设备记住，换设备重新登录（你定的）。\n\n## 不做的\n- 不做「记住账号但要输密码」";
-  const subtasks: Subtask[] = [
-    { n: 1, title: "定方案", assignee: "arch", brief: "定下 token 存哪里、多久过期、换设备怎么处理，写清接口和数据结构。", after: [], ...(demoStage && demoStage !== "clarify" && demoStage !== "plan" ? { jobId: "t-p-1" } : {}) },
-    { n: 2, title: "实现「记住我」", assignee: "dev", brief: "按方案把勾选、30 天免登录、换设备重新登录做出来，带上测试。", after: [1], ...(demoStage === "doing" || demoStage === "review" || demoStage === "done" ? { jobId: "t-p-2" } : {}) },
-    { n: 3, title: "验收用例和回归", assignee: "qa", brief: "对照验收标准逐条验，附上截图和结果，再跑一遍登录相关的旧用例。", after: [2], check: true, ...(demoStage === "review" || demoStage === "done" ? { jobId: "t-p-3" } : {}) },
-    // 用户这一步只等第 1 个（方案），这样执行中的页面上能同时看到进行中、等待前置任务、待你执行
-    { n: 4, title: "上线前用手机试一次", assignee: "user", brief: "发版后用手机浏览器登录一次，勾上「记住我」，关掉浏览器再打开看还在不在。", after: [1], ...(demoStage === "done" || demoStage === "review" ? { doneAt: at(0, 9, 58) } : {}) },
-  ];
-  if (demoStage && demoStage !== "clarify" && demoStage !== "plan") {
-    projectJob(1, "arch", "定方案", { status: "done", startedAt: at(0, 9, 42), endedAt: at(0, 9, 46), durationMs: 240_000 });
-    if (demoStage === "doing") projectJob(2, "dev", "实现「记住我」", { status: "running", createdAt: at(0, 9, 45), startedAt: minsAgo(6), endedAt: undefined });
-    else if (demoStage !== "dropped") {
-      projectJob(2, "dev", "实现「记住我」", { status: "done", startedAt: at(0, 9, 45), endedAt: at(0, 10, 12), durationMs: 1_620_000 });
-      projectJob(3, "qa", "验收用例和回归", { status: "done", startedAt: at(0, 10, 14), endedAt: at(0, 10, 26), durationMs: 720_000 });
-    }
-  }
-  const remember: Project | undefined = demoStage ? {
-    id: "p-remember",
-    groupId: "g-dev",
-    title: "登录页加「记住我」",
-    ownerId: "po",
-    stage: demoStage,
-    request: { text: "登录页加一个「记住我」，下周发版前要上", itemId: "gd-2", at: at(0, 9, 38) },
-    clarify: [
-      { title: "换了设备还要记住登录吗？", why: "这决定 token 绑不绑设备。", options: ["按设备记", "不绑设备"], recommended: "按设备记，换设备重新登录", answer: "不用，换设备重新登录", askedBy: "po", at: at(0, 9, 40), answeredAt: at(0, 9, 41) },
-      { title: "勾选后多久内免登录？", why: "时间太长，设备丢了风险大。", options: ["7 天", "30 天"], recommended: "30 天", askedBy: "po", at: at(0, 9, 40), ...(demoStage === "clarify" ? {} : { answer: "30 天" }) },
-    ],
-    ...(demoStage === "clarify" ? {} : { requirements: { content: requirements, acceptance, updatedAt: at(0, 9, 41) } }),
-    subtasks: demoStage === "clarify" ? [] : subtasks,
-    ...(demoStage === "doing" || demoStage === "review" || demoStage === "done" || demoStage === "dropped" ? { startedAt: at(0, 9, 42) } : {}),
-    ...(demoStage === "review" ? { checks: [
-      { index: 1, passed: true, evidence: "勾选后关掉浏览器再打开，仍是登录状态。", jobId: "t-p-3", at: at(0, 10, 26) },
-      { index: 2, passed: false, evidence: "不勾选时关掉浏览器，重新打开仍是登录状态：cookie 写的时候没看勾选。", jobId: "t-p-3", at: at(0, 10, 26) },
-    ] } : {}),
-    ...(demoStage === "done" ? {
-      checks: [
-        { index: 1, passed: true, evidence: "勾选后关掉浏览器再打开，仍是登录状态。", jobId: "t-p-3", at: at(0, 10, 26) },
-        { index: 2, passed: true, evidence: "不勾选时关掉浏览器，重新打开要重新登录。", jobId: "t-p-3", at: at(0, 10, 26) },
-        { index: 3, passed: true, evidence: "退出登录后接口返回 401，旧的记住状态失效。", jobId: "t-p-3", at: at(0, 10, 26) },
-      ],
-      summary: "登录页的「记住我」已经上线：勾选后 30 天内免登录，换设备和换浏览器要重新登录，退出登录马上失效。你在手机上试过一遍，三条验收标准都通过。",
-    } : {}),
-    ...(demoStage === "dropped" ? { summary: "这个功能先不做了：下个版本改用短信验证码登录，记住我这件事交给它。" } : {}),
-    ...(demoStage === "done" || demoStage === "dropped" ? { endedAt: at(0, 11, 0) } : {}),
-    itemId: "gd-5",
-    createdAt: at(0, 9, 38),
-    updatedAt: demoStage === "done" || demoStage === "dropped" ? at(0, 11, 0) : at(0, 9, 45),
-  } : undefined;
-  if (remember) for (const job of projectJobs) jobs[job.id] = job;
-  // 敏捷团队的群信息里还有两件已经结束的事项：一件做完了、一件放弃了
-  const endedProjects: Project[] = scene === "g-team" ? [
-    {
-      id: "p-export",
-      groupId: "g-dev",
-      title: "导出加按月筛选",
-      ownerId: "po",
-      stage: "done",
-      request: { text: "导出的表格想按月份筛", at: at(12, 10, 0) },
-      clarify: [],
-      requirements: { content: "导出菜单里选月份，只导出那个月的记录。", acceptance: ["选二月导出，只有二月的记录"], updatedAt: at(11, 10, 0) },
-      subtasks: [],
-      startedAt: at(11, 11, 0),
-      checks: [{ index: 1, passed: true, evidence: "二月导出 218 行，全部是二月的记录。", jobId: "t-p-1", at: at(3, 16, 0) }],
-      summary: "导出的菜单里加了月份筛选，验收通过。",
-      itemId: "gd-export",
-      createdAt: at(12, 10, 0),
-      updatedAt: at(3, 16, 0),
-      endedAt: at(3, 16, 0),
-    },
-    {
-      id: "p-colorway",
-      groupId: "g-dev",
-      title: "首页配色改版",
-      ownerId: "po",
-      stage: "dropped",
-      request: { text: "首页的颜色换一换", at: at(6, 11, 0) },
-      clarify: [],
-      subtasks: [],
-      summary: "先不动配色，等下个版本一起改。",
-      itemId: "gd-colorway",
-      createdAt: at(6, 11, 0),
-      updatedAt: at(5, 11, 0),
-      endedAt: at(5, 11, 0),
-    },
-  ] : [];
-
-  const projectCard: GroupItem[] = remember ? [{ kind: "project", id: "gd-5", at: at(0, 9, 41), projectId: remember.id, speaker: "po" }] : [];
-  const projectRun: GroupItem[] = remember && demoStage !== "clarify" && demoStage !== "plan" ? [
-    { kind: "job", id: "gd-6", at: at(0, 9, 43), jobId: "t-p-1", speaker: "arch" },
-    { kind: "assistant", id: "gd-7", at: at(0, 9, 46), text: "30 天的长效 token 放 httpOnly cookie，库里只存哈希。", speaker: "arch" },
-    ...(demoStage === "dropped" ? [] : [{ kind: "job" as const, id: "gd-8", at: at(0, 9, 47), jobId: "t-p-2", speaker: "dev" }]),
-  ] : [];
+  // 敏捷团队的综合：用户说一件事，成员回了话；要几步的事他们会开话题、列待办。
   const devItems: GroupItem[] = [
     { kind: "note", id: "gd-1", at: at(5, 10, 0), icon: "split", text: "你建了群「敏捷团队」：产品负责人、架构师、开发、测试、发布", speaker: "user" },
     { kind: "user", id: "gd-2", at: at(0, 9, 38), text: "登录页加一个「记住我」，下周发版前要上", speaker: "user" },
     { kind: "question", id: "gd-3", at: at(0, 9, 40), approvalId: "ap-g-dev", speaker: "po" },
-    ...(remember && demoStage !== "clarify" ? [{ kind: "assistant" as const, id: "gd-4", at: at(0, 9, 41), text: "需求说明已完成，拆分为 4 个子任务，按顺序执行；第 4 个需要由你执行。", speaker: "po" }] : []),
-    ...projectCard,
-    ...projectRun,
-    ...(remember && (demoStage === "doing" || demoStage === "review" || demoStage === "done" || demoStage === "dropped") ? [{ kind: "assistant" as const, id: "gd-9", at: at(0, 9, 49), text: "@开发 按方案做，做完先在本地把三条验收标准跑一遍。", speaker: "po" }] : []),
+    { kind: "assistant", id: "gd-4", at: at(0, 9, 41), text: "这件事要分几步，我开个话题列上待办，做完给你结论。", speaker: "po" },
   ];
 
   const groups: GroupSummary[] = [
     {
       id: "g-home",
-      name: "家里机器",
-      purpose: "家里 NAS 和服务器上的存储、备份和服务",
+      name: L("家里机器", "Home servers"),
+      purpose: L("家里 NAS 和服务器上的存储、备份和服务", "Storage, backups and services on the home machines"),
       ownerId: "hob",
       members: ["hob", "house", "server"],
       createdAt: at(2, 15, 0),
-      last: { at: at(0, 9, 27), speaker: "server", text: "开始检查下载目录" },
+      last: { at: at(0, 9, 27), speaker: "server", text: L("开始检查下载目录", "Started checking the downloads folder") },
       unread: 0,
       busy: ["server"],
     },
     {
       id: "g-dev",
-      name: "敏捷团队",
-      purpose: "小工具和页面：需求、方案、开发、测试和发布",
+      name: L("敏捷团队", "Agile team"),
+      purpose: L("小工具和页面：方案、开发、测试和发布", "Small tools and pages: design, build, test and release"),
       ownerId: "po",
       members: ["po", "arch", "dev", "qa", "release"],
       createdAt: at(5, 10, 0),
-      last: { at: at(0, 9, 49), speaker: "po", text: "按方案做，做完先在本地把三条验收标准跑一遍" },
+      last: { at: at(0, 9, 49), speaker: "po", text: L("按方案做，做完先在本地跑一遍测试", "Follow the plan, then run the tests locally.") },
       unread: 1,
-      busy: demoStage === "doing" ? ["dev"] : [],
+      busy: scene === "g-team" ? ["dev"] : [],
     },
   ];
+
+  // 待办演示：单聊里一份在做、任务卡上一份带进度（话题里的在下面 topics 段落里给）
+  if (scene === "todo-chat" || scene === "todo-job") {
+    const hob = assistants.find((item) => item.id === "hob")!;
+    hob.busy = false;
+    hob.last = { text: L("找出变慢的那个接口", "Finding the endpoint that got slow"), at: minsAgo(3) };
+    hob.todos = [
+      { text: L("看这周的报错日志", "Read this week's error logs"), status: "done" },
+      { text: L("找出变慢的那个接口", "Find the endpoint that got slow"), status: "doing" },
+      { text: L("把结论和证据写成一段话", "Write the conclusion with its evidence"), status: "todo" },
+    ];
+    items.hob = [
+      {
+        kind: "todos",
+        id: "todo-archived",
+        at: minsAgo(48),
+        why: "cleared",
+        items: [
+          { text: L("整理上个月的访问日志", "Sort last month's access logs"), status: "done" },
+          { text: L("按天导出成 CSV", "Export one CSV per day"), status: "done" },
+          { text: L("核对两天的数字对得上", "Check two days add up"), status: "todo" },
+        ],
+      },
+      { kind: "user", id: "todo-user", at: minsAgo(9), text: L("这周页面有时候很慢，帮我看看为什么。", "The page is slow at times this week. Find out why.") },
+      asst("todo-kick", minsAgo(9), L("要做几步，我列了待办，边做边更新，你在输入框上面就看得到。", "This takes a few steps. I listed them and will keep them updated; you can see the progress above the input box.")),
+    ];
+    if (scene === "todo-job") {
+      items.hob.push({ kind: "job", id: "todo-job-card", at: minsAgo(6), jobId: "t-0931" });
+    }
+  }
 
   // 票 147 的验收场景：一张卡问几个问题（待回答、已回答、群里、深色、手机）
   if (scene.startsWith("ask-rounds")) {
@@ -1348,7 +1273,7 @@ cp now.txt "$seen"`,
       { kind: "user", id: "ask-user", at: minsAgo(8), text: "给导出的订单加上按月筛选，你先把要定的问清楚，别自己拍。" },
       asst("ask-plan", minsAgo(6), "有三处会改变做法，一起问清楚；按推荐来回复就行。"),
       { kind: "question", id: "ask-card", at: minsAgo(4), approvalId: "ap-ask-rounds" },
-      ...(answered ? [asst("ask-done", minsAgo(2), "好，按这个写需求说明；空月份的备注我按你说的先定下。")] : []),
+      ...(answered ? [asst("ask-done", minsAgo(2), "好，按这个来；空月份的备注我按你说的先定下。")] : []),
     ];
 
     const groupQuestions: ApprovalQuestion[] = [
@@ -1383,123 +1308,108 @@ cp now.txt "$seen"`,
     );
   }
 
-  // 票 152：话题和工作方式的演示场景。服务端 151 的行为在下面 createMock 里模拟；
-  // 这里只摆数据：软件开发群三个进行中的话题（等你回答、执行中、验收中）和两个关了的，
-  // 「无」工作方式的群两个进行中的话题（没有事项，所以没有阶段标签）。
+  // 票 152：话题和待办的演示场景。服务端 151 的行为在下面 createMock 里模拟；
+  // 这里只摆数据：敏捷团队群三个进行中的话题（等你回答、进行中、等结论）和两个关了的，
+  // 另一个群两个进行中的话题（没有待办，所以没有标签）。
   const topicItems: Record<string, GroupItem[]> = {};
-  const topicProjects: Record<string, Project[]> = {};
   const readmeTopicItems: Record<string, GroupItem[]> = {};
-  const readmeTopicProjects: Record<string, Project[]> = {};
 
-  if (scene === "readme-group-now" || scene === "readme-mobile-list" || scene === "readme-mobile-chat" || scene === "readme-mobile-project") {
+  if (scene === "readme-group-now" || scene === "readme-mobile-list" || scene === "readme-mobile-chat" || scene === "readme-mobile-todos") {
     const product = assistants.find((assistant) => assistant.id === "page")!;
     const developer = assistants.find((assistant) => assistant.id === "bird")!;
     const tester = assistants.find((assistant) => assistant.id === "coin")!;
-    product.name = "产品负责人";
-    product.duty = "需求和验收";
+    product.name = L("产品负责人", "Product owner");
+    product.duty = L("统筹和结论", "Coordination and conclusions");
     product.sprite = "sticky:purple";
-    developer.name = "开发";
-    developer.duty = "写代码";
+    developer.name = L("开发", "Developer");
+    developer.duty = L("写代码", "Code");
     developer.sprite = "code:green";
-    developer.last = { text: "深色模式正在实现。", at: minsAgo(3) };
-    tester.name = "测试";
-    tester.duty = "测试和验证";
+    developer.last = { text: L("深色模式正在实现。", "Dark mode is in progress."), at: minsAgo(3) };
+    tester.name = L("测试", "Tester");
+    tester.duty = L("测试和验证", "Testing and review");
     tester.sprite = "bug:red";
-    tester.last = { text: "主要页面的验收准备好了。", at: minsAgo(5) };
+    tester.last = { text: L("主要页面的测试准备好了。", "The tests for the main pages are ready."), at: minsAgo(5) };
     const readmeGroup: GroupSummary = {
       id: "g-readme",
-      name: "网站项目",
-      purpose: "网站体验、开发和发布",
+      name: L("网站项目", "Website project"),
+      purpose: L("网站体验、开发和发布", "Website experience, build and release"),
       ownerId: product.id,
       members: [product.id, developer.id, tester.id],
       createdAt: at(4, 10, 0),
-      workflow: "software",
-      last: { at: minsAgo(10), speaker: "page", text: "已建立深色模式话题" },
+      last: { at: minsAgo(10), speaker: "page", text: L("已建立深色模式话题", "Started the dark mode topic") },
       unread: 1,
       busy: [developer.id],
     };
     const readmeTopic: GroupSummary = {
       id: "t-readme",
-      name: "网站加深色模式",
+      name: L("网站加深色模式", "Dark mode for the website"),
       purpose: readmeGroup.purpose,
       ownerId: readmeGroup.ownerId,
       members: [...readmeGroup.members],
       createdAt: minsAgo(8),
       parentId: readmeGroup.id,
       createdBy: product.id,
-      workflow: "software",
-      last: { at: minsAgo(1), speaker: developer.id, text: "深色主题正在实现。" },
+      last: { at: minsAgo(1), speaker: developer.id, text: L("深色主题正在实现。", "Building the dark theme.") },
       unread: 1,
       busy: [developer.id],
-      project: { id: "p-readme", title: "网站加深色模式", stage: "doing", done: 1, total: 3, waitingUser: false, current: developer.id },
     };
-    // 左栏的群二级页：一件在拆分、一件已经做完关了，和正在做的那件一起
+    // 左栏的群二级页：一件刚写好说明、一件已经做完关了，和正在做的那件一起
     const readmeSearch: GroupSummary = {
-      ...readmeTopic, id: "t-readme-search", name: "博客加站内搜索", createdAt: minsAgo(50), createdBy: product.id, unread: 0, busy: [],
-      last: { at: minsAgo(20), speaker: product.id, text: "需求说明写好了，正在拆子任务。" },
-      project: { id: "p-readme-search", title: "博客加站内搜索", stage: "plan", done: 0, total: 0, waitingUser: false, current: product.id },
+      ...readmeTopic, id: "t-readme-search", name: L("博客加站内搜索", "Search for the blog"), createdAt: minsAgo(50), createdBy: product.id, unread: 0, busy: [],
+      last: { at: minsAgo(20), speaker: product.id, text: L("正在列待办。", "Listing the to-dos.") },
     };
     const readmeLazy: GroupSummary = {
-      ...readmeTopic, id: "t-readme-lazy", name: "图片懒加载", createdAt: at(3, 10, 0), createdBy: product.id, unread: 0, busy: [],
-      closedAt: at(1, 17, 0), closeNote: "3 条验收标准都过了，已上线",
-      last: { at: at(1, 17, 0), speaker: product.id, text: "3 条验收标准都过了，已上线" },
-      project: { id: "p-readme-lazy", title: "图片懒加载", stage: "done", done: 2, total: 2, waitingUser: false },
+      ...readmeTopic, id: "t-readme-lazy", name: L("图片懒加载", "Lazy-loaded images"), createdAt: at(3, 10, 0), createdBy: product.id, unread: 0, busy: [],
+      closedAt: at(1, 17, 0), closeNote: L("测试都过了，已上线", "The tests pass; shipped."),
+      last: { at: at(1, 17, 0), speaker: product.id, text: L("测试都过了，已上线", "The tests pass; shipped.") },
     };
     groups.splice(0, groups.length, readmeGroup, readmeTopic, readmeSearch, readmeLazy);
     for (const [id, job] of Object.entries(jobs)) {
       if (job.groupId && job.groupId !== readmeTopic.id) delete jobs[id];
     }
     const readmePlan: Job = {
-      id: "readme-site-plan", assistantId: tester.id, groupId: readmeTopic.id, title: "检查页面颜色对比度",
-      instruction: "检查网站现有页面的颜色对比度。", status: "done", createdAt: minsAgo(7), startedAt: minsAgo(7), endedAt: minsAgo(5), durationMs: 120000,
-      stats: { reads: 5, commands: 2, edits: 0 }, summary: "已记录主要页面的颜色对比度。", activity: [],
+      id: "readme-site-plan", assistantId: tester.id, groupId: readmeTopic.id, title: L("检查页面颜色对比度", "Check color contrast"),
+      instruction: L("检查网站现有页面的颜色对比度。", "Check color contrast on the site's existing pages."), status: "done", createdAt: minsAgo(7), startedAt: minsAgo(7), endedAt: minsAgo(5), durationMs: 120000,
+      stats: { reads: 5, commands: 2, edits: 0 }, summary: L("已记录主要页面的颜色对比度。", "Recorded color contrast on the main pages."), activity: [],
     };
     const readmeBuild: Job = {
-      id: "readme-site-build", assistantId: developer.id, groupId: readmeTopic.id, title: "实现深色模式",
-      instruction: "按颜色变量为网站加入深色模式，带上切换入口和测试。", status: "running", createdAt: minsAgo(4), startedAt: minsAgo(4),
+      id: "readme-site-build", assistantId: developer.id, groupId: readmeTopic.id, title: L("实现深色模式", "Build dark mode"),
+      instruction: L("按颜色变量为网站加入深色模式，带上切换入口和测试。", "Add dark mode to the site through the color variables, with a toggle and tests."), status: "running", createdAt: minsAgo(4), startedAt: minsAgo(4),
       stats: { reads: 12, commands: 4, edits: 8 }, activity: [{ at: minsAgo(1), verb: "改", text: "web/src/theme.css" }],
     };
     jobs[readmePlan.id] = readmePlan;
     jobs[readmeBuild.id] = readmeBuild;
-    readmeTopicProjects[readmeTopic.id] = [{
-      id: "p-readme", groupId: readmeTopic.id, title: "网站加深色模式", ownerId: product.id, stage: "doing",
-      request: { text: "给网站加深色模式，手机和电脑都要好用。", at: minsAgo(8), itemId: "readme-topic-request" },
-      clarify: [{ title: "深色模式跟随系统还是手动切换？", why: "这决定入口放在哪里，也影响首次打开时的颜色。", options: ["跟随系统", "手动切换"], recommended: "跟随系统", answer: "跟随系统，也保留手动切换", askedBy: product.id, at: minsAgo(7), answeredAt: minsAgo(6) }],
-      requirements: { content: "# 网站加深色模式\n\n## 做成什么样\n- 页面默认跟随系统的浅色或深色偏好\n- 设置里可以手动切换\n- 手机和电脑的主要页面都能清楚阅读", acceptance: ["跟随系统切换时页面颜色正确", "手动切换后刷新仍保持选择", "手机和电脑的文字、按钮都清楚"], updatedAt: minsAgo(6) },
-      subtasks: [
-        { n: 1, title: "检查页面颜色对比度", assignee: tester.id, brief: "检查主要页面的颜色对比度。", after: [], jobId: readmePlan.id },
-        { n: 2, title: "实现深色模式", assignee: developer.id, brief: "按方案加入系统跟随、手动切换和测试。", after: [1], jobId: readmeBuild.id },
-        { n: 3, title: "验收主要页面", assignee: tester.id, brief: "在电脑和手机上逐条核对颜色、文字和切换。", after: [2], check: true },
-      ],
-      startedAt: minsAgo(7), itemId: "readme-project-card", createdAt: minsAgo(8), updatedAt: minsAgo(1),
-    }];
+    readmeTopic.todos = [
+      { text: L("检查页面颜色对比度", "Check color contrast"), status: "done" },
+      { text: L("实现深色模式", "Build dark mode"), status: "doing" },
+      { text: L("检查主要页面", "Check the main pages"), status: "todo" },
+    ];
     readmeTopicItems[readmeTopic.id] = [
-      { kind: "user", id: "readme-topic-request", at: minsAgo(8), text: "给网站加深色模式，手机和电脑都要好用。", speaker: "user" },
+      { kind: "user", id: "readme-topic-request", at: minsAgo(8), text: L("给网站加深色模式，手机和电脑都要好用。", "Add dark mode to the website; it should work well on phones and desktops."), speaker: "user" },
       { kind: "question", id: "readme-topic-question", at: minsAgo(7), approvalId: "readme-topic-approval", speaker: product.id },
-      { kind: "assistant", id: "readme-topic-summary", at: minsAgo(6), text: "跟随系统，保留手动开关；需求和验收标准已写好。", speaker: product.id },
+      { kind: "assistant", id: "readme-topic-summary", at: minsAgo(6), text: L("跟随系统，保留手动开关；列了 3 项待办。", "Follow the system and keep a manual toggle. Listed 3 to-dos."), speaker: product.id },
       { kind: "job", id: "readme-topic-plan-card", at: minsAgo(5), jobId: readmePlan.id, speaker: tester.id },
-      { kind: "assistant", id: "readme-topic-plan-result", at: minsAgo(5), text: "主要页面的对比度已记录。", speaker: tester.id },
+      { kind: "assistant", id: "readme-topic-plan-result", at: minsAgo(5), text: L("主要页面的对比度已记录。", "Contrast on the main pages is recorded."), speaker: tester.id },
       { kind: "job", id: "readme-topic-build-card", at: minsAgo(4), jobId: readmeBuild.id, speaker: developer.id },
     ];
-    approvals["readme-topic-approval"] = { id: "readme-topic-approval", assistantId: product.id, groupId: readmeTopic.id, title: "深色模式怎么切换？", detail: "这决定入口放在哪里，也影响首次打开时的颜色。", options: [{ key: "A", label: "跟随系统，也保留手动切换" }, { key: "B", label: "只提供手动切换" }], status: "answered", chosen: "A", source: "router", createdAt: minsAgo(7), answeredAt: minsAgo(6) };
+    approvals["readme-topic-approval"] = { id: "readme-topic-approval", assistantId: product.id, groupId: readmeTopic.id, title: L("深色模式怎么切换？", "How should dark mode switch?"), detail: L("这决定入口放在哪里，也影响首次打开时的颜色。", "This decides where the toggle goes and the color you see on first open."), options: [{ key: "A", label: L("跟随系统，也保留手动切换", "Follow the system, keep a manual toggle") }, { key: "B", label: L("只提供手动切换", "Manual toggle only") }], status: "answered", chosen: "A", source: "router", createdAt: minsAgo(7), answeredAt: minsAgo(6) };
     readmeTopicItems[readmeGroup.id] = [
-      { kind: "note", id: "readme-group-note", at: at(4, 10), icon: "split", text: "你建了群「网站项目」：产品负责人、开发、测试", speaker: "user" },
+      { kind: "note", id: "readme-group-note", at: at(4, 10), icon: "split", text: L("你建了群「网站项目」：产品负责人、开发、测试", "You created the group \"Website project\": Product owner, Developer, Tester"), speaker: "user" },
       { kind: "topic", id: "readme-topic-card", at: minsAgo(8), topicId: readmeTopic.id, speaker: product.id },
     ];
   }
 
-  if (scene === "topics" || scene === "topics-plain") {
-    const software = scene === "topics";
+  if (scene === "topics" || scene === "topics-plain" || scene === "todo-topic") {
+    const software = scene !== "topics-plain";
     const host: GroupSummary = software
       ? {
           id: "g-topics",
           name: "Hob 开发",
-          purpose: "Hob 仓库的需求、方案、开发、测试和发布",
+          purpose: "Hob 仓库的方案、开发、测试和发布",
           ownerId: "po",
           members: ["po", "arch", "dev", "qa", "release"],
           createdAt: at(30, 10, 0),
-          workflow: "software",
-          last: { at: at(0, 9, 52), speaker: "po", text: "按方案做，做完先在本地把三条验收标准跑一遍" },
+          last: { at: at(0, 9, 52), speaker: "po", text: "按方案做，做完先在本地跑一遍测试" },
           unread: 0,
           busy: [],
         }
@@ -1515,69 +1425,64 @@ cp now.txt "$seen"`,
       createdBy: "po",
       unread: 0,
       busy: [],
-      ...(host.workflow ? { workflow: host.workflow } : {}),
       ...patch,
     });
 
-    const projectOf = (patch: Partial<Project> & { id: string; groupId: string; title: string }): Project => ({
-      ownerId: "po",
-      stage: "clarify",
-      request: { text: patch.title, at: at(0, 9, 30) },
-      clarify: [],
-      subtasks: [],
-      itemId: "",
-      createdAt: at(0, 9, 30),
-      updatedAt: at(0, 9, 30),
-      ...patch,
-    });
-
-    // 进行中 3：一个等你回答、一个执行中、一个验收中
+    // 进行中 3：一个等你回答、一个进行中、一个快做完了
     const tExport = topic({
       id: "t-export",
       name: "导出月度报表",
       createdAt: at(0, 9, 30),
       last: { at: at(0, 9, 31), speaker: "po", text: "有两个问题要你定：按自然月还是按账期？导出 Excel 还是 CSV？" },
       unread: 2,
-      ...(software ? { project: { id: "p-t-export", title: "导出月度报表", stage: "clarify" as const, done: 0, total: 0, waitingUser: true, current: "po" } } : {}),
+      ...(software ? { todos: [{ text: "定两件事：按自然月还是账期，导出 Excel 还是 CSV", status: "doing" as const }] } : {}),
     });
     const tRemember = topic({
       id: "t-remember",
       name: "登录页加「记住我」",
       createdAt: at(0, 9, 38),
       last: { at: at(0, 9, 50), speaker: "dev", text: "「实现记住我」在做，方案按架构师定的 httpOnly cookie。" },
-      ...(software ? { project: { id: "p-t-remember", title: "登录页加「记住我」", stage: "doing" as const, done: 1, total: 4, waitingUser: false, current: "dev" } } : {}),
+      ...(software ? { todos: [
+        { text: "定方案", status: "done" as const },
+        { text: "实现「记住我」", status: "doing" as const },
+        { text: "检查用例和回归", status: "todo" as const },
+        { text: "上线前用手机试一次", status: "todo" as const },
+      ] } : {}),
     });
     const tUpload = topic({
       id: "t-upload",
       name: "上传大文件失败",
       createdAt: at(0, 9, 44),
-      last: { at: at(0, 9, 47), speaker: "qa", text: "3 条验收标准过了 2 条，第 3 条（断网续传）在复测" },
-      ...(software ? { project: { id: "p-t-upload", title: "上传大文件失败", stage: "review" as const, done: 3, total: 3, waitingUser: false, current: "qa" } } : {}),
+      last: { at: at(0, 9, 47), speaker: "qa", text: "过了两条，断网续传那条在复查" },
+      ...(software ? { todos: [
+        { text: "查日志定位", status: "done" as const },
+        { text: "修合并逻辑", status: "done" as const },
+        { text: "检查和回归", status: "doing" as const },
+      ] } : {}),
     });
-    // 已关闭 2：一件做完了、一件放弃了
+    // 已关闭 2：一件做完了、一件关了
     const tExportMonth = topic({
       id: "t-export-month",
       name: "导出加按月筛选",
       createdAt: at(14, 10, 0),
       closedAt: at(3, 16, 0),
-      closeNote: "4 条验收标准都过了，已上线",
-      last: { at: at(3, 16, 0), speaker: "po", text: "4 条验收标准都过了，已上线" },
-      ...(software ? { project: { id: "p-t-export-month", title: "导出加按月筛选", stage: "done" as const, done: 1, total: 1, waitingUser: false } } : {}),
+      closeNote: "测试都过了，已上线",
+      last: { at: at(3, 16, 0), speaker: "po", text: "测试都过了，已上线" },
+      ...(software ? { todos: [{ text: "加月份筛选", status: "done" as const }] } : {}),
     });
     const tColorway = topic({
       id: "t-colorway",
       name: "首页配色改版",
       createdAt: at(6, 11, 0),
       closedAt: at(5, 11, 0),
-      closeNote: "你说先不做了，原因记在事项里",
+      closeNote: "你说先不做了，等下个版本再看",
       last: { at: at(5, 11, 0), speaker: "po", text: "先不动配色，等下个版本一起改。" },
-      ...(software ? { project: { id: "p-t-colorway", title: "首页配色改版", stage: "dropped" as const, done: 0, total: 0, waitingUser: false } } : {}),
     });
 
     if (software) {
       groups.push(tExport, tRemember, tUpload, tExportMonth, tColorway);
     } else {
-      // 「无」工作方式：两个话题，没有事项，也没有阶段标签
+      // 另一个群：两个进行中的话题，都没列待办
       const tDisk = topic({ id: "t-disk", name: "换新硬盘", createdAt: at(1, 20, 0), createdBy: "hob", last: { at: at(1, 20, 10), speaker: "hob", text: "新盘到了告诉我，迁移步骤已经在话题里列好。" } });
       const tBackup = topic({ id: "t-backup", name: "相册备份出错", createdAt: at(0, 9, 10), createdBy: "hob", unread: 1, last: { at: at(0, 9, 10), speaker: "house", text: "补上了 312 张，有 3 张读不出来，原图可能坏了，要你看一眼。" } });
       const tDownload = topic({ id: "t-download", name: "清理下载目录", createdAt: at(4, 21, 0), createdBy: "hob", closedAt: at(2, 22, 0), closeNote: "清出来 11 GB，安装包都删了" });
@@ -1608,12 +1513,11 @@ cp now.txt "$seen"`,
     topicItems[tRemember.id] = [
       { kind: "user", id: "tr-1", at: at(0, 9, 38), text: "登录页加一个「记住我」，下周发版前要上", speaker: "user", ...(software ? { forwardedFrom: { groupId: host.id, itemId: "gt-4" } } : {}) },
       { kind: "assistant", id: "tr-2", at: at(0, 9, 40), text: "换了设备还要记住登录吗？\n这决定 token 绑不绑设备。", speaker: "po" },
-      { kind: "assistant", id: "tr-3", at: at(0, 9, 41), text: "需求说明已完成，拆分为 4 个子任务，按顺序执行；第 4 个需要由你执行。", speaker: "po" },
-      ...(software ? [{ kind: "project" as const, id: "tr-3b", at: at(0, 9, 41), projectId: "p-t-remember", speaker: "po" }] : []),
+      { kind: "assistant", id: "tr-3", at: at(0, 9, 41), text: "列了 4 项待办，第 4 项要你在手机上试一下。", speaker: "po" },
       ...(software ? [{ kind: "job" as const, id: "tr-4", at: at(0, 9, 43), jobId: "t-tp-1", speaker: "arch" }] : []),
       { kind: "assistant", id: "tr-5", at: at(0, 9, 46), text: "方案定了：30 天的长效 token 放 httpOnly cookie，库里只存哈希。", speaker: "arch" },
       ...(software ? [{ kind: "job" as const, id: "tr-6", at: at(0, 9, 47), jobId: "t-tp-2", speaker: "dev" }] : []),
-      { kind: "assistant", id: "tr-7", at: at(0, 9, 49), text: "@开发 按方案做，做完先在本地把三条验收标准跑一遍。", speaker: "po" },
+      { kind: "assistant", id: "tr-7", at: at(0, 9, 49), text: "@开发 按方案做，做完先在本地跑一遍测试。", speaker: "po" },
       { kind: "assistant", id: "tr-8", at: at(0, 9, 50), text: "收到，在做了，预计 20 分钟。", speaker: "dev" },
     ];
     topicItems[tExport.id] = [
@@ -1622,12 +1526,12 @@ cp now.txt "$seen"`,
     ];
     topicItems[tUpload.id] = [
       { kind: "user", id: "tu-1", at: at(0, 9, 44), text: "上传 2 GB 的文件卡在 99%", speaker: "user" },
-      { kind: "assistant", id: "tu-2", at: at(0, 9, 45), text: "看了日志：分片传完最后一块后没有合并，是我这边的问题。修好了，3 条验收标准现在过 2 条。", speaker: "dev" },
-      { kind: "assistant", id: "tu-3", at: at(0, 9, 47), text: "3 条验收标准过了 2 条，第 3 条（断网续传）在复测。", speaker: "qa" },
+      { kind: "assistant", id: "tu-2", at: at(0, 9, 45), text: "看了日志：分片传完最后一块后没有合并，是我这边的问题。修好了，测试现在过两条。", speaker: "dev" },
+      { kind: "assistant", id: "tu-3", at: at(0, 9, 47), text: "过了两条，断网续传那条在复查。", speaker: "qa" },
     ];
     topicItems[tExportMonth.id] = [
       { kind: "user", id: "tx-1", at: at(14, 10, 0), text: "导出的表格想按月份筛", speaker: "user" },
-      { kind: "assistant", id: "tx-2", at: at(3, 16, 0), text: "4 条验收标准都过了，已上线。", speaker: "po" },
+      { kind: "assistant", id: "tx-2", at: at(3, 16, 0), text: "测试都过了，已上线。", speaker: "po" },
     ];
     topicItems[tColorway.id] = [
       { kind: "user", id: "tc-1", at: at(6, 11, 0), text: "首页的颜色换一换", speaker: "user" },
@@ -1635,91 +1539,9 @@ cp now.txt "$seen"`,
     ];
 
     if (software) {
-      // 事项：执行中那件有完整的需求说明和子任务，验收中的那件有验收结果，关掉的两件留着结论
+      // 待办：进行中那件有完整的说明和待办，等结论的那件有检查结果，关掉的两件留着结论
       jobs["t-tp-1"] = groupJob({ id: "t-tp-1", assistantId: "arch", title: "定方案", groupId: tRemember.id, startedAt: at(0, 9, 42), endedAt: at(0, 9, 46), durationMs: 240_000 });
       jobs["t-tp-2"] = groupJob({ id: "t-tp-2", assistantId: "dev", title: "实现「记住我」", groupId: tRemember.id, status: "running", startedAt: minsAgo(6), endedAt: undefined });
-      const acceptance = ["勾选后关掉浏览器再打开，仍是登录状态", "不勾选时，关掉浏览器要重新登录", "退出登录后，旧的记住状态失效"];
-      topicProjects[tRemember.id] = [projectOf({
-        id: "p-t-remember",
-        groupId: tRemember.id,
-        title: "登录页加「记住我」",
-        stage: "doing",
-        request: { text: "登录页加一个「记住我」，下周发版前要上", itemId: "tr-1", at: at(0, 9, 38) },
-        clarify: [{ title: "换了设备还要记住登录吗？", why: "这决定 token 绑不绑设备。", options: ["按设备记", "不绑设备"], recommended: "按设备记", answer: "不用，换设备重新登录", askedBy: "po", at: at(0, 9, 40), answeredAt: at(0, 9, 41) }],
-        requirements: { content: "# 登录页加「记住我」\n\n## 做成什么样\n- 勾选后 30 天内免登录\n- 换设备、换浏览器要重新登录\n- 退出登录后，这台设备的记住状态马上失效", acceptance, updatedAt: at(0, 9, 41) },
-        subtasks: [
-          { n: 1, title: "定方案", assignee: "arch", brief: "定下 token 存哪里、多久过期。", after: [], jobId: "t-tp-1" },
-          { n: 2, title: "实现「记住我」", assignee: "dev", brief: "按方案做出来，带上测试。", after: [1], jobId: "t-tp-2" },
-          { n: 3, title: "验收用例和回归", assignee: "qa", brief: "对照验收标准逐条验。", after: [2], check: true },
-          { n: 4, title: "上线前用手机试一次", assignee: "user", brief: "发版后用手机登录一次，勾上「记住我」。", after: [2] },
-        ],
-        startedAt: at(0, 9, 42),
-        itemId: "tr-3",
-        createdAt: at(0, 9, 38),
-        updatedAt: at(0, 9, 50),
-      })];
-      topicProjects[tExport.id] = [projectOf({
-        id: "p-t-export",
-        groupId: tExport.id,
-        title: "导出月度报表",
-        request: { text: "每月的报表想按月份导出", itemId: "te-1", at: at(0, 9, 30) },
-        clarify: [
-          { title: "按自然月还是按账期？", why: "账期跨月，两种算出来不一样。", options: ["自然月", "账期"], recommended: "自然月", askedBy: "po", at: at(0, 9, 31) },
-          { title: "导出 Excel 还是 CSV？", options: ["Excel", "CSV"], recommended: "Excel", askedBy: "po", at: at(0, 9, 31) },
-        ],
-        itemId: "te-2",
-        createdAt: at(0, 9, 30),
-        updatedAt: at(0, 9, 31),
-      })];
-      topicProjects[tUpload.id] = [projectOf({
-        id: "p-t-upload",
-        groupId: tUpload.id,
-        title: "上传大文件失败",
-        stage: "review",
-        request: { text: "上传 2 GB 的文件卡在 99%", itemId: "tu-1", at: at(0, 9, 44) },
-        requirements: { content: "# 上传大文件失败\n\n分片传完最后一块后没合并。", acceptance: ["2 GB 文件能传完", "断网后能接着传", "失败时有明确提示"], updatedAt: at(0, 9, 45) },
-        subtasks: [
-          { n: 1, title: "查日志定位", assignee: "dev", brief: "看服务端日志。", after: [], jobId: "t-tp-1" },
-          { n: 2, title: "修合并逻辑", assignee: "dev", brief: "补上最后一块的合并。", after: [1], jobId: "t-tp-2" },
-          { n: 3, title: "验收和回归", assignee: "qa", brief: "逐条验。", after: [2], check: true, doneAt: at(0, 9, 47) },
-        ],
-        startedAt: at(0, 9, 44),
-        checks: [
-          { index: 1, passed: true, evidence: "2 GB 文件传完，服务端文件完整。", jobId: "t-tp-2", at: at(0, 9, 47) },
-          { index: 2, passed: false, evidence: "拔网线 30 秒再插回，没有接着传。", jobId: "t-tp-2", at: at(0, 9, 47) },
-        ],
-        itemId: "tu-3",
-        createdAt: at(0, 9, 44),
-        updatedAt: at(0, 9, 47),
-      })];
-      topicProjects[tExportMonth.id] = [projectOf({
-        id: "p-t-export-month",
-        groupId: tExportMonth.id,
-        title: "导出加按月筛选",
-        stage: "done",
-        request: { text: "导出的表格想按月份筛", itemId: "tx-1", at: at(14, 10, 0) },
-        requirements: { content: "导出菜单里选月份，只导出那个月的记录。", acceptance: ["选二月导出，只有二月的记录"], updatedAt: at(13, 10, 0) },
-        subtasks: [{ n: 1, title: "加月份筛选", assignee: "dev", brief: "导出菜单加月份。", after: [], jobId: "t-tp-1" }],
-        startedAt: at(13, 11, 0),
-        checks: [{ index: 1, passed: true, evidence: "二月导出 218 行，全部是二月的记录。", jobId: "t-tp-1", at: at(3, 16, 0) }],
-        summary: "导出的菜单里加了月份筛选，验收通过。",
-        itemId: "tx-2",
-        createdAt: at(14, 10, 0),
-        updatedAt: at(3, 16, 0),
-        endedAt: at(3, 16, 0),
-      })];
-      topicProjects[tColorway.id] = [projectOf({
-        id: "p-t-colorway",
-        groupId: tColorway.id,
-        title: "首页配色改版",
-        stage: "dropped",
-        request: { text: "首页的颜色换一换", itemId: "tc-1", at: at(6, 11, 0) },
-        summary: "先不动配色，等下个版本一起改。",
-        itemId: "tc-2",
-        createdAt: at(6, 11, 0),
-        updatedAt: at(5, 11, 0),
-        endedAt: at(5, 11, 0),
-      })];
 
       // 综合：闲聊 + 三张话题卡
       topicItems[host.id] = [
@@ -1739,7 +1561,6 @@ cp now.txt "$seen"`,
     assistants,
     groups,
     groupItems: { "g-home": homeItems, "g-dev": devItems, ...readmeTopicItems, ...topicItems },
-    projects: { "g-home": [], "g-dev": [...(remember ? [remember] : []), ...endedProjects], ...readmeTopicProjects, ...topicProjects },
     items,
     jobs,
     delegations,
@@ -1756,7 +1577,7 @@ cp now.txt "$seen"`,
         { id: "rule-2", text: "改线上服务", mode: "ask", changedAt: at(10, 9, 0) },
         { id: "rule-3", text: "清理我的文件", mode: "ask", changedAt: at(3, 9, 0) },
       ],
-      page: scene.startsWith("readme-") ? [{ id: "readme-rule", text: "向团队群发送周报", mode: "ask", changedAt: at(9, 9) }] : [
+      page: scene.startsWith("readme-") ? [{ id: "readme-rule", text: L("向团队群发送周报", "Send the weekly report to the team group"), mode: "ask", changedAt: at(9, 9) }] : [
         { id: "rule-4", text: "删除草稿", mode: "ask", changedAt: at(9, 9, 0) },
         { id: "rule-5", text: "花钱", mode: "ask", changedAt: at(9, 9, 0) },
         { id: "rule-6", text: "发公众号", mode: "allow", changedAt: minsAgo(120) },
@@ -1791,7 +1612,7 @@ cp now.txt "$seen"`,
         general: {
           theme: scene.endsWith("-dark") ? "dark" : "system",
           timezone: "Asia/Tokyo",
-          aboutYou: { name: "小林", language: "中文", notes: "" },
+          aboutYou: { name: L("小林", "Sam"), language: L("中文", "English"), notes: "" },
         },
         providers: [
           { kind: "builtin", id: "anthropic" },
@@ -1805,7 +1626,7 @@ cp now.txt "$seen"`,
           },
         ],
         models: scene.startsWith("readme-") ? {
-          roster: [{ ref: "openai/gpt-5", note: "日常对话", thinking: "low" }, { ref: "anthropic/claude-sonnet", note: "整理资料", thinking: "high" }],
+          roster: [{ ref: "openai/gpt-5", note: L("日常对话", "Everyday chat"), thinking: "low" }, { ref: "anthropic/claude-sonnet", note: L("整理资料", "Organizing docs"), thinking: "high" }],
           conversation: { ref: "openai/gpt-5", thinking: "low" },
           work: { ref: "anthropic/claude-sonnet", thinking: "high" },
         } : {
@@ -2019,38 +1840,56 @@ const MCP_MOCK: McpView = {
 
 export function createMock(scene: SceneId = "s1"): HobApi {
   const db = buildDb(scene);
+  const en = englishDemo(scene);
+  const L: Say = (zh, english) => (en ? english : zh);
   const groupRules: Record<string, Rule[]> = {};
   if (scene === "g-owns" || scene === "g-owns-dark") {
     const group = db.groups.find((item) => item.id === "g-dev")!;
-    group.instructions = "先明确需求，再拆分任务；发布前请用户确认。";
+    group.instructions = "先明确要做成什么样，再分给合适的成员；发布前请用户确认。";
     const topic: GroupSummary = { ...group, id: "g-owns-topic", parentId: group.id, name: "监听项目动态", busy: [], unread: 0 };
     db.groups.push(topic);
     db.groupItems[topic.id] = [];
     groupRules[group.id] = ["发布前先确认", "删除数据前先确认"].map((text, i) => ({ id: `owns-rule-${i}`, text, mode: "ask", changedAt: at(0, 9) }));
-    db.assistantSkills[group.id] = ["需求澄清", "代码审查", "发布检查"].map((title, i) => ({ name: `team-${i}`, title, description: `团队${title}的做法`, path: `/mock/groups/${group.id}/skills/team-${i}/SKILL.md`, version: 1, createdAt: at(3, 9), updatedAt: at(1, 9), uses: 0, enabled: true }));
+    db.assistantSkills[group.id] = ["问清要做什么", "代码审查", "发布前确认"].map((title, i) => ({ name: `team-${i}`, title, description: `团队${title}的做法`, path: `/mock/groups/${group.id}/skills/team-${i}/SKILL.md`, version: 1, createdAt: at(3, 9), updatedAt: at(1, 9), uses: 0, enabled: true }));
     for (let i = 0; i < 2; i++) db.routines.push({ id: `owns-routine-${i}`, assistantId: group.ownerId, groupId: i ? topic.id : group.id, name: i ? "监听项目动态" : "每日进度汇总", instruction: "检查进展并汇报", schedules: [i ? "*/15 * * * *" : "0 9 * * *"], active: true, createdAt: at(2, 9), runs: [{ at: at(0, 9), status: "handed" }] });
     (db.groupItems[group.id] ??= []).push({ id: "owns-routine-note", kind: "note", icon: "routine", speaker: group.ownerId, at: at(0, 9), text: "定时任务「监听项目动态」到点了，检查到：\n问题一：登录异常\n问题二：保存失败\n问题三：加载缓慢\n问题四：显示错位\n问题五：链接失效\n问题六：通知延迟\n问题七：搜索错误" });
     const example = Object.values(db.jobs)[0]!;
     delete db.jobs["t-g-dev"];
     group.busy = ["dev"];
-    for (let i = 0; i < 5; i++) { const id = `owns-job-${i}`; db.jobs[id] = { ...example, id, groupId: i % 2 ? topic.id : group.id, assistantId: i === 0 ? "dev" : group.members[i % group.members.length]!, title: ["整理需求", "确定实现方案", "完成开发", "执行验收", "检查发布准备"][i]!, status: i === 0 ? "running" : "done", createdAt: at(0, 9, i * 5), startedAt: at(0, 9, i * 5), endedAt: i === 0 ? undefined : at(0, 9, i * 5 + 4), durationMs: i === 0 ? undefined : 240000, activity: [] }; }
+    for (let i = 0; i < 5; i++) { const id = `owns-job-${i}`; db.jobs[id] = { ...example, id, groupId: i % 2 ? topic.id : group.id, assistantId: i === 0 ? "dev" : group.members[i % group.members.length]!, title: ["整理资料", "确定实现方案", "完成开发", "跑测试", "确认发布准备"][i]!, status: i === 0 ? "running" : "done", createdAt: at(0, 9, i * 5), startedAt: at(0, 9, i * 5), endedAt: i === 0 ? undefined : at(0, 9, i * 5 + 4), durationMs: i === 0 ? undefined : 240000, activity: [] }; }
   }
   let globalRules: Rule[] = scene.startsWith("readme-") ? [
     ...["删除或覆盖文件、数据和备份", "对外发送（消息、邮件、发布）、付费、充值、改计费", "停止或重启别人正在使用的服务和设备", "修改可能让你失去远程访问的设置（网络、防火墙、登录方式）"].map((text, i) => ({ id: `ask-${i}`, text, mode: "ask" as const, changedAt: at(10, 9) })),
     ...["过去的记录是线索不是现状：动手前先核实实际状态。", "改配置、改数据前先留好退路（备份或记下原值）；改完用实际效果验证，不只看命令返回。", "凭据（密码、密钥、令牌、Cookie）只在用的时候读取，不回显，不写进文件和报告，也不存起来。"].map((text, i) => ({ id: `allow-${i}`, text, mode: "allow" as const, changedAt: at(10, 9) })),
   ] : [];
   if (new URLSearchParams(globalThis.location?.search ?? "").has("citation")) (db.items.hob ??= []).push({ kind: "assistant", id: "mock-citation", at: new Date().toISOString(), text: "这里是资料里的结论：[工作记录.md](#k/k-2/0)。" });
-  let collections: KnowledgeCollection[] = [{ id: "kc-1", name: "工作资料", createdAt: minsAgo(1000), count: 0 }, { id: "kc-2", name: "灵感收藏", createdAt: minsAgo(900), count: 0 }];
-  let entries: KnowledgeEntry[] = ["项目封面.png", "产品设计页面.html", "工作记录.md", "数据汇总.csv", "参考文档.pdf", "插画.png", "会议纪要.md", "网站方案.html", "预算表.csv", "资料.txt", "附件.json", "录音.mp3"].map((name, i) => ({
+  let collections: KnowledgeCollection[] = [{ id: "kc-1", name: L("工作资料", "Work docs"), createdAt: minsAgo(1000), count: 0 }, { id: "kc-2", name: L("灵感收藏", "Ideas"), createdAt: minsAgo(900), count: 0 }];
+  let entries: KnowledgeEntry[] = [
+    ["项目封面.png", "Project cover.png"],
+    ["产品设计页面.html", "Product design page.html"],
+    ["工作记录.md", "Work log.md"],
+    ["数据汇总.csv", "Data summary.csv"],
+    ["参考文档.pdf", "Reference doc.pdf"],
+    ["插画.png", "Illustration.png"],
+    ["会议纪要.md", "Meeting notes.md"],
+    ["网站方案.html", "Website plan.html"],
+    ["预算表.csv", "Budget.csv"],
+    ["资料.txt", "Notes.txt"],
+    ["附件.json", "Attachments.json"],
+    ["录音.mp3", "Recording.mp3"],
+  ].map(([zhName, enName], i) => {
+    const name = L(zhName!, enName!);
+    return {
     id: `k-${i}`, origin: i % 3 === 0 ? "chat" : i % 3 === 1 ? "output" : "upload", name,
-    description: `项目资料 · ${name}，记录设计与工作进展。`, kind: name.endsWith(".png") ? "image" : name.endsWith(".html") ? "html" : name.endsWith(".csv") ? "csv" : name.endsWith(".pdf") ? "pdf" : name.endsWith(".json") ? "json" : name.endsWith(".mp3") ? "audio" : "markdown",
+    description: en ? `Project file · ${name}, notes on the design and progress so far.` : `项目资料 · ${name}，记录设计与工作进展。`, kind: name.endsWith(".png") ? "image" : name.endsWith(".html") ? "html" : name.endsWith(".csv") ? "csv" : name.endsWith(".pdf") ? "pdf" : name.endsWith(".json") ? "json" : name.endsWith(".mp3") ? "audio" : "markdown",
     path: `/mock/knowledge/${name}`, hash: `hash-${i}`, size: 2048 + i * 1000, createdAt: minsAgo(i < 6 ? i * 60 : 14 * 24 * 60 + i), updatedAt: minsAgo(i < 6 ? i * 60 : 14 * 24 * 60 + i),
     source: { assistantId: "hob", itemId: scene === "bubbles" || scene === "bubbles-dark" ? ["bubble-file", "bubble-page", "bubble-audio", "bubble-video", "bubble-job"][i % 5] : scene === "image" ? "image-done" : db.items.hob?.[0]?.id }, collections: i % 2 ? ["kc-1"] : ["kc-2"],
-  }));
+    };
+  });
   const indexStates = ["queued", "indexing", "ready", "failed", "unsupported"] as const;
   entries.forEach((entry, i) => { entry.index = { state: indexStates[i % indexStates.length]!, ...(i % indexStates.length === 3 ? { error: "无法读取文件" } : {}) }; });
   if (scene === "readme-knowledge") {
-    collections = [{ id: "kc-1", name: "工作资料", createdAt: minsAgo(1000), count: 0 }];
+    collections = [{ id: "kc-1", name: L("工作资料", "Work docs"), createdAt: minsAgo(1000), count: 0 }];
     const documents: { name: string; description: string; kind: KnowledgeEntry["kind"] }[] = [
       { name: "团队资料整理方案.html", description: "比较共享文档、知识库和文件夹的适用场景。", kind: "html" },
       { name: "周报进度表.csv", description: "汇总本周各项工作、负责人和进度。", kind: "csv" },
@@ -2104,17 +1943,21 @@ export function createMock(scene: SceneId = "s1"): HobApi {
   /** 模拟模式的任务过程：拿活动流拼一份，只为看界面。 */
   const stepsOf = (job: Job): JobStep[] => {
     const steps: JobStep[] = [];
+    // 英文界面里工具行用英文动词，和真服务的工具名对得上
+    const verb: Record<string, string> = en
+      ? { "读": "read", "跑": "bash", "改": "edit", "说": "report", "搜": "search", "写": "write" }
+      : { "读": "读", "跑": "跑", "改": "改", "说": "说", "搜": "搜", "写": "写" };
     job.activity.forEach((line, index) => {
       if (line.verb === "$") return;
       // 「浏览器 打开 地址」是云桌面里开网页的动作，演成 browser_* 步骤（任务详情里有“看桌面”入口）
-      const browser = line.text.match(/^浏览器 打开 (\S+)$/);
+      const browser = line.text.match(/^(?:浏览器 打开|open) (\S+)/);
       const name = browser ? "browser_open" : line.verb === "读" ? "read" : line.verb === "跑" ? "bash" : line.verb === "改" ? "edit" : line.verb === "说" ? "report" : "ls";
       steps.push({
         id: `mock-${job.id}-${index}`,
         kind: "tool",
         at: line.at,
         name,
-        title: name === "report" ? "提交结果" : `${line.verb} ${line.text}`,
+        title: name === "report" ? L("提交结果", "Submit result") : `${verb[line.verb] ?? line.verb} ${line.text}`,
         args:
           browser
             ? { url: browser[1] }
@@ -2175,30 +2018,6 @@ export function createMock(scene: SceneId = "s1"): HobApi {
     return { updatedAt: minsAgo(90), error: null, models };
   };
   let usageData: { timezone: string; rows: UsageRow[]; assistants: UsageAssistant[] } | undefined;
-
-  /**
-   * 话题的事项摘要（真服务端 151 也从话题里的那件事项算）：左栏话题行、综合的话题卡、话题顶上那条都用它。
-   * 话题或事项变了重算一次。
-   */
-  const syncTopicProject = (topicId: string) => {
-    const topic = db.groups.find((g) => g.id === topicId);
-    if (!topic?.parentId) return;
-    const project = (db.projects[topicId] ?? [])[0];
-    if (!project) {
-      delete topic.project;
-      return;
-    }
-    const jobOf = (subtask: Subtask) => (subtask.jobId ? db.jobs[subtask.jobId] : undefined);
-    const done = project.subtasks.filter((subtask) => subtaskStatus(project, subtask, jobOf(subtask), jobOf) === "已完成").length;
-    const waitingUser = (project.stage === "plan" && project.subtasks.length > 0) || project.subtasks.some((subtask) => subtask.assignee === "user" && subtaskStatus(project, subtask, jobOf(subtask), jobOf) === "待你执行")
-      || Object.values(db.approvals).some((approval) => approval.groupId === topicId && approval.status === "pending");
-    const current = project.stage === "doing"
-      ? project.subtasks.find((subtask) => jobOf(subtask)?.status === "running")?.assignee
-      : project.stage === "review"
-        ? project.subtasks.find((subtask) => subtask.check)?.assignee
-        : project.ownerId;
-    topic.project = { id: project.id, title: project.title, stage: project.stage, done, total: project.subtasks.length, waitingUser, ...(current ? { current } : {}) };
-  };
 
   return {
     usage: async (): Promise<UsageView> => {
@@ -2380,20 +2199,36 @@ export function createMock(scene: SceneId = "s1"): HobApi {
     },
     skills: async () => {
       const off = db.settings.settings.skills?.disabled ?? [];
-      const skill = (id: string, source: "hob" | "common" | "lore", description: string, content: string, overridden = false) =>
-        ({ id, name: id, description, source, content, enabled: !off.includes(`${source}:${id}`), overridden });
+      const skill = (id: string, source: "hob" | "common" | "lore", description: string, content: string, overridden = false, extra: { title?: string; version?: number; updatedAt?: string; rollbackable?: boolean } = {}) =>
+        ({ id, name: id, description, source, content, enabled: !off.includes(`${source}:${id}`), overridden, ...extra });
+      const at = new Date(Date.now() - 86400_000 * 2).toISOString();
       return { skills: [
-        skill("weekly-report", "hob", "按固定结构整理本周进展、风险和下周计划，生成可直接发出的周报。", "# 周报\n\n1. 汇总本周完成的事项\n2. 列出风险和需要的支持\n3. 写下周计划"),
-        skill("research", "hob", "查阅可靠来源，交叉核对后整理结论，并为每条结论注明出处。", "# 研究\n\n查阅可靠来源，整理结论并注明出处。"),
-        skill("server-checkup", "hob", "检查主机的磁盘、内存、服务状态和最近的错误日志，给出处理建议。", "# 主机巡检\n\n逐台检查磁盘、内存、服务与日志。"),
+        skill("weekly-report", "hob", "按固定结构整理本周进展、风险和下周计划，生成可直接发出的周报。", "# 周报\n\n1. 汇总本周做完的事\n2. 列出风险和需要的支持\n3. 写下周计划", false, { title: "每周周报", version: 3, updatedAt: at, rollbackable: true }),
+        skill("research", "hob", "查阅可靠来源，交叉核对后整理结论，并为每条结论注明出处。", "# 研究\n\n查阅可靠来源，整理结论并注明出处。", false, { title: "资料研究", version: 1, updatedAt: at, rollbackable: false }),
+        skill("server-checkup", "hob", "检查主机的磁盘、内存、服务状态和最近的错误日志，给出处理建议。", "# 主机巡检\n\n逐台检查磁盘、内存、服务与日志。", false, { title: "主机巡检", version: 2, updatedAt: at, rollbackable: true }),
         skill("browser", "common", "在浏览器中打开页面、操作并截图，验证改动是否生效。", "# 浏览器\n\n通过浏览器检查和验证页面。"),
         skill("pdf", "common", "读取、拆分、合并 PDF，提取其中的表格和文字。", "# PDF\n\n处理 PDF 文件。"),
         skill("research", "common", "通用的资料检索流程。", "# research", true),
-      ], loreActive: false, loreUrl: null };
+        skill("meeting-notes", "lore", "把会议记录整理成带待办的纪要。", "# 纪要\n\n1. 分段\n2. 列出待办"),
+        skill("release-notes", "lore", "把一批变更整理成可直接发出的发布说明。", "# 发布说明\n\n按模块分组，标注影响面。"),
+      ], loreActive: true, loreUrl: "https://lore.example.com" };
     },
-    skillsImport: async () => ({ found: true, skipped: [], skills: [{ id: "review", name: "review", description: "检查代码与需求。", exists: false }, { id: "research", name: "research", description: "整理研究结果。", exists: true }] }),
+    skillsImport: async () => ({ found: true, skipped: [], skills: [{ id: "review", name: "review", description: "检查代码和资料。", exists: false }, { id: "research", name: "research", description: "整理研究结果。", exists: true }] }),
     importSkills: async (_source, ids) => ({ imported: ids, skipped: [], errors: [] }),
     deleteSkill: async () => {},
+    rollbackGeneralSkill: async (name) => ({ name, title: name, description: "回退后的技能", path: `/skills/${name}/SKILL.md`, version: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), uses: 0, enabled: true }),
+    visibleSkills: async (assistantId, groupId) => {
+      const base = [
+        { name: "weekly-report", title: "每周周报", description: "按固定结构整理本周进展", path: `/skills/weekly-report/SKILL.md`, dir: "/skills/weekly-report", scope: "assistant" as const, editable: true, version: 3, updatedAt: new Date().toISOString(), enabled: true },
+        { name: "browser", description: "在浏览器中操作并截图", path: "/home/.agents/skills/browser/SKILL.md", dir: "/home/.agents/skills/browser", scope: "general" as const, editable: false, source: "local" as const, enabled: true },
+      ];
+      if (!groupId) return clone(base);
+      return clone([
+        { name: "trip-plan", title: "旅行行程", description: "排旅行行程", path: `/groups/${groupId}/skills/trip-plan/SKILL.md`, dir: `/groups/${groupId}/skills/trip-plan`, scope: "group" as const, editable: true, version: 1, updatedAt: new Date().toISOString(), enabled: true },
+        { name: "shared-notes", title: "共享纪要", description: "所有人共用的纪要做做法", path: "/skills/shared-notes/SKILL.md", dir: "/skills/shared-notes", scope: "general" as const, editable: true, version: 2, updatedAt: new Date().toISOString(), enabled: true },
+        ...base.filter((skill) => skill.name !== "weekly-report"),
+      ]);
+    },
     desktop: async () => clone(desktop),
     desktopScreens: async () => ({ screens: desktopMockScene() === "failed" ? [] : [{ id: "hob", running: true, browserRunning: true, viewers: 0, lastActiveAt: null }], profiles: { hob: "hob" } }),
     saveDesktop: async (body) => {
@@ -2612,7 +2447,6 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       if (!body.name.trim()) throw new ApiError(400, "群名不能为空。");
       if (members.length < 1) throw new ApiError(400, "群里至少要有一个助手。");
       if (!members.includes(body.ownerId)) throw new ApiError(400, "群主必须是群里的一员。");
-      if (body.workflow && body.workflow !== "software") throw new ApiError(400, "没有这种工作方式。");
       const group: Group = {
         id: `g-${Date.now().toString(36)}`,
         name: body.name.trim(),
@@ -2620,7 +2454,6 @@ export function createMock(scene: SceneId = "s1"): HobApi {
         ownerId: body.ownerId,
         members,
         createdAt: new Date().toISOString(),
-        ...(body.workflow ? { workflow: body.workflow } : {}),
       };
       db.groups.push({ ...group, unread: 0, busy: [] });
       db.groupItems[group.id] = [
@@ -2646,7 +2479,6 @@ export function createMock(scene: SceneId = "s1"): HobApi {
         createdAt: now,
         parentId: group.id,
         createdBy: "user",
-        ...(group.workflow ? { workflow: group.workflow } : {}),
       };
       db.groups.push({ ...topic, unread: 0, busy: [] });
       db.groupItems[topic.id] = [];
@@ -2667,15 +2499,6 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       topic.closedAt = now;
       if (body?.note?.trim()) topic.closeNote = body.note.trim();
       topic.busy = [];
-      // 话题里没结束的事项按放弃处理
-      for (const project of db.projects[topicId] ?? []) {
-        if (project.stage === "done" || project.stage === "dropped") continue;
-        project.stage = "dropped";
-        project.summary = "用户关闭了这个话题";
-        project.updatedAt = now;
-        project.endedAt = now;
-      }
-      syncTopicProject(topicId);
       emitGroup(topicId);
       emitGroup(topic.parentId);
       return clone(topic);
@@ -2685,7 +2508,6 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       if (!topic?.parentId) throw new ApiError(404, "话题不存在。");
       delete topic.closedAt;
       delete topic.closeNote;
-      syncTopicProject(topicId);
       emitGroup(topicId);
       emitGroup(topic.parentId);
       return clone(topic);
@@ -2699,19 +2521,9 @@ export function createMock(scene: SceneId = "s1"): HobApi {
         if (existing) Object.assign(existing, patch.rule, { changedAt: new Date().toISOString() });
         else if (patch.rule.text && patch.rule.mode) rules.push({ id: `rule-${Date.now()}`, text: patch.rule.text, mode: patch.rule.mode, changedAt: new Date().toISOString() });
       }
-      // 话题只能改名字：成员、群主、工作方式都取所属的群
-      if (group.parentId && (patch.workflow !== undefined || patch.members || patch.ownerId || patch.purpose !== undefined)) {
+      // 话题只能改名字：成员、群主都取所属的群
+      if (group.parentId && (patch.members || patch.ownerId || patch.purpose !== undefined)) {
         throw new ApiError(400, "话题只能改名字。");
-      }
-      if (patch.workflow !== undefined) {
-        if (patch.workflow !== null && patch.workflow !== "software") throw new ApiError(400, "没有这种工作方式。");
-        if (patch.workflow === null) {
-          const topics = db.groups.filter((g) => g.parentId === groupId).map((g) => g.id);
-          const open = [groupId, ...topics].some((id) => (db.projects[id] ?? []).some((project) => project.stage !== "done" && project.stage !== "dropped"));
-          if (open) throw new ApiError(400, "群里还有没结束的事项，不能把工作方式改成无。");
-        }
-        if (patch.workflow) group.workflow = patch.workflow;
-        else delete group.workflow;
       }
       if (patch.members) {
         const members = [...new Set(patch.members)];
@@ -2772,34 +2584,6 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       jobs: clone(Object.values(db.jobs).filter((j) => j.groupId === groupId)),
       hasMore: false,
     }),
-    projects: async (groupId) => clone(db.projects[groupId] ?? []),
-    project: async (groupId, projectId) => {
-      const found = (db.projects[groupId] ?? []).find((item) => item.id === projectId);
-      if (!found) throw new ApiError(404, "事项不存在。");
-      return clone(found);
-    },
-    // 演示：点「开始执行」和「已完成」直接改演示数据（真服务端走 start_subtasks 和 doneAt）
-    startProject: async (groupId, projectId) => {
-      const found = (db.projects[groupId] ?? []).find((item) => item.id === projectId);
-      if (!found) throw new ApiError(404, "事项不存在。");
-      const now = new Date().toISOString();
-      found.stage = "doing";
-      found.startedAt = now;
-      found.updatedAt = now;
-      syncTopicProject(groupId);
-      return clone(found);
-    },
-    doneSubtask: async (groupId, projectId, n) => {
-      const found = (db.projects[groupId] ?? []).find((item) => item.id === projectId);
-      if (!found) throw new ApiError(404, "事项不存在。");
-      const subtask = found.subtasks.find((item) => item.n === n);
-      if (!subtask) throw new ApiError(404, `没有子任务 ${n}。`);
-      const now = new Date().toISOString();
-      subtask.doneAt = now;
-      found.updatedAt = now;
-      syncTopicProject(groupId);
-      return clone(found);
-    },
     sendGroupMessage: async (groupId, body) => {
       const group = db.groups.find((g) => g.id === groupId);
       if (!group) throw new ApiError(404, "群不存在。");

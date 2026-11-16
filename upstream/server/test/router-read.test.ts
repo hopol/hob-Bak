@@ -33,6 +33,9 @@ describe("Router read", () => {
         expect(result.isError).toBe(true);
         if (!expected.ok) expect(result.content[0].text).toBe(expected.error);
       }
+      // 目录：范围外的先说范围，范围里的说是目录，都不说「不存在」
+      expect((await read.execute("x", { path: outside })).content[0].text).toBe("只允许读 Hob 自己的文件");
+      expect((await read.execute("x", { path: join(hob.home, "assistants") })).content[0].text).toBe("这是目录，不是文件");
       const lines = Array.from({ length: 200 }, (_, i) => `第${i + 1}行`.padEnd(50, "字"));
       writeFileSync(join(hob.home, "long.txt"), lines.join("\n"));
       const first = await read.execute("x", { path: "long.txt" });

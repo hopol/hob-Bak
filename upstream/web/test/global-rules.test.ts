@@ -2,6 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { realApi } from "../src/api.ts";
+import { setLocale } from "../../shared/i18n.ts";
 import type { Rule } from "../../shared/types.ts";
 
 const initial: Rule[] = [
@@ -12,6 +13,8 @@ const initial: Rule[] = [
 beforeAll(() => {
   vi.stubGlobal("location", { search: "", hash: "" });
   vi.stubGlobal("localStorage", { getItem: () => null, setItem() {} });
+  // 界面文字默认是中文：这里不跟着跑测试那台机器的浏览器语言走
+  vi.stubGlobal("navigator", { languages: ["zh-CN"], language: "zh-CN" });
   vi.stubGlobal("window", { matchMedia: () => ({ matches: false, addEventListener() {} }), innerWidth: 1440 });
 });
 afterEach(() => vi.restoreAllMocks());
@@ -26,6 +29,8 @@ describe("全局规则设置", () => {
     });
     const store = await import("../src/store.ts");
     const { SettingsPage } = await import("../src/components/Settings.tsx");
+    // 断言的文案是中文，先把界面语言定下来，不跟 Node 的 navigator 语言走
+    setLocale("zh-CN");
     store.openSettings();
     store.setSection("rules");
     await store.loadRules();

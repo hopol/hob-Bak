@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { t } from "../../shared/i18n.ts";
 import { AssistantMenu } from "./components/AssistantMenu.tsx";
 import { Chat, ChatPage } from "./components/Chat.tsx";
 import { DropFiles } from "./components/DropFiles.tsx";
@@ -17,7 +18,7 @@ import { useLeave } from "./motion.ts";
 import { applyUpdate } from "./pwa.ts";
 import { gonePages, layerList, pageKey, type GonePage } from "./panel-stack.ts";
 import { backPanel, clearNotice, start, tick, useApp, type PanelPage } from "./store.ts";
-import { updateStatusColor } from "./theme.ts";
+import { isNarrow, updateStatusColor } from "./theme.ts";
 import { Avatar } from "./sprites.tsx";
 
 /** 右栏的页一层层盖上去：新页从右边滑进来，下面的页不动也不隐藏；退掉的页滑出去以后再卸。换了助手直接换，不滑。 */
@@ -44,7 +45,7 @@ function rawError(text: string): string {
 
 export function App() {
   const s = useApp();
-  const [narrow, setNarrow] = useState(() => window.innerWidth < 768);
+  const [narrow, setNarrow] = useState(isNarrow);
   const chat = useLeave(s.mobile === "chat" && Boolean(s.sel ?? s.gsel), 240);
   const settings = useLeave(s.page === "settings", 180);
   const knowledge = useLeave(s.page === "knowledge", 180);
@@ -86,7 +87,7 @@ export function App() {
   }, [s.panelStack]);
 
   useEffect(() => {
-    const onResize = () => setNarrow(window.innerWidth < 768);
+    const onResize = () => setNarrow(isNarrow());
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -114,10 +115,10 @@ export function App() {
     return (
       <div className="boot">
         <div className="boot-card">
-          <div className="t">无法连接 Hob</div>
-          <div className="d">请检查网络，或确认 Hob 服务已启动。</div>
+          <div className="t">{t("无法连接 Hob")}</div>
+          <div className="d">{t("请检查网络，或确认 Hob 服务已启动。")}</div>
           <button className="hob-btn hob-btn-primary" onClick={() => location.reload()}>
-            重试
+            {t("重试")}
           </button>
           {s.error ? <div className="raw">{rawError(s.error)}</div> : null}
         </div>
@@ -125,13 +126,13 @@ export function App() {
     );
   }
 
-  if (s.phase === "loading") return <div className="boot"><div className="boot-loading"><Avatar sprite="hob" size={92} motion="think" /><span className="activity-shimmer">正在连接 Hob…</span></div></div>;
+  if (s.phase === "loading") return <div className="boot"><div className="boot-loading"><Avatar sprite="hob" size={92} motion="think" /><span className="activity-shimmer">{t("正在连接 Hob…")}</span></div></div>;
 
   const toast = s.notice ? (
     <div className="toast">{s.notice}</div>
   ) : s.updateReady ? (
     <button className="upd" onClick={() => void applyUpdate()}>
-      有新版本，点击更新
+      {t("有新版本，点击更新")}
     </button>
   ) : null;
 
@@ -162,6 +163,8 @@ export function App() {
   }
 
   const fullPage = (top?.kind === "file" || top?.kind === "job") && top.full;
+  // 任务、文件这类宽页打开时右栏自己变宽，把对话区挤窄，不盖在对话上
+  const widePage = top?.kind === "file" || top?.kind === "job" || top?.kind === "jobs";
   // 桌面没打开对话就是首页：右栏收起，点开的任务、文件照样盖上来
   const home = !s.sel && !s.gsel;
 
@@ -205,11 +208,11 @@ export function App() {
         ) : null}
       </div>
       {home ? <Home /> : <Chat />}
-      {/* 右栏宽度只跟根页走（收起、云桌面展开）；上面的页盖上去，宽页直接盖在对话区上，不挤对话区 */}
-      <div className={`panelwrap${fullPage ? " full" : home || s.collapsed ? " off" : s.nowWide ? " wide" : ""}`}>
+      {/* 右栏宽度跟根页走（收起、云桌面展开），宽页（任务、文件）打开时变宽、把对话区挤窄；上面的页一层层盖在右栏里 */}
+      <div className={`panelwrap${fullPage ? " full" : widePage ? " wide page" : home || s.collapsed ? " off" : s.nowWide ? " wide" : ""}`}>
         <Panel page={null} />
         {layers.map(({ page, leaving }) => (
-          <div key={pageKey(page)} className={`panel-layer${page.kind === "file" || page.kind === "job" || page.kind === "jobs" || page.kind === "project" ? " wide" : ""}${page.kind === "job" && page.instant ? " instant" : ""}${leaving ? " leaving" : ""}`}>
+          <div key={pageKey(page)} className={`panel-layer${page.kind === "file" || page.kind === "job" || page.kind === "jobs" ? " wide" : ""}${page.kind === "job" && page.instant ? " instant" : ""}${leaving ? " leaving" : ""}`}>
             {page.kind === "file" ? <FilePreviewOverlay embedded page={page} />
               : page.kind === "job" || page.kind === "jobs" ? <JobOverlay embedded page={page} />
               : <Panel page={page} />}

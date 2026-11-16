@@ -16,9 +16,9 @@ hands longer work to background jobs, and checks with you when your rules say a 
 
 </div>
 
-> The interface is currently Chinese-only. Hob is a single-user app that runs on your own machine or server with your own model API keys.
+> The interface is available in English and Chinese. Hob is a single-user app that runs on your own machine or server with your own model API keys.
 
-![Chatting with the main assistant: job cards and delegation cards, with a job's live transcript in the side panel](docs/screenshots/assistant.png)
+![Chatting with the main assistant: job cards and delegation cards, with a job's live transcript in the side panel](docs/screenshots/en/assistant.png)
 
 ## How it works
 
@@ -32,15 +32,15 @@ hands longer work to background jobs, and checks with you when your rules say a 
 
 Put several assistants in a group and they work as a team: the group owner takes messages that don't name anyone, `@` calls a specific member, and each member can use different models in that group. The owner handles the group's schedules and decides what to do when one fires.
 
-In a group that uses the software-development workflow, a larger request becomes a topic with a project: clarify the request, split it into subtasks for the members, run them in the project's working directory, and check each acceptance criterion at the end. New installations come with an agile team group with product, architecture, development, testing and release members.
+For a larger piece of work, the group owner opens a topic and the team works through it there. When something takes several steps, the assistant keeps a to-do list: each item is just what to do and where it stands, and the assistant updates it as it starts and finishes items, so you can see the progress above the input box and on the job card. Whether to keep a list, and how to split it, is the assistant's judgement. New installations come with an agile team group with product, architecture, development, testing and release members.
 
-![A group topic: the project's stages, its subtasks and the members' job cards](docs/screenshots/chat.png)
+![A group topic: to-do progress and the members' job cards](docs/screenshots/en/chat.png)
 
 ## On a phone
 
 Hob works in a mobile browser and can be added to the home screen as an app. Push notifications tell you when an assistant needs your decision or a job gets stuck or fails (HTTPS required).
 
-![Hob on a phone: the home list, a job card in a conversation and a project view](docs/screenshots/mobile.png)
+![Hob on a phone: the home list, a job card in a conversation and the to-do list](docs/screenshots/en/mobile.png)
 
 ## Also included
 
@@ -72,11 +72,11 @@ docker compose up -d
 
 Open <http://127.0.0.1:30148>, sign in with that password, then:
 
-1. **设置 → 服务商** (Settings → Providers): add a provider and its API key.
-2. **设置 → 模型** (Settings → Models): pick the models for chat and for jobs.
+1. **Settings → Providers**: add a provider and its API key.
+2. **Settings → Models**: pick the models for chat and for jobs.
 3. Send Hob a message. A reply, or a job card for real work, means you are set.
 
-The password is only needed on the first start; it is stored as a hash in the data directory. Change it under **设置 → 通用** (Settings → General).
+The password is only needed on the first start; it is stored as a hash in the data directory. Change it under **Settings → General**.
 
 ## Deploy
 

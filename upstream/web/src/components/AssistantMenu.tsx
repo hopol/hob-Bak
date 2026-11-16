@@ -1,4 +1,5 @@
 // 助手行的右键 / 长按菜单：放在顶部、收起、助手设置。桌面右键，手机长按约 500ms。
+import { t } from "../../../shared/i18n.ts";
 import { useEffect, useRef } from "react";
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import type { AssistantSummary } from "../../../shared/types.ts";
@@ -117,12 +118,12 @@ export function AssistantMenu() {
     <div className="amenu" ref={box} style={{ left, top, transformOrigin: `${menu.x - left}px ${menu.y - top}px` }} onContextMenu={(e) => e.preventDefault()}>
       {a.primary ? null : (
         <button onClick={() => run(() => void patchAssistant(a.id, { pinned: !a.pinned }))}>
-          {a.pinned ? "取消置顶" : "放在顶部"}
+          {a.pinned ? t("取消置顶") : t("放在顶部")}
         </button>
       )}
       {a.primary ? null : (
         <button onClick={() => run(() => void patchAssistant(a.id, { hidden: !a.hidden }))}>
-          {a.hidden ? "放回列表" : "收起这个助手"}
+          {a.hidden ? t("放回列表") : t("收起这个助手")}
         </button>
       )}
       <button
@@ -133,7 +134,7 @@ export function AssistantMenu() {
           })
         }
       >
-        助手设置
+        {t("助手设置")}
       </button>
     </div>
   );

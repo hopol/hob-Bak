@@ -1,6 +1,6 @@
 // Hob 的 service worker（手写，无依赖）：只缓存界面壳和带哈希的静态文件，/api 一律走网络。
 // 升级不打断用户：新版本装好后等页面提示「有新版本 · 刷新」，点了才 skipWaiting。
-const CACHE = "hob-shell-v4"; // 图标或壳变了就加一，旧缓存在 activate 时删掉
+const CACHE = "hob-shell-v5"; // 图标或壳变了就加一，旧缓存在 activate 时删掉
 // 图标和 manifest 不进缓存：系统添加到主屏幕时要拿到的是服务器上最新的那一份
 
 self.addEventListener("install", (event) => {

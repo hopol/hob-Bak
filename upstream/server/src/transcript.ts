@@ -1,6 +1,7 @@
 // 任务过程（transcript）：从任务的 worker.jsonl 推导步骤列表，实时事件和落盘推导共用一套拼装。
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { t } from "../../shared/i18n.ts";
 import { commandSummary } from "../../shared/command.ts";
 import type { JobStep } from "../../shared/types.ts";
 import { showPath } from "./text.ts";
@@ -81,26 +82,20 @@ export function toolArgs(name: string, raw: Record<string, unknown>, cwd = "", r
   }
 }
 
-/** 记忆插件的工具（本地记忆 / Lore）：名字是英文的，显示成动作。 */
-const MEMORY_TOOLS: Record<string, string> = {
-  memory_search: "搜索记忆",
-  memory_read: "读取记忆",
-  memory_write: "保存记忆",
-  memory_forget: "删除记忆",
-  memory_restore: "恢复记忆",
-  memory_status: "查看记忆状态",
-  lore_boot: "读取记忆",
-  lore_get_node: "读取记忆",
-  lore_search: "搜索记忆",
-  lore_create_node: "保存记忆",
-  lore_update_node: "保存记忆",
-  lore_move_node: "整理记忆",
-  lore_delete_node: "删除记忆",
-  lore_list_domains: "查看记忆状态",
-  lore_status: "查看记忆状态",
-};
+function memoryLabel(name: string): string | undefined {
+  switch (name) {
+    case "memory_search": case "lore_search": return t("搜索记忆");
+    case "memory_read": case "lore_boot": case "lore_get_node": return t("读取记忆");
+    case "memory_write": case "lore_create_node": case "lore_update_node": return t("保存记忆");
+    case "memory_forget": case "lore_delete_node": return t("删除记忆");
+    case "memory_restore": return t("恢复记忆");
+    case "memory_status": case "lore_list_domains": case "lore_status": return t("查看记忆状态");
+    case "lore_move_node": return t("整理记忆");
+    default: return /^(memory_|lore_|scratchpad)/.test(name) ? t("翻记忆") : undefined;
+  }
+}
 
-/** MCP 工具（mcp__<服务>__<工具>）显示成「服务名 · 工具名」，不露原始名。 */
+/** MCP 工具（mcp__<服务>__<工具）显示成「服务名 · 工具名」，不露原始名。 */
 function mcpToolDisplay(name: string, mcpServers: Record<string, string> | undefined): string | undefined {
   if (!name.startsWith("mcp__")) return undefined;
   const rest = name.slice("mcp__".length);
@@ -115,67 +110,47 @@ function mcpToolDisplay(name: string, mcpServers: Record<string, string> | undef
 export function toolTitle(name: string, args: Record<string, unknown>, mcpServers?: Record<string, string>): string {
   const path = String(args.path ?? "");
   switch (name) {
-    case "bash":
-      return `运行 ${tick(commandSummary(String(args.command ?? "")))}`;
-    case "read":
-      return `读取 ${path}${readRange(args)}`;
-    case "edit":
-      return `修改 ${path}`;
-    case "write":
-      return `写入 ${path}`;
-    case "grep":
-      return `搜索 ${tick(String(args.pattern ?? ""))}`;
-    case "find":
-      return `查找 ${tick(String(args.pattern ?? ""))}`;
-    case "ls":
-      return `列出 ${path}`;
-    case "report":
-      return "提交结果";
-    case "save_skill":
-      return `保存技能：${oneLine(String(args.title ?? ""), 60)}`;
-    case "ask_user":
-      return `询问用户：${oneLine(String(args.title ?? ""), 60)}`;
-    case "overview":
-      return `查看最近 ${Number(args.sinceHours ?? 24)} 小时的记录`;
-    case "generate_image":
-      return `生成图片：${oneLine(String(args.prompt ?? ""), 60)}`;
-    case "web_search":
-      return `联网搜索：${oneLine(String(args.query ?? ""), 60)}`;
-    case "find_knowledge":
-      return args.query ? `找资料：${oneLine(String(args.query), 60)}` : "找资料";
-    case "search_knowledge":
-      return args.query ? `查知识库：${oneLine(String(args.query), 60)}` : "查知识库";
-    case "web_fetch":
-      return `读取网页：${oneLine(String(args.url ?? ""), 60)}`;
+    case "bash": return `${t("运行")} ${tick(commandSummary(String(args.command ?? "")))}`;
+    case "read": return `${t("读取")} ${path}${readRange(args)}`;
+    case "edit": return `${t("修改")} ${path}`;
+    case "write": return `${t("写入")} ${path}`;
+    case "grep": return `${t("搜索")} ${tick(String(args.pattern ?? ""))}`;
+    case "find": return `${t("查找")} ${tick(String(args.pattern ?? ""))}`;
+    case "ls": return `${t("列出")} ${path}`;
+    case "report": return t("提交结果");
+    case "save_skill": return `${t("保存技能：{title}", { title: oneLine(String(args.title ?? ""), 60) })}`;
+    case "ask_user": return `${t("询问用户：{title}", { title: oneLine(String(args.title ?? ""), 60) })}`;
+    case "overview": return t("查看最近 {hours} 小时的记录", { hours: Number(args.sinceHours ?? 24) });
+    case "generate_image": return t("生成图片：{prompt}", { prompt: oneLine(String(args.prompt ?? ""), 60) });
+    case "web_search": return t("联网搜索：{query}", { query: oneLine(String(args.query ?? ""), 60) });
+    case "find_knowledge": return args.query ? t("找资料：{query}", { query: oneLine(String(args.query), 60) }) : t("找资料");
+    case "search_knowledge": return args.query ? t("查知识库：{query}", { query: oneLine(String(args.query), 60) }) : t("查知识库");
+    case "web_fetch": return t("读取网页：{url}", { url: oneLine(String(args.url ?? ""), 60) });
     case "browser_open": {
       let target = oneLine(String(args.url ?? ""), 60);
       try { target = new URL(target).hostname; } catch { /* 无效地址保留原样 */ }
-      return `浏览器 · 打开 ${target}`;
+      return t("浏览器 · 打开 {target}", { target });
     }
-    case "browser_snapshot": return "浏览器 · 读取页面";
-    case "browser_click": return "浏览器 · 点击";
-    case "browser_type": return "浏览器 · 输入";
-    case "browser_press": return "浏览器 · 按键";
-    case "browser_back": return "浏览器 · 返回";
-    case "browser_screenshot": return "浏览器 · 截图";
-    case "desktop_screenshot": return "桌面 · 截图";
+    case "browser_snapshot": return t("浏览器 · 读取页面");
+    case "browser_click": return t("浏览器 · 点击");
+    case "browser_type": return t("浏览器 · 输入");
+    case "browser_press": return t("浏览器 · 按键");
+    case "browser_back": return t("浏览器 · 返回");
+    case "browser_screenshot": return t("浏览器 · 截图");
+    case "desktop_screenshot": return t("桌面 · 截图");
     case "desktop_action": {
       const names: Record<string, string> = { click: "点击", move: "移动", drag: "拖动", type: "输入", key: "按键", scroll: "滚动", wait: "等待" };
       const first = Array.isArray(args.actions) ? args.actions[0] as { type?: string } | undefined : undefined;
-      return `桌面 · ${names[first?.type ?? ""] ?? "操作"}`;
+      return `${t("桌面 · {action}", { action: names[first?.type ?? ""] ?? "操作" })}`;
     }
-    case "tool_search":
-      return `搜索可用工具：${oneLine(String(args.query ?? ""), 60)}`;
-    case "list_mcp_resources":
-      return "列出 MCP 资源";
-    case "list_mcp_resource_templates":
-      return "列出 MCP 资源模板";
-    case "read_mcp_resource":
-      return `读取 MCP 资源：${oneLine(String(args.uri ?? ""), 90)}`;
+    case "tool_search": return t("搜索可用工具：{query}", { query: oneLine(String(args.query ?? ""), 60) });
+    case "list_mcp_resources": return t("列出 MCP 资源");
+    case "list_mcp_resource_templates": return t("列出 MCP 资源模板");
+    case "read_mcp_resource": return t("读取 MCP 资源：{uri}", { uri: oneLine(String(args.uri ?? ""), 90) });
     default: {
       const mcp = mcpToolDisplay(name, mcpServers);
-      if (mcp) return `调用 ${mcp}`;
-      const label = MEMORY_TOOLS[name];
+      if (mcp) return `${t("调用")} ${mcp}`;
+      const label = memoryLabel(name);
       if (!label) return name;
       const target = String(args.uri ?? args.query ?? "");
       return target ? `${label} ${tick(target)}` : label;
@@ -186,9 +161,9 @@ export function toolTitle(name: string, args: Record<string, unknown>, mcpServer
 function readRange(args: Record<string, unknown>): string {
   const offset = typeof args.offset === "number" ? args.offset : undefined;
   const limit = typeof args.limit === "number" ? args.limit : undefined;
-  if (offset !== undefined && limit !== undefined) return ` · ${offset}–${offset + limit - 1} 行`;
-  if (offset !== undefined) return ` · 第 ${offset} 行起`;
-  if (limit !== undefined) return ` · 前 ${limit} 行`;
+  if (offset !== undefined && limit !== undefined) return ` · ${t("{from}–{to} 行", { from: offset, to: offset + limit - 1 })}`;
+  if (offset !== undefined) return ` · ${t("第 {offset} 行起", { offset })}`;
+  if (limit !== undefined) return ` · ${t("前 {limit} 行", { limit })}`;
   return "";
 }
 
@@ -243,7 +218,7 @@ export function withOutput(
   if (!full) return next;
   if (full.length <= options.limit) return { ...next, output: full };
   const path = options.save?.(step.id, full);
-  const note = `\n\n[输出共 ${full.length} 字，这里截到 ${options.limit} 字。${path ? `完整输出在 ${path}` : ""}]`;
+  const note = `\n\n[${t("输出共 {total} 字，这里截到 {limit} 字。{full}", { total: full.length, limit: options.limit, full: path ? t("完整输出在 {path}", { path }) : "" })}]`;
   return { ...next, output: full.slice(0, options.limit) + note, ...(path ? { outputPath: path } : {}) };
 }
 

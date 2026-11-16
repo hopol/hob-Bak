@@ -1,4 +1,5 @@
 // 真实客户端：REST 路由见 docs/architecture.md，事件契约见 shared/types.ts。
+import { t } from "../../shared/i18n.ts";
 import type {
   AboutInfo,
   AnswerApprovalBody,
@@ -40,7 +41,6 @@ import type {
   ModelThinkingPatch,
   ModelThinkingSaved,
   Profile,
-  Project,
   ProviderImportView,
   ProvidersView,
   PushSubscriptionJson,
@@ -54,12 +54,11 @@ import type {
   UsagePricePatch,
   UsagePriceSaved,
   UsageView,
-  WorkflowId,
 } from "../../shared/types.ts";
 
 import type { KnowledgeCollection, KnowledgeEntry, KnowledgeGroup, KnowledgeOrigin, KnowledgePage, KnowledgeEntryView } from "../../shared/knowledge.ts";
 
-import type { AssistantSkill, SkillImportResult, SkillImportSource, SkillImportView, SkillsView } from "../../shared/skills.ts";
+import type { AssistantSkill, SkillImportResult, SkillImportSource, SkillImportView, SkillsView, VisibleSkill } from "../../shared/skills.ts";
 import type { SearchSettings, SearchView } from "../../shared/search.ts";
 import type { McpImportResult, McpImportView, McpSecretMutation, McpServerPatch, McpServerSave, McpServerView, McpTestResult, McpView } from "../../shared/mcp.ts";
 
@@ -78,7 +77,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(path, { credentials: "same-origin", ...init });
   } catch (e) {
-    throw new ApiError(0, `无法连接 Hob：${e instanceof Error ? e.message : String(e)}`);
+    throw new ApiError(0, t("无法连接 Hob：{error}", { error: e instanceof Error ? e.message : String(e) }));
   }
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
@@ -151,6 +150,8 @@ export interface HobApi {
   skillsImport(source: SkillImportSource): Promise<SkillImportView>;
   importSkills(source: SkillImportSource, ids: string[], overwrite: boolean): Promise<SkillImportResult>;
   deleteSkill(id: string): Promise<void>;
+  rollbackGeneralSkill(name: string): Promise<AssistantSkill>;
+  visibleSkills(assistantId: string, groupId?: string): Promise<VisibleSkill[]>;
   desktop(): Promise<DesktopView>;
   desktopScreens(): Promise<{ screens: DesktopScreen[]; profiles: Record<string, string> }>;
 
@@ -208,23 +209,16 @@ export interface HobApi {
   deleteGroupSkill(groupId: string, name: string): Promise<{ ok: true }>;
   deleteGroupRule(groupId: string, ruleId: string): Promise<void>;
   groups(): Promise<GroupSummary[]>;
-  createGroup(body: { name: string; purpose: string; ownerId: string; members: string[]; workflow?: WorkflowId | null }): Promise<Group>;
-  patchGroup(groupId: string, patch: { rule?: { id?: string; text?: string; mode?: "ask" | "allow" }; name?: string; purpose?: string; instructions?: string; models?: { conversation?: import("../../shared/types.ts").ModelPick | null; work?: import("../../shared/types.ts").ModelPick | null }; ownerId?: string; members?: string[]; workflow?: WorkflowId | null }): Promise<Group>;
+  createGroup(body: { name: string; purpose: string; ownerId: string; members: string[] }): Promise<Group>;
+  patchGroup(groupId: string, patch: { rule?: { id?: string; text?: string; mode?: "ask" | "allow" }; name?: string; purpose?: string; instructions?: string; models?: { conversation?: import("../../shared/types.ts").ModelPick | null; work?: import("../../shared/types.ts").ModelPick | null }; ownerId?: string; members?: string[] }): Promise<Group>;
   patchGroupMemberModels(groupId: string, assistantId: string, patch: { conversation?: import("../../shared/types.ts").ModelPick | null; work?: import("../../shared/types.ts").ModelPick | null }): Promise<Group>;
   archiveGroup(groupId: string): Promise<void>;
   /** 在群里开一个话题 */
   createTopic(groupId: string, body: { title: string }): Promise<Group>;
-  /** 关闭话题：里面没结束的事项按放弃处理 */
+  /** 关闭话题 */
   closeTopic(topicId: string, body?: { note?: string }): Promise<Group>;
   reopenTopic(topicId: string): Promise<Group>;
   groupItems(groupId: string, before?: string): Promise<GroupItemsPage>;
-  /** 群里的事项，新的在前 */
-  projects(groupId: string): Promise<Project[]>;
-  project(groupId: string, projectId: string): Promise<Project>;
-  /** 用户点「开始执行」：和 start_subtasks 走同一段 */
-  startProject(groupId: string, projectId: string): Promise<Project>;
-  /** 用户点了自己那个子任务的「已完成」 */
-  doneSubtask(groupId: string, projectId: string, n: number): Promise<Project>;
   sendGroupMessage(groupId: string, body: SendMessageBody): Promise<{ item: GroupItem }>;
   markGroupRead(groupId: string): Promise<void>;
   stopGroup(groupId: string): Promise<void>;
@@ -262,7 +256,6 @@ const EVENT_TYPES: HobEvent["type"][] = [
   "group-item",
   "group-delta",
   "group-activity",
-  "project",
 ];
 export const realApi: HobApi = {
   knowledge: (query = {}) => {
@@ -311,8 +304,10 @@ export const realApi: HobApi = {
   sedimentJob: (id) => req<{ ok: true }>(`/api/jobs/${encodeURIComponent(id)}/sediment`, { method: "POST" }),
   skills: () => req<SkillsView>("/api/skills"),
   skillsImport: (source) => req<SkillImportView>(`/api/skills/import/${source}`),
-  importSkills: (source, ids, overwrite) => req<SkillImportResult>(`/api/skills/import/${source}`, json({ ids, overwrite })),
+  importSkills: (source: SkillImportSource, ids: string[], overwrite: boolean) => req<SkillImportResult>(`/api/skills/import/${source}`, json({ ids, overwrite })),
   deleteSkill: (id) => req<void>(`/api/skills/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  rollbackGeneralSkill: (name) => req<AssistantSkill>(`/api/skills/${encodeURIComponent(name)}/rollback`, { method: "POST" }),
+  visibleSkills: (assistantId, groupId) => req<VisibleSkill[]>(`/api/skills/visible?assistantId=${encodeURIComponent(assistantId)}${groupId ? `&groupId=${encodeURIComponent(groupId)}` : ""}`),
   desktop: () => req<DesktopView>("/api/desktop"),
   desktopScreens: () => req<{ screens: DesktopScreen[]; profiles: Record<string, string> }>("/api/desktop/screens"),
   saveDesktop: (body) => req<DesktopView>("/api/desktop", json(body, "PUT")),
@@ -408,7 +403,7 @@ export const realApi: HobApi = {
     form.append("file", file);
     const query = target.groupId ? `groupId=${encodeURIComponent(target.groupId)}` : `assistantId=${encodeURIComponent(target.assistantId ?? "")}`;
     const out = await req<{ file: { path: string } }>(`/api/uploads?${query}`, { method: "POST", body: form });
-    if (!out.file?.path) throw new Error("上传响应缺少文件路径");
+    if (!out.file?.path) throw new Error(t("上传响应缺少文件路径"));
     return out.file.path;
   },
   groupProfile: (id) => req<GroupProfile>(`/api/groups/${encodeURIComponent(id)}/profile`),
@@ -429,10 +424,6 @@ export const realApi: HobApi = {
     req<GroupItemsPage>(
       `/api/groups/${encodeURIComponent(groupId)}/items?limit=60${before ? `&before=${encodeURIComponent(before)}` : ""}`,
     ),
-  projects: (groupId) => req<Project[]>(`/api/groups/${encodeURIComponent(groupId)}/projects`),
-  project: (groupId, projectId) => req<Project>(`/api/groups/${encodeURIComponent(groupId)}/projects/${encodeURIComponent(projectId)}`),
-  startProject: (groupId, projectId) => req<Project>(`/api/groups/${encodeURIComponent(groupId)}/projects/${encodeURIComponent(projectId)}/start`, { method: "POST" }),
-  doneSubtask: (groupId, projectId, n) => req<Project>(`/api/groups/${encodeURIComponent(groupId)}/projects/${encodeURIComponent(projectId)}/subtasks/${n}/done`, { method: "POST" }),
   sendGroupMessage: (groupId, body) =>
     req<{ item: GroupItem }>(`/api/groups/${encodeURIComponent(groupId)}/messages`, json(body)),
   markGroupRead: (groupId) => req<void>(`/api/groups/${encodeURIComponent(groupId)}/read`, { method: "POST" }),
@@ -468,7 +459,7 @@ export const realApi: HobApi = {
     for (const type of EVENT_TYPES) es.addEventListener(type, handle as EventListener);
     es.onerror = () => {
       wasDown = true;
-      onDown(es.readyState === EventSource.CLOSED ? "实时连接已断开" : "实时连接中断，正在重连");
+      onDown(es.readyState === EventSource.CLOSED ? t("实时连接已断开") : t("实时连接中断，正在重连"));
     };
     es.onopen = () => {
       if (wasDown) {

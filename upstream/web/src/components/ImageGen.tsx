@@ -5,6 +5,7 @@
 // 图到了，圆点按随机顺序缩没，原图从模糊变清楚。
 import { useEffect, useRef, useState } from "react";
 import { openFilePreview, photoUrl } from "../store.ts";
+import { t } from "../../../shared/i18n.ts";
 
 export type ImageGenStatus = "pending" | "done" | "failed";
 
@@ -26,7 +27,7 @@ export function estimate(seconds: number) {
 }
 
 export function stageText(progress: number) {
-  return progress < 0.2 ? "正在构思" : progress < 0.55 ? "正在勾勒草图" : progress < 0.85 ? "正在上色" : "正在润色细节";
+  return progress < 0.2 ? t("正在构思") : progress < 0.55 ? t("正在勾勒草图") : progress < 0.85 ? t("正在上色") : t("正在润色细节");
 }
 
 /** 两团光：每隔几秒挑一个新的随机位置，慢慢滑过去；新位置离另一团远一点，免得叠成一块 */
@@ -201,8 +202,8 @@ export function ImageGenCard({ status, prompt, size, path, error, startedAt, fre
       </div>
       {status === "failed" && phase === "live" ? (
         <div className="igen-cap" role="status" title={prompt}>
-          <span>没有生成出来</span>
-          <span className="igen-note">{error || "图片生成失败。"}</span>
+          <span>{t("没有生成出来")}</span>
+          <span className="igen-note">{error || t("图片生成失败。")}</span>
         </div>
       ) : null}
     </div>

@@ -18,6 +18,7 @@ import {
   type State,
 } from "./store.ts";
 import { routeHash } from "./route.ts";
+import { isNarrow } from "./theme.ts";
 
 type Layer = "chat" | "topics" | "sheet" | "knowledge" | "settings" | "section" | "sub" | "panelPage" | "viewer";
 
@@ -53,7 +54,7 @@ const CLOSE: Record<Layer, () => void> = {
   settings: closeSettings,
 };
 
-export function startHistory(narrow: () => boolean = () => window.innerWidth < 768) {
+export function startHistory(narrow: () => boolean = isNarrow) {
   // 每条历史记着它那时叠了几层。一次打开好几层（首页直接点进群里的任务）只压一条：
   // iPhone 侧滑时显示的是压历史那一刻的截图，中间几层从没露过面，截图全是首页；退一次就回到原来那页
   const entries = [0];

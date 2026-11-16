@@ -1,7 +1,6 @@
 // 首页各组的数据筛选：手机首页（Mobile）和桌面左栏（Sidebar）共用一份规则，渲染在
 // components/HomeSections.tsx。这里只算数据，不碰界面，好单测。
-import type { Approval, AssistantSummary, GroupSummary, Job, Project, Routine, Subtask } from "../../shared/types.ts";
-import { projectEnded, subtaskStatus } from "../../shared/project.ts";
+import type { Approval, AssistantSummary, GroupSummary, Job, Routine } from "../../shared/types.ts";
 import type { GroupPrefs } from "./store.ts";
 import { topicsOf } from "./topics.ts";
 import { parseCron } from "./util.ts";
@@ -30,6 +29,7 @@ export function conversations(
   assistants: AssistantSummary[],
   groups: GroupSummary[],
   prefs: Record<string, GroupPrefs>,
+  approvals: Record<string, Approval> = {},
 ): ConversationEntry[] {
   const rows: ConversationEntry[] = assistants.map((a) => ({
     kind: "assistant",
@@ -56,7 +56,7 @@ export function conversations(
         ...(latest && latest.id !== g.id ? { lastTopic: latest.name } : {}),
         unread: g.unread + topics.reduce((sum, t) => sum + t.unread, 0),
         busy: [...new Set([...g.busy, ...topics.flatMap((t) => t.busy)])],
-        waiting: topics.some((t) => !t.closedAt && t.project?.waitingUser),
+        waiting: Object.values(approvals).some((a) => a.status === "pending" && (a.groupId === g.id || topics.some((t) => t.id === a.groupId))),
       },
       pinned: Boolean(pref?.pinned),
       hidden: false,
@@ -132,15 +132,8 @@ export interface HomeSource {
   groupPrefs: Record<string, GroupPrefs>;
   jobs: Record<string, Job>;
   approvals: Record<string, Approval>;
-  projects: Record<string, Project[]>;
   routines: Routine[];
   query: string;
-}
-
-/** 等用户动手的一条：「待你执行」的子任务。 */
-export interface MineRow {
-  project: Project;
-  subtask: Subtask;
 }
 
 export interface HomeGroups {
@@ -149,8 +142,6 @@ export interface HomeGroups {
   rows: ConversationEntry[];
   hidden: AssistantSummary[];
   asks: Approval[];
-  /** 用户的子任务轮到了：点了去事项页 */
-  mine: MineRow[];
   live: Job[];
   recent: Job[];
   routines: Routine[];
@@ -166,7 +157,7 @@ export function homeGroups(s: HomeSource, now = Date.now()): HomeGroups {
   const searching = s.query.trim().length > 0;
   const since = new Date(now - RECENT_MS).toISOString();
   const jobs = Object.values(s.jobs);
-  const all = conversations(s.assistants ?? [], s.groups ?? [], s.groupPrefs ?? {});
+  const all = conversations(s.assistants ?? [], s.groups ?? [], s.groupPrefs ?? {}, s.approvals ?? {});
   const pins = pinList(all, s.query);
   const rows = all.filter((row) => !row.pinned && !row.hidden && matches(row, s.query)).sort(byRowOrder);
   const hidden = (s.assistants ?? []).filter((a) => a.hidden && matchesAssistant(a, s.query)).sort((x, y) => (y.last?.at ?? "").localeCompare(x.last?.at ?? ""));
@@ -175,17 +166,6 @@ export function homeGroups(s: HomeSource, now = Date.now()): HomeGroups {
     : Object.values(s.approvals)
         .filter((a) => a.status === "pending")
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const mine: MineRow[] = searching
-    ? []
-    : Object.values(s.projects ?? {})
-        .flatMap((list) => list)
-        .filter((project) => !projectEnded(project) && project.startedAt)
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-        .flatMap((project) =>
-          project.subtasks
-            .filter((subtask) => subtask.assignee === "user" && subtaskStatus(project, subtask, undefined, (other) => (other.jobId ? s.jobs[other.jobId] : undefined)) === "待你执行")
-            .map((subtask) => ({ project, subtask })),
-        );
   const live = searching ? [] : jobs.filter(isLive).sort(byStarted);
   const recent = searching
     ? []
@@ -194,6 +174,6 @@ export function homeGroups(s: HomeSource, now = Date.now()): HomeGroups {
         .sort(byEnded)
         .slice(0, RECENT);
   const routines = searching ? [] : s.routines.filter((r) => r.active).sort((a, b) => minuteOfDay(a) - minuteOfDay(b));
-  const empty = !searching && !asks.length && !mine.length && !live.length && !rows.length && !hidden.length && !recent.length && !routines.length;
-  return { searching, pins, rows, hidden, asks, mine, live, recent, routines, empty };
+  const empty = !searching && !asks.length && !live.length && !rows.length && !hidden.length && !recent.length && !routines.length;
+  return { searching, pins, rows, hidden, asks, live, recent, routines, empty };
 }

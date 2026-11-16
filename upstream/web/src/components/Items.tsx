@@ -1,4 +1,5 @@
 // 对话条目的渲染：气泡、选择题、任务卡、草稿卡、文件卡、灰字提示。
+import { t } from "../../../shared/i18n.ts";
 import { Fragment, useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type { Approval, ApprovalOption, Delegation, Draft, GroupItem, GroupSummary, Item, Job, NoteIcon, SedimentStatus } from "../../../shared/types.ts";
@@ -9,7 +10,8 @@ import { Markdown } from "./Markdown.tsx";
 import { splitTables } from "../markdown.ts";
 import { MediaCard } from "./MediaCard.tsx";
 import { ImageGenCard } from "./ImageGen.tsx";
-import { ProjectCard, TopicCard } from "./Projects.tsx";
+import { Brief } from "./Brief.tsx";
+import { spokenPreview, topicFace } from "../topics.ts";
 import { PhotoStack } from "./PhotoStack.tsx";
 import { ReplyInput } from "./ReplyInput.tsx";
 import { Avatar } from "../sprites.tsx";
@@ -36,6 +38,7 @@ import {
   replyJob,
   retryDelegation,
   select,
+  selectGroup,
   setNotice,
   setQuote,
   setText,
@@ -92,7 +95,7 @@ function Tools({
 
   const copy = async () => {
     if (!(await copyText(text))) {
-      setNotice("复制失败：浏览器不允许写入剪贴板");
+      setNotice(t("复制失败：浏览器不允许写入剪贴板"));
       return;
     }
     if (menu) { close?.(); return; }
@@ -104,23 +107,23 @@ function Tools({
   return (
     <div className={`tools${menu ? " menu" : ""}`}>
       <button
-        title="回复"
-        aria-label="回复"
+        title={t("回复")}
+        aria-label={t("回复")}
         onClick={() => {
           setQuote({ itemId, text: plain(text).slice(0, 60) });
           focusComposer();
           close?.();
         }}
       >
-        <Icon name="reply" size={16} />{menu ? "回复" : null}
+        <Icon name="reply" size={16} />{menu ? t("回复") : null}
       </button>
       <button
         className={copied ? "copied" : ""}
-        title={copied ? "已复制" : "复制"}
-        aria-label={copied ? "已复制" : "复制"}
+        title={copied ? t("已复制") : t("复制")}
+        aria-label={copied ? t("已复制") : t("复制")}
         onClick={() => void copy()}
       >
-        <Icon name={copied ? "check" : "copy"} size={16} />{menu ? "复制" : null}
+        <Icon name={copied ? "check" : "copy"} size={16} />{menu ? t("复制") : null}
       </button>
     </div>
   );
@@ -223,10 +226,11 @@ function JobCard({ job: current, round, fresh, itemId }: { job: Job; round?: num
           <span className="jt">{job.routineId ? <Icon name="clock" size={14} /> : null}{job.title}</span>
           <span className="stline">
             <StatusTag meta={jobStatusMeta(job, s.jobs)} card animated swapped={swapped}>
-              {running ? ` · ${fmtElapsed(job.startedAt ?? job.createdAt)}` : took(job) ? ` · 用时 ${took(job)}` : null}
+              {running ? ` · ${fmtElapsed(job.startedAt ?? job.createdAt)}` : took(job) ? ` · ${t("用时 {duration}", { duration: took(job)! })}` : null}
             </StatusTag>
           </span>
         </div>
+        {/* 任务在跑、有待办时：标题下面一块浅底，写做到哪儿了 */}
         {/* 说明块：状态原因和沉淀状态放进标题下面的浅底块；都没有就不出现 */}
         {reason || sediment ? <div className={`jnote${!reason && sedimentLeave.leaving ? " leaving" : ""}`}>
           {reason ? <div className={`jnote-row${bad ? " bad" : ""}`}><span className="clamp">{reason}</span></div> : null}
@@ -247,7 +251,7 @@ function JobCard({ job: current, round, fresh, itemId }: { job: Job; round?: num
                 }}
               >
                 <Icon name="edit" size={14} />
-                补充要求
+                {t("补充要求")}
               </button>
             ) : null}
             {running ? (
@@ -259,7 +263,7 @@ function JobCard({ job: current, round, fresh, itemId }: { job: Job; round?: num
                 }}
               >
                 <Icon name="stop" size={14} />
-                停止
+                {t("停止")}
               </button>
             ) : null}
           </div>
@@ -267,7 +271,7 @@ function JobCard({ job: current, round, fresh, itemId }: { job: Job; round?: num
         {reply.mounted ? (
           <div className={`replywrap${reply.leaving ? " leaving" : ""}`} onClick={(event) => event.stopPropagation()}>
             <div className="replyclip">
-              <ReplyInput value={text} onChange={setText} sending={sending} placeholder="补充说明或更正方向" onSend={sendReply} onCancel={() => setReplying(false)} autoFocus />
+              <ReplyInput value={text} onChange={setText} sending={sending} placeholder={t("补充说明或更正方向")} onSend={sendReply} onCancel={() => setReplying(false)} autoFocus />
             </div>
           </div>
         ) : null}
@@ -290,25 +294,25 @@ function DraftCard({ draft }: { draft: Draft }) {
           <Avatar sprite={made?.sprite ?? draft.sprite} prop={prop} size={46} />
           <div>
             <div className="dn">{draft.name}</div>
-            <div className="ds">{draft.status === "created" ? "新助手 · 已创建" : "新助手 · 草稿"}</div>
+            <div className="ds">{draft.status === "created" ? t("新助手 · 已创建") : t("新助手 · 草稿")}</div>
           </div>
         </div>
         <div className="kv">
-          <span className="k">职责</span>
+          <span className="k">{t("职责")}</span>
           <span>{draft.dutyLong}</span>
         </div>
         <div className={`expand${created ? "" : " open"}`} inert={Boolean(created)}>
           <div>
             <div className="kv">
-              <span className="k">定时任务</span>
-              <span className={draft.routinesText ? undefined : "none"}>{draft.routinesText || "没有"}</span>
+              <span className="k">{t("定时任务")}</span>
+              <span className={draft.routinesText ? undefined : "none"}>{draft.routinesText || t("没有")}</span>
             </div>
             <div className="kv">
-              <span className="k">执行前确认</span>
-              <span className={draft.askFirst.length ? undefined : "none"}>{draft.askFirst.join(" · ") || "没有"}</span>
+              <span className="k">{t("执行前确认")}</span>
+              <span className={draft.askFirst.length ? undefined : "none"}>{draft.askFirst.join(" · ") || t("没有")}</span>
             </div>
             <div className="kv">
-              <span className="k">补充说明</span>
+              <span className="k">{t("补充说明")}</span>
               {draft.instructions.length ? (
                 // 每条一行：条目自己带句号，再用「；」接起来会变成「。；」
                 <span>
@@ -319,7 +323,7 @@ function DraftCard({ draft }: { draft: Draft }) {
                   ))}
                 </span>
               ) : (
-                <span className="none">没有</span>
+                <span className="none">{t("没有")}</span>
               )}
             </div>
           </div>
@@ -327,21 +331,21 @@ function DraftCard({ draft }: { draft: Draft }) {
         <div className="acts swap" style={{ marginTop: 12 }}>
           <div className={created ? "off" : undefined}>
             <button className="hob-btn hob-btn-primary" onClick={() => void createDraft(draft.id)}>
-              创建
+              {t("创建")}
             </button>
             <button
               className="hob-btn"
               onClick={() => {
-                setText("请修改草稿：");
+                setText(t("请修改草稿："));
                 focusComposer();
               }}
             >
-              修改草稿
+              {t("修改草稿")}
             </button>
           </div>
           <div className={created ? undefined : "off"}>
             <button className="hob-btn hob-btn-primary" disabled={archived} onClick={() => void select(draft.createdAssistantId!)}>
-              {archived ? "已归档" : "已创建 · 查看"}
+              {archived ? t("已归档") : t("已创建 · 查看")}
             </button>
           </div>
         </div>
@@ -351,7 +355,6 @@ function DraftCard({ draft }: { draft: Draft }) {
 
 function DelegationCard({ delegation, fresh }: { delegation: Delegation; fresh: boolean }) {
   const s = useApp();
-  const [expanded, setExpanded] = useState(false);
   const previousStatus = useRef(delegation.status);
   const changed = previousStatus.current !== delegation.status;
   useEffect(() => { previousStatus.current = delegation.status; }, [delegation.status]);
@@ -360,14 +363,20 @@ function DelegationCard({ delegation, fresh }: { delegation: Delegation; fresh: 
   const approvals = Object.values(s.approvals).filter((approval) => approval.status === "pending" && ((delegation.approvalIds ?? []).includes(approval.id) || Boolean(approval.jobId && delegation.jobIds.includes(approval.jobId))));
   return (
     <div className={`hov${fresh ? " enter" : ""}`} id={`delegation-${delegation.id}`}>
-      <div className="b jobcard delegation-card">
+      {/* 整张卡点进接手的助手（和任务卡一样整张可点、悬停整张变底色）；里面的任务行、提问、按钮各管各的 */}
+      <div
+        className="b jobcard delegation-card"
+        role="button"
+        tabIndex={0}
+        title={t("打开「{name}」", { name })}
+        onClick={(event) => { if (!(event.target as HTMLElement).closest("button, input, textarea, a, .b.q")) void jumpToDelegation(delegation.to, delegation.id, true); }}
+        onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); void jumpToDelegation(delegation.to, delegation.id, true); } }}
+      >
         <div className="tt">
           {target ? <span className="jav"><Avatar sprite={target.sprite} prop={target.prop} size={40} /></span> : null}
-          <span className="jt">交给「{name}」</span>
+          <span className="jt">{t("交给「{name}」", { name })}</span>
           <span key={delegation.status} className={changed ? "status-fade" : undefined}><StatusTag meta={DELEGATION_STATUS[delegation.status]} card /></span>
         </div>
-        <button className={`delegation-text${expanded ? " expanded" : ""}`} onClick={() => setExpanded(!expanded)} title={expanded ? "收起" : "查看全文"}>{delegation.text}</button>
-        {delegation.status === "returned" && delegation.reply ? <div className="note">{delegation.reply}</div> : null}
         {delegation.jobIds.map((id) => {
           const job = s.jobs[id];
           // 卡头已经写了总状态，这里每个任务只给图标（悬停看文字），不再重复「待确认」这类字
@@ -380,10 +389,11 @@ function DelegationCard({ delegation, fresh }: { delegation: Delegation; fresh: 
           ) : null;
         })}
         {approvals.map((approval) => <QuestionCard key={approval.id} approval={approval} fresh={false} />)}
-        <div className="delegation-actions">
-          <button onClick={() => void jumpToDelegation(delegation.to, delegation.id, true)}>去「{name}」看看 →</button>
-          {delegation.status === "interrupted" ? <button onClick={() => void retryDelegation(delegation.id)}>重新转交</button> : null}
-        </div>
+        {delegation.status === "interrupted" ? (
+          <div className="delegation-actions">
+            <button onClick={() => void retryDelegation(delegation.id)}>{t("重新转交")}</button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -424,7 +434,7 @@ function MultiQuestionCard({ approval, fresh }: { approval: Approval; fresh: boo
       {approval.detail ? <div className="qs">{approval.detail}</div> : null}
       {approval.status === "expired" ? (
         <div className="opts">
-          <div className={`opt${changed ? " status-fade" : ""}`}>已结束</div>
+          <div className={`opt${changed ? " status-fade" : ""}`}>{t("已结束")}</div>
         </div>
       ) : null}
       {approval.status === "expired" ? null : questions.map((question, index) => {
@@ -462,7 +472,7 @@ function MultiQuestionCard({ approval, fresh }: { approval: Approval; fresh: boo
                     >
                       <span className="key">{option.key}</span>
                       <span className="olabel">{option.label}</span>
-                      {option.key === question.recommended ? <span className="rec">推荐</span> : null}
+                      {option.key === question.recommended ? <span className="rec">{t("推荐")}</span> : null}
                       {sel ? (
                         <span className="ck">
                           <Icon name="check" size={16} />
@@ -475,7 +485,7 @@ function MultiQuestionCard({ approval, fresh }: { approval: Approval; fresh: boo
                   <div className="other">
                     <input
                       value={typed[index]}
-                      placeholder="自己写这个问题的答案"
+                      placeholder={t("自己写这个问题的答案")}
                       autoFocus
                       onChange={(event) => typeAt(index, event.target.value)}
                     />
@@ -485,24 +495,24 @@ function MultiQuestionCard({ approval, fresh }: { approval: Approval; fresh: boo
                     <span className="key">
                       <Icon name="edit" size={12} />
                     </span>
-                    自己写
+                    {t("自己写")}
                   </button>
                 )}
               </div>
             )}
             {missRecommended
-              ? <div className="qs qrec">推荐的是 {question.recommended}：{question.options.find((option) => option.key === question.recommended)?.label}</div>
+              ? <div className="qs qrec">{t("推荐的是 {key}：{label}", { key: question.recommended!, label: question.options.find((option) => option.key === question.recommended)?.label ?? "" })}</div>
               : null}
           </div>
         );
       })}
       {done ? (
-        approval.answerText ? <div className="qs qnote">补充：{approval.answerText}</div> : null
+        approval.answerText ? <div className="qs qnote">{t("补充：{text}", { text: approval.answerText })}</div> : null
       ) : null}
       {done || approval.status === "expired" ? null : (
         <div className="qfoot qacts">
           <button className="hob-btn hob-btn-primary" disabled={!filled} onClick={submit}>
-            提交
+            {t("提交")}
           </button>
         </div>
       )}
@@ -534,7 +544,7 @@ function SingleQuestionCard({ approval, fresh }: { approval: Approval; fresh: bo
       {approval.detail ? <div className="qs">{approval.detail}</div> : null}
       <div className="opts">
         {approval.status === "expired" ? (
-          <div className={`opt${changed ? " status-fade" : ""}`}>已结束</div>
+          <div className={`opt${changed ? " status-fade" : ""}`}>{t("已结束")}</div>
         ) : reply ? (
           <div className="opt chosen">
             <span className="key">
@@ -569,7 +579,7 @@ function SingleQuestionCard({ approval, fresh }: { approval: Approval; fresh: bo
                   >
                     <span className="key">{o.key}</span>
                     <span className="olabel">{o.label}</span>
-                    {o.key === approval.recommended ? <span className="rec">推荐</span> : null}
+                    {o.key === approval.recommended ? <span className="rec">{t("推荐")}</span> : null}
                     {sel && animated ? (
                       <span className="ck">
                         <Icon name="check" size={16} />
@@ -585,14 +595,14 @@ function SingleQuestionCard({ approval, fresh }: { approval: Approval; fresh: bo
           <div className="other">
             <input
               value={text}
-              placeholder="其他想法…"
+              placeholder={t("其他想法…")}
               onChange={(event) => setText(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.nativeEvent.isComposing) send();
               }}
             />
             {typed ? (
-              <button className="hob-icon-btn other-send" title="发送" onClick={send}>
+              <button className="hob-icon-btn other-send" title={t("发送")} onClick={send}>
                 <Icon name="send" size={16} />
               </button>
             ) : null}
@@ -675,6 +685,36 @@ function useFit<T extends HTMLElement>(key: string | undefined) {
   return ref;
 }
 
+/** 综合时间线里的话题卡：内容从群列表里这条话题的摘要实时取，话题有变化卡片原地更新。 */
+export function TopicCard({ topicId, fresh, itemId }: { topicId: string; fresh: boolean; itemId: string }) {
+  const s = useApp();
+  const g = s.groups.find((item) => item.id === topicId);
+  if (!g) {
+    return (
+      <div className={`hov${fresh ? " enter" : ""}`} data-item-id={itemId}>
+        <div className="b topiccard gone">{t("话题已不在")}</div>
+      </div>
+    );
+  }
+  const face = s.assistants.find((a) => a.id === topicFace(g));
+  const open = () => void selectGroup(g.id);
+  return (
+    <div className={`hov${fresh ? " enter" : ""}`} data-item-id={itemId}>
+      <div className="b topiccard" role="button" tabIndex={0} onClick={open} onKeyDown={(event) => { if (event.key === "Enter") open(); }}>
+        <div className="tt">
+          {face ? <span className="jav"><Avatar sprite={face.sprite} prop={face.prop} size={40} /></span> : null}
+          <span className="jt">{g.name}</span>
+          {g.closedAt ? <StatusTag meta={{ text: t("已关闭"), icon: "archive", color: "", spin: false }} card /> : <button className="topic-enter" onClick={(event) => { event.stopPropagation(); open(); }}>{t("进入话题")} <Icon name="chev" size={13} /></button>}
+        </div>
+        {/* 关了的：右上角已经标了「已关闭」，这里只写关闭时留的话 */}
+        {g.closedAt
+          ? g.closeNote ? <div className="topic-line"><span>{g.closeNote}</span></div> : null
+          : <div className="topic-line"><span>{spokenPreview(g, s.assistants)}</span></div>}
+      </div>
+    </div>
+  );
+}
+
 function ItemView({
   item,
   inlineDraft,
@@ -693,7 +733,7 @@ function ItemView({
   /** 群里的引用：被引用的那句是谁说的 */
   quoteWho?: (itemId: string) => string | undefined;
   /** 从综合转进话题的用户消息：气泡上方加一行小字 */
-  forwarded?: boolean;
+  forwarded?: GroupItem["forwardedFrom"];
 }) {
   const s = useApp();
   const enter = fresh ? " enter" : "";
@@ -730,15 +770,15 @@ function ItemView({
         {swipeIcon}
         {/* iMessage：没发出去时气泡左边一个红色感叹号，点了重试；有附件在传时那里转圈 */}
         {pend?.status === "failed" ? (
-          <button className="send-failed" title="重试" aria-label="未送达，重试" onClick={() => retryPending(pend)}>!</button>
+          <button className="send-failed" title={t("重试")} aria-label={t("未送达，重试")} onClick={() => retryPending(pend)}>!</button>
         ) : pend && item.files?.length ? (
-          <span className="send-progress" aria-label="正在发送"><Icon name="spin" size={16} w={2.2} className="spin" /></span>
+          <span className="send-progress" aria-label={t("正在发送")}><Icon name="spin" size={16} w={2.2} className="spin" /></span>
         ) : null}
         <div className={`hov right msg${fresh ? " enter-right" : ""}${pend ? " pending" : ""}`}>
-        {forwarded ? <div className="forwarded-line">从综合转来</div> : null}
+        {forwarded ? <div className="forwarded-line">{forwarded && "assistantId" in forwarded ? t("从和 Hob 的对话转来") : t("从综合转来")}</div> : null}
         {album ? (
           <div className={`u-album${albumOpen ? " open" : ""}`} ref={hasBubble ? undefined : bubble} style={hasBubble ? undefined : swipeStyle}>
-            <button className="album-pill" onClick={() => setAlbumOpen(!albumOpen)}>{albumOpen ? "收起" : `展开 ${photos.length}`}</button>
+            <button className="album-pill" onClick={() => setAlbumOpen(!albumOpen)}>{albumOpen ? t("收起") : t("展开 {n}", { n: photos.length })}</button>
             {albumOpen ? (
               <div className="album-list">{photos.map((f) => photo(f, "u-photo album-item"))}</div>
             ) : (
@@ -753,18 +793,18 @@ function ItemView({
         ) : null}
         {hasBubble ? (
         <div className="u" ref={bubble} style={swipeStyle}>
-          {item.from ? <button className="forward-label" onClick={() => void (item.from!.assistantId === "hob" ? jumpToDelegation(item.from!.assistantId, item.from!.delegationId, false) : jumpToHandback(item.from!.assistantId, item.from!.delegationId, false))}>{(() => { const sender = s.assistants.find((a) => a.id === item.from!.assistantId); return sender ? <Avatar sprite={sender.sprite} prop={sender.prop} size={16} /> : null; })()}转自 {item.from.assistantId === "hob" ? item.from.name : `「${item.from.name}」`}</button> : null}
-          {item.quote ? <button className={`quote${quoteWho?.(item.quote.itemId) ? " named" : ""}`} onClick={(event) => jumpToQuote(event, item.quote!.itemId)}>{quoteWho?.(item.quote.itemId) ? `${quoteWho(item.quote.itemId)}：` : ""}{item.quote.text}</button> : null}
+          {item.from ? <button className="forward-label" onClick={() => void (item.from!.assistantId === "hob" ? jumpToDelegation(item.from!.assistantId, item.from!.delegationId, false) : jumpToHandback(item.from!.assistantId, item.from!.delegationId, false))}>{(() => { const sender = s.assistants.find((a) => a.id === item.from!.assistantId); return sender ? <Avatar sprite={sender.sprite} prop={sender.prop} size={16} /> : null; })()}{item.from.assistantId === "hob" ? t("转自 {name}", { name: item.from.name }) : t("转自「{name}」", { name: item.from.name })}</button> : null}
+          {item.quote ? <button className={`quote${quoteWho?.(item.quote.itemId) ? " named" : ""}`} onClick={(event) => jumpToQuote(event, item.quote!.itemId)}>{quoteWho?.(item.quote.itemId) ? t("{name}：", { name: quoteWho(item.quote.itemId)! }) : ""}{item.quote.text}</button> : null}
           {/* 其他附件是气泡里的一行文件卡 */}
-          {item.text ? <span className="u-text">{item.text}</span> : null}
+          {item.text ? <span className={`u-text${item.from ? " u-brief" : ""}`}>{item.from ? <Brief text={item.text} /> : item.text}</span> : null}
           {others.map((f) => (f.startsWith("pending/") ? <Fragment key={f}>{fileRow(f)}</Fragment> : <MediaCard key={f} path={f} name={attachmentName(f)} fallback={fileRow(f)} />))}
         </div>
         ) : null}
         {pend?.status === "failed" ? (
           <div className="send-status">
-            未送达
-            <button onClick={() => retryPending(pend)}>重试</button>
-            <button onClick={() => discardPending(pend)}>删除</button>
+            {t("未送达")}
+            <button onClick={() => retryPending(pend)}>{t("重试")}</button>
+            <button onClick={() => discardPending(pend)}>{t("删除")}</button>
           </div>
         ) : null}
         {pend ? null : <Tools text={item.text} itemId={item.id} />}
@@ -795,7 +835,7 @@ function ItemView({
               </div>
             ) : (
               <div key={i} className={`b${inlineDraft && i === parts.length - 1 ? " wide" : ""}`} ref={i === 0 ? bubble : undefined} style={i === 0 ? swipeStyle : undefined}>
-                {i === 0 && item.quote ? <button className={`quote${quoteWho?.(item.quote.itemId) ? " named" : ""}`} onClick={(event) => jumpToQuote(event, item.quote!.itemId)}>{quoteWho?.(item.quote.itemId) ? `${quoteWho(item.quote.itemId)}：` : ""}{item.quote.text}</button> : null}
+                {i === 0 && item.quote ? <button className={`quote${quoteWho?.(item.quote.itemId) ? " named" : ""}`} onClick={(event) => jumpToQuote(event, item.quote!.itemId)}>{quoteWho?.(item.quote.itemId) ? t("{name}：", { name: quoteWho(item.quote.itemId)! }) : ""}{item.quote.text}</button> : null}
                 <Markdown text={part.md} streaming={item.streaming && i === parts.length - 1} mentions={mentions} />
                 {inlineDraft && i === parts.length - 1 ? <DraftCard draft={inlineDraft} /> : null}
               </div>
@@ -810,9 +850,21 @@ function ItemView({
   }
 
   if (item.kind === "note") {
+    // 定时任务到点：只写一行。老记录里带着检查到的原始内容，那是给群主的材料，不显示
     if (item.icon === "routine" && item.text.includes("到点了")) {
-      const lines = item.text.split("\n");
-      return <div className={`sys routine-note${fresh ? " enter-fade" : ""}`}><Icon name="clock" size={14} />{lines.length > 6 ? <details><summary>{lines.slice(0, 6).join("\n")}<span>展开</span></summary>{lines.slice(6).join("\n")}</details> : <span>{item.text}</span>}</div>;
+      return <div className={`sys routine-note${fresh ? " enter-fade" : ""}`}><Icon name="clock" size={14} /><span>{item.text.replace(/，检查到：[\s\S]*$/u, "")}</span></div>;
+    }
+    // 带原因的（工具没办成）：点开看工具报错的原文
+    if (item.detail) {
+      return (
+        <div className={`sys sys-why${fresh ? " enter-fade" : ""}`}>
+          {item.icon !== "split" ? <Icon name={NOTE_ICON[item.icon]} size={14} /> : null}
+          <details>
+            <summary>{item.text}</summary>
+            <div className="why">{item.detail}</div>
+          </details>
+        </div>
+      );
     }
     return (
       <div className={`sys${fresh ? " enter-fade" : ""}`} id={item.handbackId ? `handback-${item.handbackId}` : undefined}>
@@ -823,6 +875,9 @@ function ItemView({
       </div>
     );
   }
+
+  // 老数据里收起的那几条待办：对话里只放用户需要看的，这些不再显示
+  if (item.kind === "todos") return null;
 
   if (item.kind === "question") {
     const ap = s.approvals[item.approvalId];
@@ -848,11 +903,6 @@ function ItemView({
     return delegation ? <DelegationCard delegation={delegation} fresh={fresh} /> : null;
   }
 
-  if (item.kind === "project") {
-    const project = Object.values(s.projects).flat().find((entry) => entry.id === item.projectId);
-    return project ? <ProjectCard project={project} fresh={fresh} itemId={item.id} /> : null;
-  }
-
   if (item.kind === "topic") return <TopicCard topicId={item.topicId} fresh={fresh} itemId={item.id} />;
 
   if (item.kind === "image") return <ImageGenCard {...item} fresh={fresh} itemId={item.id} />;
@@ -861,13 +911,13 @@ function ItemView({
   // 老数据里可能有一条没存 path 的文件条目：只显示名字，不进预览，避免 path.lastIndexOf 抛异常把整页带白。
   if (!item.path) {
     return (
-      <div className={`att filecard${fresh ? " enter" : ""}`} data-item-id={item.id} title="文件路径缺失，无法预览">
+      <div className={`att filecard${fresh ? " enter" : ""}`} data-item-id={item.id} title={t("文件路径缺失，无法预览")}>
         <span className="ico">
           <Icon name="file" size={18} />
         </span>
         <span>
           <span className="n" style={{ display: "block" }}>
-            {item.name || "文件"}
+            {item.name || t("文件")}
           </span>
           {item.meta ? <span className="m">{item.meta}</span> : null}
         </span>
@@ -976,8 +1026,23 @@ function useItemGestures() {
   return { toolsFor };
 }
 
-export function ItemList({ items }: { items: Item[] }) {
+/**
+ * 对话里只放用户要看的：记忆写入、技能沉淀和改版这类记录只给模型和设置页（老数据里还有，这里滤掉）；
+ * 同一个任务续做了几轮，只留最新一轮那张卡，前几轮在任务详情里切换着看。
+ */
+export function visibleItems<T extends Item>(items: T[]): T[] {
+  const latest = new Map<string, number>();
+  for (const item of items) if (item.kind === "job") latest.set(item.jobId, Math.max(latest.get(item.jobId) ?? 0, item.round ?? 0));
+  return items.filter((item) => {
+    if (item.kind === "note") return item.icon !== "memory" && !(item.icon === "skill" && item.path);
+    if (item.kind === "job") return (item.round ?? 0) === latest.get(item.jobId);
+    return true;
+  });
+}
+
+export function ItemList({ items: all }: { items: Item[] }) {
   const s = useApp();
+  const items = visibleItems(all);
   const { toolsFor } = useItemGestures();
   const rows: ReactNode[] = [];
   if (items.length && !isToday(items[0].at) && items[0].kind !== "note") {
@@ -1008,7 +1073,7 @@ export function ItemList({ items }: { items: Item[] }) {
   for (const page of visibleLiveCards(Object.values(s.livePages), s.sel)) {
     rows.push(<button key={page.callId} className={`att filecard${page.state === "failed" ? " bad" : ""}`} onClick={() => openLivePreview(page.callId)}>
       <span className="ico"><Icon name={page.state === "writing" ? "spin" : "close"} className={page.state === "writing" ? "spin" : ""} size={18} /></span>
-      <span><span className="n" style={{ display: "block" }}>{page.title || "正在写页面…"}</span><span className="m">{page.state === "failed" ? `生成失败：${page.error}` : "生成中"}</span></span>
+      <span><span className="n" style={{ display: "block" }}>{page.title || t("正在写页面…")}</span><span className="m">{page.state === "failed" ? t("生成失败：{error}", { error: page.error ?? "" }) : t("生成中")}</span></span>
     </button>);
   }
   return <>{rows}</>;
@@ -1018,13 +1083,14 @@ export function ItemList({ items }: { items: Item[] }) {
  * 群里的时间线：同一个成员连着说的合成一段（左边头像，上面一行名字、群主标签和时间，内容缩进）。
  * 你的消息照旧在右边，系统条目居中。
  */
-export function GroupItemList({ g, items }: { g: GroupSummary; items: GroupItem[] }) {
+export function GroupItemList({ g, items: all }: { g: GroupSummary; items: GroupItem[] }) {
   const s = useApp();
+  const items = visibleItems(all);
   const { toolsFor } = useItemGestures();
   const members = membersOf(g, s.assistants);
   const names = members.map((m) => m.name);
   const nameOf = (speaker: string | "user") =>
-    speaker === "user" ? "你" : (s.assistants.find((a) => a.id === speaker)?.name ?? speaker);
+    speaker === "user" ? t("你") : (s.assistants.find((a) => a.id === speaker)?.name ?? speaker);
   /** 引用的是谁说的：气泡上写成「名字：内容」 */
   const quoteWho = (itemId: string) => {
     const quoted = items.find((entry) => entry.id === itemId);
@@ -1043,7 +1109,7 @@ export function GroupItemList({ g, items }: { g: GroupSummary; items: GroupItem[
       rows.push(
         <Fragment key={item.id}>
           {divider}
-          <ItemView item={item} fresh={fresh} tools={toolsFor(item)} mentions={names} quoteWho={quoteWho} forwarded={Boolean(item.forwardedFrom)} />
+          <ItemView item={item} fresh={fresh} tools={toolsFor(item)} mentions={names} quoteWho={quoteWho} forwarded={item.forwardedFrom} />
         </Fragment>,
       );
       continue;
@@ -1060,7 +1126,7 @@ export function GroupItemList({ g, items }: { g: GroupSummary; items: GroupItem[
           <div className="gblock-main">
             <div className="gblock-name">
               {speaker?.name ?? item.speaker}
-              {item.speaker === g.ownerId ? <span className="owner">群主</span> : null}
+              {item.speaker === g.ownerId ? <span className="owner">{t("群主")}</span> : null}
               <small>{fmtList(item.at)}</small>
             </div>
             {run.map((entry) => (

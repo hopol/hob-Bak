@@ -273,12 +273,15 @@ describe("群和助手混在一起", () => {
     expect(result.rows.map((row) => row.id)).toEqual(["g-home"]);
   });
 
-  it("有开着的话题在等你回答，群那行记成等你；关了的话题不算", () => {
-    const project = { id: "p-1", title: "筛选", stage: "clarify" as const, done: 0, total: 0, waitingUser: true };
-    const rows = (topics: GroupSummary[]) => conversations([], [group("g-team"), ...topics], {});
+  it("群里有没回答的提问卡，群那行记成等你；别的群的卡片不算", () => {
+    const ask = (groupId: string): Approval => ({ id: `ap-${groupId}`, assistantId: "hob", groupId, title: "怎么选", options: [{ key: "A", label: "A" }], status: "pending", source: "router", createdAt: minsAgo(2) });
+    const rows = (approvals: Record<string, Approval>) => conversations([], [group("g-team"), group("t-ask", { parentId: "g-team" })], {}, approvals);
     const waiting = (list: ReturnType<typeof rows>) => (list[0]?.kind === "group" ? list[0].g.waiting : null);
-    expect(waiting(rows([group("t-ask", { parentId: "g-team", project })]))).toBe(true);
-    expect(waiting(rows([group("t-closed", { parentId: "g-team", project, closedAt: minsAgo(1) })]))).toBe(false);
+    expect(waiting(rows({ ask: ask("t-ask") }))).toBe(true);
+    expect(waiting(rows({ ask: ask("g-team") }))).toBe(true);
+    expect(waiting(rows({ ask: ask("g-other") }))).toBe(false);
+    // 已经答了的卡片不算
+    expect(waiting(rows({ ask: { ...ask("t-ask"), status: "answered" } }))).toBe(false);
   });
 
   it("话题不进首页，群的未读、忙和最近一条把各话题的算进来", () => {

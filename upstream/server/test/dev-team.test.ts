@@ -63,7 +63,6 @@ describe("自带的敏捷团队", () => {
         purpose: DEV_TEAM_GROUP.purpose,
         ownerId: "po",
         members: DEV_TEAM_ROLES.map((role) => role.id),
-        workflow: "software",
       });
       // 建群那条系统 note 照常写
       expect(hob.runtime.groups.items(group.id).items[0]).toMatchObject({ kind: "note", text: "建了群「敏捷团队」" });
@@ -122,6 +121,7 @@ describe("自带的敏捷团队", () => {
       writeFileSync(join(home, "assistants", "po", "profile.json"), JSON.stringify(legacy));
       const config: HobConfig = { passwordHash: "x", cookieSecret: "y", host: "127.0.0.1", port: 0 };
       const runtime = createRuntime({ home, config, pi: new PiHost({ engineDir: join(home, "system", "engine") }) });
+      runtime.initializeLocale("zh-CN");
       try {
         expect(runtime.store.assistant("po")).toEqual(legacy);
         expect(hiddenAssistants(runtime.store)).toHaveLength(DEV_TEAM_ROLES.length);

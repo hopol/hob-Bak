@@ -1,5 +1,6 @@
 // 看大图：铺满屏幕。手机双指缩放、单指拖动、双击放大、单击关闭；
 // 电脑滚轮上下看、触控板捏合或 Ctrl/⌘+滚轮缩放、拖动、双击放大、点空白处关闭；底部按钮和 + - 0 键缩放。
+import { t } from "../../../shared/i18n.ts";
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from "react";
 import { Icon } from "../icons.tsx";
 
@@ -244,19 +245,19 @@ export function ImageViewer({ src, thumb, download, name, onClose }: { src: stri
       {!img && !failed ? (
         <div className="iv-wait">
           {thumb ? <img src={thumb} alt="" aria-hidden="true" draggable={false} /> : null}
-          <span className="fp-img-spin" aria-label="图片加载中"><Icon name="spin" size={18} w={2.2} className="spin" /></span>
+          <span className="fp-img-spin" aria-label={t("图片加载中")}><Icon name="spin" size={18} w={2.2} className="spin" /></span>
         </div>
       ) : null}
-      {failed ? <div className="iv-wait"><span className="iv-error">图片加载失败</span></div> : null}
+      {failed ? <div className="iv-wait"><span className="iv-error">{t("图片加载失败")}</span></div> : null}
       <div className="iv-top" onPointerDown={stop} onPointerUp={stop} onDoubleClick={stop}>
-        {download ? <a title="下载" aria-label="下载" href={download} download={name}><Icon name="dl" size={19} /></a> : null}
-        <button title="关闭" aria-label="关闭" onClick={onClose}><Icon name="close" size={20} /></button>
+        {download ? <a title={t("下载")} aria-label={t("下载")} href={download} download={name}><Icon name="dl" size={19} /></a> : null}
+        <button title={t("关闭")} aria-label={t("关闭")} onClick={onClose}><Icon name="close" size={20} /></button>
       </div>
       {img && view ? (
         <div className="iv-bar" onPointerDown={stop} onPointerUp={stop} onDoubleClick={stop}>
-          <button title="缩小" aria-label="缩小" disabled={view.s <= fit * 1.001} onClick={() => zoomBy(1 / 1.5)}><Icon name="minus" size={18} /></button>
-          <button className="iv-pct" title="铺满屏幕" onClick={() => reset(true)}>{percent}%</button>
-          <button title="放大" aria-label="放大" disabled={view.s >= maxScale(fit) * 0.999} onClick={() => zoomBy(1.5)}><Icon name="plus" size={18} /></button>
+          <button title={t("缩小")} aria-label={t("缩小")} disabled={view.s <= fit * 1.001} onClick={() => zoomBy(1 / 1.5)}><Icon name="minus" size={18} /></button>
+          <button className="iv-pct" title={t("铺满屏幕")} onClick={() => reset(true)}>{percent}%</button>
+          <button title={t("放大")} aria-label={t("放大")} disabled={view.s >= maxScale(fit) * 0.999} onClick={() => zoomBy(1.5)}><Icon name="plus" size={18} /></button>
         </div>
       ) : null}
     </div>

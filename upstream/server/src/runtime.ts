@@ -1,3 +1,5 @@
+import { setLocale, type Locale } from "../../shared/i18n.ts";
+import "./i18n/en/index.ts";
 import type { Bus } from "./bus.ts";
 import { DesktopService } from "./desktop.ts";
 import { KnowledgeStore } from "./knowledge.ts";
@@ -10,7 +12,6 @@ import type { HobConfig } from "./config.ts";
 import { memoryDir } from "./config.ts";
 import { ModelCatalog } from "./models.ts";
 import type { PiHost } from "./pi.ts";
-import type { ProjectManager } from "./projects.ts";
 import type { ProviderService } from "./providers.ts";
 import type { RouterManager } from "./router.ts";
 import type { JobManager } from "./jobs.ts";
@@ -21,10 +22,10 @@ import type { Store } from "./store.ts";
 import type { PushSender, PushService } from "./push.ts";
 import type { UsageService } from "./usage.ts";
 import { Bus as BusImpl } from "./bus.ts";
-import { seedDevTeam } from "./dev-team.ts";
+import { seedDevTeam, migrateProductOwnerDuty } from "./dev-team.ts";
+import { pruneStaleTodos } from "./todos.ts";
 import { GroupManager as GroupManagerImpl } from "./groups.ts";
 import { JobManager as JobManagerImpl } from "./jobs.ts";
-import { ProjectManager as ProjectManagerImpl } from "./projects.ts";
 import { PushService as PushServiceImpl } from "./push.ts";
 import { ProviderService as ProviderServiceImpl } from "./providers.ts";
 import { RouterManager as RouterManagerImpl } from "./router.ts";
@@ -55,11 +56,11 @@ export interface HobRuntime {
   providers: ProviderService;
   /** 引擎注册表里现在能用的模型（设置页、派任务时看） */
   models: ModelCatalog;
+  /** Create language-dependent defaults when the interface language is first selected. */
+  initializeLocale: (locale: Locale) => void;
   router: RouterManager;
   /** 群：时间线、成员会话、轮到谁 */
   groups: GroupManager;
-  /** 群里的事项：原始需求、需求说明、子任务、验收 */
-  projects: ProjectManager;
   jobs: JobManager;
   delegations: DelegationManager;
   routines: RoutineScheduler;
@@ -81,6 +82,15 @@ export interface CreateRuntimeOptions {
   fetchImpl?: typeof fetch;
 }
 
+/**
+ * 启动时把没人管的待办收起：超过一天没更新、这个会话里也没有在跑的任务。
+ * 打不开的会话（比如还没配模型）留着，下一轮开始前再收。
+ */
+async function pruneTodosAtStartup(runtime: HobRuntime): Promise<void> {
+  for (const assistant of runtime.store.assistants()) await pruneStaleTodos(runtime, assistant.id);
+  for (const group of runtime.store.groups()) await pruneStaleTodos(runtime, group.ownerId, group.id);
+}
+
 /** 建出全部服务（不包含 HTTP 和定时器启动），测试和 startHob 共用。 */
 export function createRuntime(options: CreateRuntimeOptions): HobRuntime {
   // 本地记忆插件在模块加载时就把记忆目录定下来：直接覆盖（启动入口已经指过一次，测试单独建运行时也要对）
@@ -91,6 +101,7 @@ export function createRuntime(options: CreateRuntimeOptions): HobRuntime {
   store.ensurePrimary();
   store.migrateMemories();
   store.migrateAssistantDuties();
+  migrateProductOwnerDuty(store);
   const bus = new BusImpl();
   const settings = new SettingsStoreImpl(options.home, {
     ...(options.legacyModels ? { legacyModels: options.legacyModels } : {}),
@@ -123,9 +134,14 @@ export function createRuntime(options: CreateRuntimeOptions): HobRuntime {
   runtime.desktopPublic = new DesktopPublicLock();
   runtime.router = new RouterManagerImpl(runtime);
   runtime.groups = new GroupManagerImpl(runtime);
-  runtime.projects = new ProjectManagerImpl(runtime);
-  // 第一次启动带上敏捷团队（5 个收起的助手和一个群）；标记在 system/seeded.json，之后不再建
-  seedDevTeam(runtime.store, (input) => runtime.groups.create(input));
+  void pruneTodosAtStartup(runtime).catch((error) => console.error("启动时收起待办失败：", error));
+  runtime.initializeLocale = (locale) => {
+    runtime.store.initializeDefaults(locale);
+    seedDevTeam(runtime.store, (input) => runtime.groups.create(input), locale);
+  };
+  // 单用户：服务端给用户看的文字（接口错误、对话里的提示行、推送）跟着设置里的界面语言
+  setLocale(settings.settings.general.locale ?? "zh-CN");
+  if (settings.settings.general.locale) runtime.initializeLocale(settings.settings.general.locale);
   runtime.jobs = new JobManagerImpl(runtime);
   runtime.delegations = new DelegationManager(runtime);
   runtime.routines = new RoutineSchedulerImpl(runtime);

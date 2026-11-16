@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMock } from "../src/mock.ts";
-import { followingModel, routineSkills, routineSummary, sidebarInfoValues } from "../src/sidebar-data.ts";
+import { followingModel, routineSkillOptions, routineSkills, routineSummary, sidebarInfoValues } from "../src/sidebar-data.ts";
 import type { AssistantSkill } from "../../shared/skills.ts";
 
 describe("群资源", () => {
@@ -39,6 +39,21 @@ describe("群资源", () => {
     const group = [skill("team")];
     expect(routineSkills(group, [skill("first")]).map((item) => [item.skill.name, item.group])).toEqual([["team", true], ["first", false]]);
     expect(routineSkills(group, [skill("second")]).map((item) => [item.skill.name, item.group])).toEqual([["team", true], ["second", false]]);
+  });
+
+  it("定时任务的技能下拉：看得到的都列上，本群、通用各自标清，停用的不列", () => {
+    const skill = (name: string, scope: "group" | "assistant" | "general", enabled = true) => ({ name, title: `标题-${name}`, description: "怎么做", path: `/x/${name}/SKILL.md`, dir: `/x/${name}`, scope, editable: scope !== "general", enabled });
+    const options = routineSkillOptions([
+      skill("team", "group"),
+      skill("mine", "assistant"),
+      skill("off", "assistant", false),
+      skill("shared", "general"),
+    ]);
+    expect(options).toEqual([
+      { value: "team", label: "标题-team（本群）" },
+      { value: "mine", label: "标题-mine" },
+      { value: "shared", label: "标题-shared（通用）" },
+    ]);
   });
 
   it("群定时不允许更换执行成员，由群主处理", async () => {

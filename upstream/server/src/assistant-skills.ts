@@ -1,6 +1,7 @@
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { loadSkillsFromDir, parseFrontmatter, type Skill } from "@earendil-works/pi-coding-agent";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { t } from "../../shared/i18n.ts";
 import type { AssistantSkill } from "../../shared/skills.ts";
 import type { Group } from "../../shared/types.ts";
 
@@ -30,6 +31,34 @@ function checkedDir(home: string, owner: "assistants" | "groups", assistantId: s
 function validName(name: string): void {
   if (!/^[a-z0-9][a-z0-9-]{1,47}$/.test(name)) throw new Error("技能名称无效");
 }
+/** 已经是技能的名字（从别处导入的）：只要求能当目录名、不越出技能目录。 */
+export function isSkillName(name: unknown): name is string {
+  return typeof name === "string" && !!name && name !== "." && name !== ".." && !name.startsWith(".") && !/[\/\\\0]/.test(name);
+}
+function pathName(name: string): void {
+  if (!isSkillName(name)) throw new Error("技能名称无效");
+}
+
+/**
+ * 正在沉淀的技能目录（目录 → 正在沉淀的助手或群的名字）。
+ * 沉淀从拍底稿到对账或恢复结束独占这个目录：这期间别的入口改了，底稿就对不上了。
+ */
+const sedimentingDirs = new Map<string, string>();
+
+/** 锁上一个技能目录，owner 是正在沉淀的助手或群的名字（报错时说给用户听）。 */
+export function lockSkillsDir(dir: string, owner: string): void {
+  sedimentingDirs.set(resolve(dir), owner);
+}
+
+export function unlockSkillsDir(dir: string): void {
+  sedimentingDirs.delete(resolve(dir));
+}
+
+/** 改、删、回滚、导入之前先问一句：这个目录正在沉淀就先别动。 */
+export function assertSkillsDirFree(dir: string): void {
+  const owner = sedimentingDirs.get(resolve(dir));
+  if (owner) throw new Error(t("「{owner}」正在沉淀技能，等这一轮结束再改。", { owner }));
+}
 function isLink(path: string): boolean {
   try { return lstatSync(path).isSymbolicLink(); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
@@ -43,8 +72,15 @@ function safeTree(path: string): void {
 }
 function metadata(dir: string): Record<string, Metadata> {
   const path = join(dir, "skills.json");
+  if (!existsSync(path)) return {};
   safeTree(path);
-  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+  const parsed = JSON.parse(readFileSync(path, "utf8"));
+  // 导入的技能目录里，skills.json 可能是别的工具留下的（对象形状不对就当没有，别把整个助手的技能拖没）
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, Metadata>) : {};
+}
+/** 技能索引：给通用技能目录对账和测试用。 */
+export function skillIndex(dir: string): Record<string, Metadata> {
+  return metadata(dir);
 }
 function saveMetadata(dir: string, data: Record<string, Metadata>): void {
   const temp = join(dir, `.${process.pid}-${Date.now()}.tmp`);
@@ -74,10 +110,21 @@ function description(file: string): string {
   return value;
 }
 export function readAssistantSkillBody(path: string): string {
-  const text = readFileSync(path, "utf8");
+  return bodyOf(readFileSync(path, "utf8"));
+}
+
+/** SKILL.md 的正文（frontmatter 之后的部分）。 */
+function bodyOf(text: string): string {
   const end = text.indexOf("\n---\n");
   if (!text.startsWith("---\n") || end < 0) throw new Error("技能 frontmatter 无效");
   return text.slice(end + 5).replace(/^\n/, "");
+}
+
+/** SKILL.md 的正文换掉，frontmatter 原样留着。 */
+function withBody(text: string, body: string): string {
+  const end = text.indexOf("\n---\n");
+  if (!text.startsWith("---\n") || end < 0) throw new Error("技能 frontmatter 无效");
+  return `${text.slice(0, end + 5)}\n${body}`;
 }
 
 export function skillInstruction(titles: string[], instruction: string): string {
@@ -85,7 +132,7 @@ export function skillInstruction(titles: string[], instruction: string): string 
 }
 
 function readSkill(dir: string, name: string, data: Metadata): AssistantSkill {
-  validName(name);
+  pathName(name);
   const skillDir = join(dir, name);
   safeTree(skillDir);
   const path = join(skillDir, "SKILL.md");
@@ -111,12 +158,10 @@ export function usableAssistantSkills(home: string, assistantId: string): Assist
   try { return listAssistantSkills(home, assistantId).filter((skill) => skill.enabled); }
   catch (error) { console.error(`读取「${assistantId}」的技能失败：`, error); return []; }
 }
-export function usableSkills(dir: string): AssistantSkill[] {
-  try { return listSkills(dir).filter((skill) => skill.enabled); }
-  catch (error) { console.error("读取技能失败：", error); return []; }
-}
 export function groupSkills(home: string, group: Group | undefined): AssistantSkill[] {
-  return group ? usableSkills(groupSkillsDir(home, group.parentId ?? group.id)) : [];
+  if (!group) return [];
+  try { return listSkills(groupSkillsDir(home, group.parentId ?? group.id)).filter((skill) => skill.enabled); }
+  catch (error) { console.error("读取技能失败：", error); return []; }
 }
 export function combinedSkills(home: string, assistantId: string, group?: Group, includeDisabledOwn = false): AssistantSkill[] {
   const groupItems = groupSkills(home, group);
@@ -124,17 +169,22 @@ export function combinedSkills(home: string, assistantId: string, group?: Group,
   const own = includeDisabledOwn ? listAssistantSkills(home, assistantId) : usableAssistantSkills(home, assistantId);
   return [...groupItems, ...own.filter((item) => !names.has(item.name))];
 }
-export function resolveSkill(home: string, assistantId: string, name: string, group?: Group): AssistantSkill | undefined {
-  return combinedSkills(home, assistantId, group, true).find((skill) => skill.name === name);
-}
-export function loadedSkills(skills: AssistantSkill[]): Skill[] {
-  return skills.flatMap((skill) =>
-    loadSkillsFromDir({ dir: dirname(skill.path), source: "assistant" }).skills.filter((item) => item.filePath === skill.path));
-}
 export function saveSkill(dir: string, input: SkillInput, jobId?: string, replaceFiles = false, options?: { overwriteVersion?: boolean }): AssistantSkill {
-  validName(input.name);
-  if (typeof input.title !== "string" || !input.title.trim() || typeof input.description !== "string" || !input.description.trim() || [...input.description].length > 120 || typeof input.content !== "string") throw new Error("技能内容无效");
-  const body = `---\nname: ${JSON.stringify(input.name)}\ndescription: ${JSON.stringify(input.description)}\nmetadata:\n  title: ${JSON.stringify(input.title)}\n---\n\n${input.content}`;
+  assertSkillsDirFree(dir);
+  mkdirSync(dir, { recursive: true });
+  const all = metadata(dir);
+  const old = all[input.name];
+  // Hob 的命名约定只管新建的；导入的技能叫什么就还叫什么
+  if (old) pathName(input.name);
+  else validName(input.name);
+  if (typeof input.title !== "string" || !input.title.trim() || typeof input.description !== "string" || !input.description.trim() || typeof input.content !== "string") throw new Error("技能内容无效");
+  if (!old && [...input.description].length > 120) throw new Error("技能内容无效");
+  const target = join(dir, input.name);
+  safeTree(target);
+  if (!old && existsSync(target)) throw new Error("技能目录已存在");
+  // 改已有的：frontmatter 原样保留（Hob 不认识的字段、别的工具写的格式都不动），只换正文
+  const kept = old && existsSync(join(target, "SKILL.md")) ? withBody(readFileSync(join(target, "SKILL.md"), "utf8"), input.content) : undefined;
+  const body = kept ?? `---\nname: ${JSON.stringify(input.name)}\ndescription: ${JSON.stringify(input.description)}\nmetadata:\n  title: ${JSON.stringify(input.title)}\n---\n\n${input.content}`;
   if ([...body].length > 20000) throw new Error("SKILL.md 超过 20000 字");
   if (input.files !== undefined && !Array.isArray(input.files)) throw new Error("技能附件无效");
   const files = input.files ?? [];
@@ -146,12 +196,6 @@ export function saveSkill(dir: string, input: SkillInput, jobId?: string, replac
     if (names.has(file.path)) throw new Error("附件路径重复");
     names.add(file.path);
   }
-  mkdirSync(dir, { recursive: true });
-  const all = metadata(dir);
-  const target = join(dir, input.name);
-  safeTree(target);
-  const old = all[input.name];
-  if (!old && existsSync(target)) throw new Error("技能目录已存在");
   const existingFiles = new Set<string>();
   const collectFiles = (dirPath: string, prefix: string): void => {
     if (!existsSync(dirPath)) return;
@@ -194,7 +238,7 @@ export function saveAssistantSkill(home: string, assistantId: string, input: Ski
   return saveSkill(assistantSkillsDir(home, assistantId), input, jobId, replaceFiles, options);
 }
 export function setSkillEnabled(dir: string, name: string, enabled: boolean): AssistantSkill {
-  validName(name);
+  pathName(name);
   const all = metadata(dir);
   if (!all[name]) throw new Error("技能不存在");
   safeTree(join(dir, name));
@@ -206,7 +250,8 @@ export function setAssistantSkillEnabled(home: string, assistantId: string, name
   return setSkillEnabled(assistantSkillsDir(home, assistantId), name, enabled);
 }
 export function archiveSkill(dir: string, name: string): void {
-  validName(name);
+  pathName(name);
+  assertSkillsDirFree(dir);
   const all = metadata(dir), target = join(dir, name);
   if (!all[name]) throw new Error("技能不存在");
   safeTree(target);
@@ -220,8 +265,27 @@ export function archiveSkill(dir: string, name: string): void {
 export function archiveAssistantSkill(home: string, assistantId: string, name: string): void {
   archiveSkill(assistantSkillsDir(home, assistantId), name);
 }
+/** 换范围：连同版本历史一起搬过去，索引跟着搬；目标那档已经有同名的就报错。 */
+export function moveSkill(fromDir: string, toDir: string, name: string, conflict: string): void {
+  pathName(name);
+  if (resolve(fromDir) === resolve(toDir)) return;
+  assertSkillsDirFree(fromDir);
+  assertSkillsDirFree(toDir);
+  const from = metadata(fromDir), to = metadata(toDir);
+  const data = from[name];
+  if (!data) throw new Error("技能不存在");
+  if (to[name]) throw new Error(conflict);
+  safeTree(join(fromDir, name));
+  safeTree(join(toDir, name));
+  mkdirSync(toDir, { recursive: true });
+  renameSync(join(fromDir, name), join(toDir, name));
+  to[name] = data;
+  delete from[name];
+  saveMetadata(toDir, to);
+  saveMetadata(fromDir, from);
+}
 export function recordSkillUse(dir: string, name: string): void {
-  validName(name);
+  pathName(name);
   const all = metadata(dir);
   if (!all[name]) throw new Error("技能不存在");
   all[name].uses++;
@@ -232,7 +296,8 @@ export function recordAssistantSkillUse(home: string, assistantId: string, name:
   recordSkillUse(assistantSkillsDir(home, assistantId), name);
 }
 export function rollbackSkill(dir: string, name: string): AssistantSkill {
-  validName(name);
+  pathName(name);
+  assertSkillsDirFree(dir);
   const all = metadata(dir), target = join(dir, name);
   if (!all[name]) throw new Error("技能不存在");
   safeTree(target);
@@ -240,19 +305,20 @@ export function rollbackSkill(dir: string, name: string): AssistantSkill {
   const versions = existsSync(history) ? readdirSync(history).filter((n) => /^\d+$/.test(n)).map(Number).sort((a, b) => b - a) : [];
   if (!versions.length) throw new Error("没有上一版");
   const previous = join(history, String(versions[0]));
-  const body = readFileSync(join(previous, "SKILL.md"), "utf8");
-  const title = skillHead(body).title ?? all[name].title;
-  const files: { path: string; content: string }[] = [];
-  function collect(dirPath: string, rel: string): void {
-    if (!existsSync(dirPath)) return;
-    for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
-      const path = join(dirPath, entry.name), next = `${rel}/${entry.name}`;
-      if (entry.isDirectory()) collect(path, next);
-      else if (entry.isFile()) files.push({ path: next, content: readFileSync(path, "utf8") });
-    }
+  // 现在的这一版先进历史，再把上一版整份放回来：附件、目录结构和 frontmatter 都不动
+  const snapshot = join(history, String(all[name].version));
+  if (!existsSync(snapshot)) {
+    mkdirSync(snapshot, { recursive: true });
+    for (const entry of readdirSync(target)) if (entry !== ".history") cpSync(join(target, entry), join(snapshot, entry), { recursive: true });
   }
-  collect(join(previous, "scripts"), "scripts"); collect(join(previous, "references"), "references");
-  return saveSkill(dir, { name, title, description: description(join(previous, "SKILL.md")), content: body.slice(body.indexOf("\n---\n") + 5).replace(/^\n/, ""), files }, undefined, true);
+  const kept = readdirSync(history).filter((n) => /^\d+$/.test(n)).map(Number).sort((a, b) => b - a);
+  for (const version of kept.slice(5)) rmSync(join(history, String(version)), { recursive: true, force: true });
+  for (const entry of readdirSync(target)) if (entry !== ".history") rmSync(join(target, entry), { recursive: true, force: true });
+  for (const entry of readdirSync(previous)) cpSync(join(previous, entry), join(target, entry), { recursive: true });
+  const head = skillHead(readFileSync(join(target, "SKILL.md"), "utf8"));
+  all[name] = { ...all[name], ...(head.title ? { title: head.title } : {}), version: all[name].version + 1, updatedAt: new Date().toISOString() };
+  saveMetadata(dir, all);
+  return listSkills(dir).find((skill) => skill.name === name)!;
 }
 export function rollbackAssistantSkill(home: string, assistantId: string, name: string): AssistantSkill {
   return rollbackSkill(assistantSkillsDir(home, assistantId), name);

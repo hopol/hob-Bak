@@ -1,7 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { archiveAssistantsDir, archiveGroupsDir, assistantDir, assistantJobsDir, groupDir, groupFilesDir, groupsDir, groupProjectsDir, projectRecordPath } from "./config.ts";
+import { archiveAssistantsDir, archiveGroupsDir, assistantDir, assistantJobsDir, groupDir, groupFilesDir, groupsDir } from "./config.ts";
 import { newId } from "./ids.ts";
+import type { Locale } from "../../shared/i18n.ts";
+import { t } from "../../shared/i18n.ts";
 import type {
   Approval,
   Assistant,
@@ -10,7 +12,6 @@ import type {
   Group,
   GroupItem,
   Job,
-  Project,
   Routine,
   Rule,
   WorklogEntry,
@@ -82,18 +83,38 @@ export class Store {
 
   constructor(readonly home: string) {}
 
-  init(): void {
+  init(locale?: Locale): void {
     mkdirSync(join(this.home, "assistants"), { recursive: true });
-    if (!existsSync(join(this.home, "rules.json"))) {
-      const changedAt = new Date().toISOString();
-      this.saveGlobalRules([
-        ...["删除或覆盖文件、数据和备份", "对外发送（消息、邮件、发布）、付费、充值、改计费", "停止或重启别人正在使用的服务和设备", "修改可能让你失去远程访问的设置（网络、防火墙、登录方式）"].map((text) => ({ id: newId("r-"), text, mode: "ask" as const, changedAt })),
-        ...["过去的记录是线索不是现状：动手前先核实实际状态。", "改配置、改数据前先留好退路（备份或记下原值）；改完用实际效果验证，不只看命令返回。", "凭据（密码、密钥、令牌、Cookie）只在用的时候读取，不回显，不写进文件和报告，也不存起来。"].map((text) => ({ id: newId("r-"), text, mode: "allow" as const, changedAt })),
-      ]);
+    if (!locale || existsSync(join(this.home, "rules.json"))) return;
+    const changedAt = new Date().toISOString();
+    const ask = [
+      "删除或覆盖文件、数据和备份",
+      "对外发送（消息、邮件、发布）、付费、充值、改计费",
+      "停止或重启别人正在使用的服务和设备",
+      "修改可能让你失去远程访问的设置（网络、防火墙、登录方式）",
+    ];
+    const allow = [
+      "过去的记录是线索不是现状：动手前先核实实际状态。",
+      "改配置、改数据前先留好退路（备份或记下原值）；改完用实际效果验证，不只看命令返回。",
+      "凭据（密码、密钥、令牌、Cookie）只在用的时候读取，不回显，不写进文件和报告，也不存起来。",
+    ];
+    this.saveGlobalRules([
+      ...ask.map((text) => ({ id: newId("r-"), text: t(text, {}, locale), mode: "ask" as const, changedAt })),
+      ...allow.map((text) => ({ id: newId("r-"), text: t(text, {}, locale), mode: "allow" as const, changedAt })),
+    ]);
+  }
+
+  /** Apply the defaults that depend on the first interface language. */
+  initializeDefaults(locale: Locale): void {
+    if (existsSync(join(this.home, "rules.json"))) return;
+    this.init(locale);
+    const primary = this.assistant("hob");
+    if (primary && ((locale === "en" && primary.duty === "主助手") || (locale === "zh-CN" && primary.duty === "Main assistant"))) {
+      this.saveAssistant({ ...primary, duty: t("主助手", {}, locale) });
     }
   }
 
-  /** 启动时先检查系统数据；单条任务、事项和日志记录在各自列表中跳过并记录。 */
+  /** 启动时先检查系统数据；单条任务和日志记录在各自列表中跳过并记录。 */
   validate(): void {
     this.globalRules();
     for (const file of ["config.json", "settings.json", "secrets.json", "push.json", "seeded.json", "moves.json"]) {
@@ -242,8 +263,8 @@ export class Store {
   }
 
   /**
-   * 读一个群。话题带 parentId，读出来时补上所属群的成员、群主、负责什么和工作方式：
-   * 这些只在群上存一份，群改了，话题读到的跟着变。
+   * 读一个群。话题带 parentId，读出来时补上所属群的成员、群主和负责什么；
+   * 这些只在群上存一份，群改了，话题读到的跟着变。旧 workflow 字段保留在文件里但不进入视图。
    */
   group(id: string): Group | undefined {
     const own = readJson<Group | null>(join(groupDir(this.home, id), "group.json"), null);
@@ -263,28 +284,31 @@ export class Store {
       ...(parent.memberModels ? { memberModels: parent.memberModels } : {}),
       createdAt: own.createdAt,
       parentId: own.parentId,
-      ...(parent.workflow ? { workflow: parent.workflow } : {}),
       ...(own.createdBy ? { createdBy: own.createdBy } : {}),
       ...(own.closedAt ? { closedAt: own.closedAt } : {}),
       ...(own.closeNote ? { closeNote: own.closeNote } : {}),
+      ...(own.handover ? { handover: own.handover } : {}),
     };
   }
 
-  /** 存一个群。话题只写自己的字段，成员、群主、负责什么和工作方式留在所属的群上。 */
+  /** 存一个群。话题只写自己的字段；旧 workflow 若已经存在，原样保留但不主动新增或删除。 */
   saveGroup(group: Group): void {
     const path = join(groupDir(this.home, group.id), "group.json");
     if (!group.parentId) {
       writeJsonAtomic(path, group);
       return;
     }
+    const existing = readJson<Record<string, unknown> | null>(path, null);
     writeJsonAtomic(path, {
       id: group.id,
       parentId: group.parentId,
       name: group.name,
       createdAt: group.createdAt,
+      ...(existing && Object.prototype.hasOwnProperty.call(existing, "workflow") ? { workflow: existing.workflow } : {}),
       ...(group.createdBy ? { createdBy: group.createdBy } : {}),
       ...(group.closedAt ? { closedAt: group.closedAt } : {}),
       ...(group.closeNote ? { closeNote: group.closeNote } : {}),
+      ...(group.handover ? { handover: group.handover } : {}),
     });
   }
 
@@ -352,39 +376,6 @@ export class Store {
     const file = this.groupTimelineFile(id);
     mkdirSync(dirname(file), { recursive: true });
     appendFileSync(file, `${JSON.stringify(item)}\n`);
-  }
-
-  // ---------- 事项：跟着群 ----------
-  /** 这个群的事项（新的在前）。 */
-  projects(gid: string): Project[] {
-    const root = groupProjectsDir(this.home, gid);
-    if (!existsSync(root)) return [];
-    return readdirSync(root)
-      .filter((name) => name.endsWith(".json"))
-      .flatMap((name) => {
-        try {
-          const project = readJson<Project | null>(join(root, name), null);
-          return project ? [project] : [];
-        } catch (error) { console.error(error); return []; }
-      })
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  }
-
-  project(gid: string, pid: string): Project | undefined {
-    return readJson<Project | null>(join(groupProjectsDir(this.home, gid), `${pid}.json`), null) ?? undefined;
-  }
-
-  saveProject(project: Project): void {
-    writeJsonAtomic(join(groupProjectsDir(this.home, project.groupId), `${project.id}.json`), project);
-  }
-
-  /** 事项的记录（给成员和任务读的那份 md）。 */
-  saveProjectRecord(gid: string, pid: string, markdown: string): void {
-    const path = projectRecordPath(this.home, gid, pid);
-    mkdirSync(dirname(path), { recursive: true });
-    const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-    writeFileSync(tmp, markdown);
-    renameSync(tmp, path);
   }
 
   // ---------- 定时和审批：跟着所属助手 ----------

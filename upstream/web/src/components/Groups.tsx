@@ -7,9 +7,13 @@ import { plainText } from "../../../shared/plain-text.ts";
 import { Icon } from "../icons.tsx";
 import { Avatar } from "../sprites.tsx";
 import { fmtList } from "../util.ts";
-import { selectGroup, useApp } from "../store.ts";
+import { selectGroup, shallow, useAppSelect, type State } from "../store.ts";
 import type { GroupRowData } from "../home.ts";
 import { useRowToPin, type PinDragTarget } from "./PinDrag.ts";
+import { t } from "../../../shared/i18n.ts";
+
+const pickAssistants = (s: State) => ({ assistants: s.assistants });
+const pickGroupRow = (s: State) => ({ assistants: s.assistants, groupPrefs: s.groupPrefs });
 
 /** 群的成员助手，群主排第一（叠放时在最上面）；归档了的助手不在里面。 */
 export function membersOf(g: GroupSummary, assistants: AssistantSummary[]): AssistantSummary[] {
@@ -43,9 +47,9 @@ export function GroupCluster({ g, assistants, size, mark }: { g: GroupSummary; a
 /** 左栏那行的预览：学 TG 写成「发言人：内容」。 */
 export function groupPreview(g: GroupRowData | GroupSummary, assistants: AssistantSummary[]): string {
   if (!g.last) return g.purpose;
-  const speaker = g.last.speaker === "user" ? "你" : (assistants.find((a) => a.id === g.last!.speaker)?.name ?? g.last.speaker);
-  const where = "lastTopic" in g && g.lastTopic ? `「${g.lastTopic}」` : "";
-  return `${where}${speaker}：${plainText(g.last.text)}`;
+  const speaker = g.last.speaker === "user" ? t("你") : (assistants.find((a) => a.id === g.last!.speaker)?.name ?? g.last.speaker);
+  const where = "lastTopic" in g && g.lastTopic ? t("「{topic}」", { topic: g.lastTopic }) : "";
+  return `${where}${speaker}${t("：")}${plainText(g.last.text)}`;
 }
 
 /** 首页那行群头像上的标记：有话题等你回答优先，其次有人在忙。 */
@@ -56,7 +60,7 @@ function groupMark(g: GroupRowData | GroupSummary): "busy" | "ask" | undefined {
 
 /** 置顶区里的群头像：叠放头像 + 群名 + 人数。 */
 export function GroupPin({ g, sel, size = 52, drag }: { g: GroupRowData; sel?: boolean; size?: number; drag?: Pick<PinDragTarget, "handlers" | "takeMoved"> }) {
-  const s = useApp();
+  const s = useAppSelect(pickAssistants, shallow);
   return (
     <button
       className={`pin${sel ? " sel" : ""}`}
@@ -69,7 +73,7 @@ export function GroupPin({ g, sel, size = 52, drag }: { g: GroupRowData; sel?: b
       {drag ? <Icon name="grip" size={14} className="grip" /> : null}
       <GroupCluster g={g} assistants={s.assistants} size={size} mark={groupMark(g)} />
       <div className="nm">{g.name}</div>
-      <div className="sub">{g.members.length} 位成员</div>
+      <div className="sub">{t("{n} 位成员", { n: g.members.length })}</div>
     </button>
   );
 }
@@ -78,7 +82,7 @@ export function GroupPin({ g, sel, size = 52, drag }: { g: GroupRowData; sel?: b
  * 左栏的群行：整行点开群聊；能像助手一样拖进置顶区和换先后。
  */
 export function GroupRow({ g, size = 42, sel }: { g: GroupRowData; size?: number; sel?: boolean }) {
-  const s = useApp();
+  const s = useAppSelect(pickGroupRow, shallow);
   const prefs = s.groupPrefs[g.id];
   const toPin = useRowToPin({ id: g.id, pinned: Boolean(prefs?.pinned), hidden: false });
   return (
@@ -105,12 +109,12 @@ export function GroupRow({ g, size = 42, sel }: { g: GroupRowData; size?: number
             </div>
             <div className="pv">{groupPreview(g, s.assistants)}</div>
           </div>
-          {g.unread > 0 ? <span className="gunread" title="有未读消息" aria-label="有未读消息" /> : null}
+          {g.unread > 0 ? <span className="gunread" title={t("有未读消息")} aria-label={t("有未读消息")} /> : null}
         </button>
         {toPin.ghost ? createPortal(
           <div className={`pin-ghost${toPin.ghost.over ? " over" : ""}`} style={{ left: toPin.ghost.x, top: toPin.ghost.y }}>
             <GroupCluster g={g} assistants={s.assistants} size={36} />
-            <span>{toPin.ghost.over ? "松手置顶" : g.name}</span>
+            <span>{toPin.ghost.over ? t("松手置顶") : g.name}</span>
           </div>,
           document.body,
         ) : null}

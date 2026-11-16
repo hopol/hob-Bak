@@ -3,7 +3,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { dropIndex, reorderAt, type Box } from "../pin-drag.ts";
-import { closeAssistantMenu, pinConversation, savePinOrder, useApp } from "../store.ts";
+import { closeAssistantMenu, pinConversation, savePinOrder, shallow, useAppSelect, type State } from "../store.ts";
+
+/** 拖动只在菜单开着、或者正在搜索时才改行为：切页不牵动这几行。 */
+const pickMenuOpen = (s: State) => s.menu !== null;
+const pickPinDrag = (s: State) => ({ menu: s.menu, query: s.query });
 
 /** 按住后移动超过这么多像素才算在拖：点一下照旧打开对话，长按照旧弹菜单。 */
 const SLOP = 6;
@@ -55,7 +59,7 @@ function measure(el: HTMLElement, plain = false): Box {
 }
 
 export function usePinDrag<T extends { id: string }>(pins: T[], locked = false): PinDrag<T> {
-  const menuOpen = useApp().menu !== null;
+  const menuOpen = useAppSelect(pickMenuOpen);
   const grid = useRef<HTMLDivElement | null>(null);
   /** 拖动中的先后（只存 id）；松手就清掉，跟着保存后的先后走 */
   const [orderIds, setOrderIds] = useState<string[] | null>(null);
@@ -177,7 +181,7 @@ export function usePinDrag<T extends { id: string }>(pins: T[], locked = false):
  */
 /** 会话行（助手或群）要拖的东西：往置顶区拖就置顶，在行里上下拖就换先后。 */
 export function useRowToPin(item: { id: string; pinned: boolean; hidden: boolean }) {
-  const app = useApp();
+  const app = useAppSelect(pickPinDrag, shallow);
   const menuOpen = app.menu !== null;
   // 搜索时日常只显示筛出来的几位，换先后会把别的挤乱：只许拖进置顶
   const searching = app.query.trim().length > 0;

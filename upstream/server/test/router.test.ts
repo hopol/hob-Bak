@@ -9,7 +9,7 @@ import { buildRouterTools } from "../src/router-tools.ts";
 import { applyDelta, mergeItems } from "../../web/src/merge.ts";
 import { call, makeHob, memoryDir, text, waitFor } from "./helpers.ts";
 import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
-import { briefModelError } from "../src/router.ts";
+import { briefModelError } from "../src/text.ts";
 import { join } from "node:path";
 
 /** 模型这一轮收到的系统提示词：pi 把它存成 system 消息的 sections，改了的话再加一条只带 diff 的 system 消息。 */
@@ -55,7 +55,7 @@ describe("Router", () => {
       expect(JSON.stringify(page)).not.toContain("【现在】");
     } finally { hob.close(); }
   });
-  it("记忆插件写成功就出一行「记忆已更新」", async () => {
+  it("记忆插件写成功不在对话里出提示行：记下了什么只给模型", async () => {
     const hob = makeHob();
     try {
       hob.faux.setResponses([
@@ -66,9 +66,8 @@ describe("Router", () => {
       await hob.runtime.router.waitIdle("hob");
 
       const page = hob.runtime.router.items("hob");
-      expect(page.items.map((item) => item.kind)).toEqual(["user", "note", "assistant"]);
-      expect(page.items[1]).toMatchObject({ kind: "note", icon: "memory", text: "记忆已更新 · 我不看融资新闻" });
-      expect(page.items[2]).toMatchObject({ kind: "assistant", text: "记下了。" });
+      expect(page.items.map((item) => item.kind)).toEqual(["user", "assistant"]);
+      expect(page.items[1]).toMatchObject({ kind: "assistant", text: "记下了。" });
       // 写进了本地记忆文件（pi-memory 的默认目录，测试里指向临时目录）
       expect(readFileSync(join(memoryDir(), "MEMORY.md"), "utf8")).toContain("我不看融资新闻");
     } finally {
@@ -347,7 +346,8 @@ describe("Router", () => {
       const refreshed = hob.runtime.router.items("hob").items;
       expect(refreshed.map(lead)).toEqual(["user:false", "assistant:false", "assistant:true", "file:true", "assistant:false"]);
       expect(live.map(lead)).toEqual(refreshed.map(lead));
-      expect(placeholders.map((item) => item.lead ?? false)).toEqual([false, true, false]);
+      // 只有用户那一轮边写边推；事件那一轮（可能以 NO_REPLY 收尾）的文字整段在这一轮末尾才出，没有流式占位
+      expect(placeholders.map((item) => item.lead ?? false)).toEqual([false]);
     } finally {
       hob.close();
     }
@@ -629,7 +629,7 @@ describe("Router", () => {
     }
   });
 
-  it("模型出错（限流等）不再悄无声息：对话里补一行回复失败", async () => {
+  it("模型出错（限流等）不再悄无声息：对话里补一行没能回复", async () => {
     const hob = makeHob();
     try {
       const session = (await hob.runtime.router.ensure("hob")).session!;
@@ -643,7 +643,7 @@ describe("Router", () => {
       await hob.runtime.router.event("hob", "任务「查资料」已完成：结果在这里");
       await hob.runtime.router.waitIdle("hob");
       const notes = hob.runtime.router.items("hob").items.filter((item) => item.kind === "note");
-      expect(notes.at(-1)).toMatchObject({ kind: "note", text: expect.stringMatching(/^回复失败：.+。发送任意消息即可重试。$/) });
+      expect(notes.at(-1)).toMatchObject({ kind: "note", text: expect.stringMatching(/^没能回复：调用模型失败（模型服务返回 400：request exceeds client API key limits）。可以再发一次。$/) });
     } finally {
       hob.close();
     }
@@ -659,13 +659,13 @@ describe("Router", () => {
       await hob.runtime.router.waitIdle("hob");
       off();
       const items = hob.runtime.router.items("hob").items;
-      expect(items.some((item) => item.kind === "note" && item.text.includes("回复失败"))).toBe(true);
+      expect(items.some((item) => item.kind === "note" && item.text.includes("没能回复"))).toBe(true);
       expect(items.some((item) => item.kind === "assistant" && item.text.includes("ECONNRESET"))).toBe(false);
       expect(mergeItems([], events).some((item) => item.kind === "assistant" && item.text.includes("ECONNRESET"))).toBe(false);
     } finally { hob.close(); }
   });
 
-  it("断流前已经写出来的正文照常留着，下面补一行回复失败", async () => {
+  it("断流前已经写出来的正文照常留着，下面补一行没能回复", async () => {
     const hob = makeHob();
     try {
       hob.faux.setResponses([fauxAssistantMessage([fauxText("我先查一下订阅列表")], { stopReason: "aborted", errorMessage: "stream ended before a terminal response event" })]);
@@ -673,7 +673,7 @@ describe("Router", () => {
       await hob.runtime.router.waitIdle("hob");
       const items = hob.runtime.router.items("hob").items;
       expect(items.some((item) => item.kind === "assistant" && item.text === "我先查一下订阅列表")).toBe(true);
-      expect(items.some((item) => item.kind === "note" && item.text.includes("回复失败"))).toBe(true);
+      expect(items.some((item) => item.kind === "note" && item.text.includes("没能回复"))).toBe(true);
     } finally { hob.close(); }
   });
 

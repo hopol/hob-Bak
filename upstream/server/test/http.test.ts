@@ -500,3 +500,25 @@ describe("PATCH /api/assistants/:id", () => {
     }
   });
 });
+
+describe("界面语言", () => {
+  it("服务端给用户看的文字跟着设置里的界面语言切换", async () => {
+    const hob = makeHob();
+    const { setLocale, currentLocale } = await import("../../shared/i18n.ts");
+    try {
+      const { app, cookie } = await appWithCookie(hob.runtime, hob.home);
+      const put = async (locale: string) => {
+        const { revision } = hob.runtime.settings.get();
+        const response = await app.request("/api/settings", { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ revision, patch: { general: { locale } } }) });
+        expect(response.status).toBe(200);
+      };
+      await put("en");
+      expect(currentLocale()).toBe("en");
+      await put("zh-CN");
+      expect(currentLocale()).toBe("zh-CN");
+    } finally {
+      setLocale("zh-CN");
+      hob.close();
+    }
+  });
+});

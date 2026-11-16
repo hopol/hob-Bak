@@ -14,13 +14,33 @@ import {
 } from "../store.ts";
 import { fmtBytes, fmtWhen } from "../util.ts";
 import { FilePreviewOverlay } from "./FilePreview.tsx";
+import { t } from "../../../shared/i18n.ts";
 
-const groups: [KnowledgeGroup | "", string][] = [
-  ["", "全部类型"], ["image", "图片"], ["document", "文档"],
-  ["table", "表格"], ["page", "网页"], ["other", "其他"],
+const groupKinds: [KnowledgeGroup | "", string][] = [
+  ["", "all"], ["image", "image"], ["document", "document"],
+  ["table", "table"], ["page", "page"], ["other", "other"],
 ];
+function knowledgeKindLabel(kind: string): string {
+  switch (kind) {
+    case "all": return t("全部类型");
+    case "image": return t("图片");
+    case "document": return t("文档");
+    case "table": return t("表格");
+    case "page": return t("网页");
+    case "other": return t("其他");
+    default: return kind;
+  }
+}
+function categoryLabel(category: string): string {
+  switch (category) {
+    case "all": return t("全部");
+    case "output": return t("助手产出");
+    case "chat": return t("对话上传");
+    default: return category;
+  }
+}
 type KnowledgeState = State["knowledge"];
-export const collectionDeleteText = (name: string) => `删除知识库「${name}」？直接上传到这里、又不在别的知识库里的文件会一起删除，其余文件只是移出。`;
+export const collectionDeleteText = (name: string) => t("删除知识库「{name}」？直接上传到这里、又不在别的知识库里的文件会一起删除，其余文件只是移出。", { name });
 
 function NameInput({ initial = "", label, save, cancel }: { initial?: string; label: string; save: (name: string) => Promise<boolean>; cancel: () => void }) {
   const [name, setName] = useState(initial);
@@ -50,16 +70,16 @@ function Categories({ collections, selected, narrow }: { collections: KnowledgeC
   const menu = useMenu();
   const current = collections.find((c) => c.id === menu.menu?.id);
   return (
-    <nav className={narrow ? "knowledge-categories" : "setnav"} aria-label="知识库分类">
-      {!narrow && <div className="setnavtitle">知识库</div>}
-      {[["all", "全部"], ["output", "助手产出"], ["chat", "对话上传"]].map(([id, name]) => (
+    <nav className={narrow ? "knowledge-categories" : "setnav"} aria-label={t("知识库分类")}>
+      {!narrow && <div className="setnavtitle">{t("知识库")}</div>}
+      {[["all", "all"], ["output", "output"], ["chat", "chat"]].map(([id, key]) => (
         <div key={id}>
           <button className={`navrow${selected === id ? " sel" : ""}`} onClick={() => setKnowledgeFilter({ category: id })}>
-            {name}
+            {categoryLabel(key)}
           </button>
         </div>
       ))}
-      {!narrow && <div className="knowledge-label">我的知识库</div>}
+      {!narrow && <div className="knowledge-label">{t("我的知识库")}</div>}
       {collections.map((collection) => (
         <div
           className={`knowledge-category${menu.menu?.id === collection.id ? " menu-open" : ""}${selected === collection.id ? " selected" : ""}`}
@@ -71,33 +91,33 @@ function Categories({ collections, selected, narrow }: { collections: KnowledgeC
           }}
         >
           {renaming === collection.id ? (
-            <NameInput initial={collection.name} label="知识库名称" save={(name) => renameKnowledgeCollection(collection.id, name)} cancel={() => setRenaming(null)} />
+            <NameInput initial={collection.name} label={t("知识库名称")} save={(name) => renameKnowledgeCollection(collection.id, name)} cancel={() => setRenaming(null)} />
           ) : (
             <button className={`navrow${selected === collection.id ? " sel" : ""}`} onClick={() => setKnowledgeFilter({ category: collection.id })}>
               <span>{collection.name}</span>
               <span className="knowledge-count">{collection.count}</span>
             </button>
           )}
-          <button className="knowledge-dots category-dots" aria-label={`${collection.name}的操作`} onClick={(e) => menu.toggle(collection.id, e.currentTarget)}>
+          <button className="knowledge-dots category-dots" aria-label={`${collection.name}${t("的操作")}`} onClick={(e) => menu.toggle(collection.id, e.currentTarget)}>
             <Icon name="more" size={18} />
           </button>
         </div>
       ))}
       <div>
         {creating ? (
-          <NameInput label="新知识库名称" save={async (name) => !!await createKnowledgeCollection(name)} cancel={() => setCreating(false)} />
+          <NameInput label={t("新知识库名称")} save={async (name) => !!await createKnowledgeCollection(name)} cancel={() => setCreating(false)} />
         ) : (
-          <button className="navrow knowledge-new" onClick={() => setCreating(true)}>＋ 新建</button>
+          <button className="navrow knowledge-new" onClick={() => setCreating(true)}>＋ {t("新建")}</button>
         )}
       </div>
-      {!narrow && <><span className="sp" /><button className="navrow" onClick={closeKnowledge}>返回 Hob</button></>}
+      {!narrow && <><span className="sp" /><button className="navrow" onClick={closeKnowledge}>{t("返回 Hob")}</button></>}
       {current && createPortal(
         <div className="amenu knowledge-popup" ref={menu.box}>
-          <button onClick={() => { menu.close(); setRenaming(current.id); }}>改名</button>
+          <button onClick={() => { menu.close(); setRenaming(current.id); }}>{t("改名")}</button>
           <button onClick={() => {
             menu.close();
             if (window.confirm(collectionDeleteText(current.name))) void deleteKnowledgeCollection(current.id);
-          }}>删除</button>
+          }}>{t("删除")}</button>
         </div>, document.body,
       )}
     </nav>
@@ -119,19 +139,19 @@ function Filters({ knowledge, assistants, uploading, upload }: { knowledge: Know
       <label className="knowledge-search">
         <Icon name="search" size={16} />
         <input
-          placeholder="搜索知识库"
+          placeholder={t("搜索知识库")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           onCompositionStart={() => setComposing(true)}
           onCompositionEnd={(e) => { setSearch(e.currentTarget.value); setComposing(false); }}
         />
       </label>
-      <Select aria-label="类型" value={knowledge.kind} onChange={(value) => setKnowledgeFilter({ kind: value as KnowledgeGroup | "" })} options={groups.map(([value, label]) => ({ value, label }))} />
-      <Select aria-label="助手" value={knowledge.assistantId} onChange={(value) => setKnowledgeFilter({ assistantId: value })} options={[{ value: "", label: "全部助手" }, ...assistants.map((assistant) => ({ value: assistant.id, label: assistant.name }))]} />
+      <Select aria-label={t("类型")} value={knowledge.kind} onChange={(value) => setKnowledgeFilter({ kind: value as KnowledgeGroup | "" })} options={groupKinds.map(([value, key]) => ({ value, label: knowledgeKindLabel(key) }))} />
+      <Select aria-label={t("助手")} value={knowledge.assistantId} onChange={(value) => setKnowledgeFilter({ assistantId: value })} options={[{ value: "", label: t("全部助手") }, ...assistants.map((assistant) => ({ value: assistant.id, label: assistant.name }))]} />
       {collection && <>
         <input ref={input} type="file" multiple hidden onChange={(e) => { upload(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
         <button className="hob-btn hob-btn-upload" disabled={uploading} onClick={() => input.current?.click()}>
-          {uploading ? "正在上传…" : "上传"}
+          {uploading ? t("正在上传…") : t("上传")}
         </button>
       </>}
     </div>
@@ -156,11 +176,11 @@ export function CollectionChoices({ entry, collections }: { entry: KnowledgeEntr
 
 export function EntryMenuActions({ entry, collections, category, join, rename, remove, confirm }: { entry: KnowledgeEntry; collections: KnowledgeCollection[]; category: string; join: () => void; rename: () => void; remove: () => void; confirm: () => void }) {
   return <>
-    <button onClick={join}>加入知识库</button>
-    <button onClick={rename}>改名</button>
-    <a href={fileUrl(entry.path)} download={entry.name}>下载</a>
-    {collections.some((c) => c.id === category) && <button onClick={remove}>移出这个知识库</button>}
-    <button onClick={confirm}>删除</button>
+    <button onClick={join}>{t("加入知识库")}</button>
+    <button onClick={rename}>{t("改名")}</button>
+    <a href={fileUrl(entry.path)} download={entry.name}>{t("下载")}</a>
+    {collections.some((c) => c.id === category) && <button onClick={remove}>{t("移出这个知识库")}</button>}
+    <button onClick={confirm}>{t("删除")}</button>
   </>;
 }
 
@@ -172,8 +192,8 @@ function EntryRow({ entry, collections, assistants, selected, category }: { entr
   const group = knowledgeGroup(entry.kind);
   const assistant = assistants.find((item) => item.id === entry.source?.assistantId);
   const source = entry.source;
-  const index = entry.index?.state === "queued" || entry.index?.state === "indexing" ? "正在建索引…" : entry.index?.state === "failed" ? `未能建索引：${entry.index.error || "未知原因"}` : entry.index?.state === "unsupported" ? "这类文件还不能建索引" : "";
-  const meta = [entry.origin === "upload" ? "上传" : assistant?.name, fmtWhen(entry.updatedAt), fmtBytes(entry.size), entry.versions?.length ? `第 ${entry.versions.length + 1} 版` : "", index].filter(Boolean).join(" · ");
+  const index = entry.index?.state === "queued" || entry.index?.state === "indexing" ? t("正在建索引…") : entry.index?.state === "failed" ? t("未能建索引：{error}", { error: entry.index.error || t("未知原因") }) : entry.index?.state === "unsupported" ? t("这类文件还不能建索引") : "";
+  const meta = [entry.origin === "upload" ? t("上传") : assistant?.name, fmtWhen(entry.updatedAt), fmtBytes(entry.size), entry.versions?.length ? t("第 {n} 版", { n: entry.versions.length + 1 }) : "", index].filter(Boolean).join(" · ");
   return (
     <div className={`knowledge-row${selected ? " selected" : ""}`}>
       <div
@@ -190,7 +210,7 @@ function EntryRow({ entry, collections, assistants, selected, category }: { entr
         </span>
         <div className="knowledge-info">
           {renaming ? (
-            <NameInput initial={entry.name} label="文件名称" save={(name) => patchKnowledgeEntry(entry.id, { name })} cancel={() => setRenaming(false)} />
+            <NameInput initial={entry.name} label={t("文件名称")} save={(name) => patchKnowledgeEntry(entry.id, { name })} cancel={() => setRenaming(false)} />
           ) : <strong>{entry.name}</strong>}
           {entry.snippet || entry.description ? <span className="knowledge-description">{entry.snippet || entry.description}</span> : null}
           <span className="knowledge-meta">
@@ -208,24 +228,24 @@ function EntryRow({ entry, collections, assistants, selected, category }: { entr
         <button className="knowledge-source" onClick={() => {
           if (source.itemId) void jumpToItem(source.assistantId, source.itemId);
           else if (source.jobId) { closeKnowledge(); openJob(source.jobId); }
-        }}>出处</button>
+        }}> {t("出处")}</button>
       ) : null}
       <div className="knowledge-actions">
-        <button className="knowledge-dots" aria-label={`${entry.name}的操作`} onClick={(e) => { menu.toggle(entry.id, e.currentTarget); setJoining(false); }}>
+        <button className="knowledge-dots" aria-label={`${entry.name}${t("的操作")}`} onClick={(e) => { menu.toggle(entry.id, e.currentTarget); setJoining(false); }}>
           <Icon name="more" size={18} />
         </button>
       </div>
       {menu.menu && createPortal(
         <div className="amenu knowledge-popup" ref={menu.box}>
           {joining ? <>
-            <div className="knowledge-menu-title">加入知识库</div>
+            <div className="knowledge-menu-title">{t("加入知识库")}</div>
             <CollectionChoices entry={entry} collections={collections} />
             {creating ? (
-              <NameInput label="新知识库名称" save={async (name) => {
+              <NameInput label={t("新知识库名称")} save={async (name) => {
                 const c = await createKnowledgeCollection(name, false);
                 return !!c && await patchKnowledgeEntry(entry.id, { collections: [...entry.collections, c.id] });
               }} cancel={() => setCreating(false)} />
-            ) : <button onClick={() => setCreating(true)}>＋ 新建知识库</button>}
+            ) : <button onClick={() => setCreating(true)}>＋ {t("新建知识库")}</button>}
           </> : (
             <EntryMenuActions
               entry={entry}
@@ -236,7 +256,7 @@ function EntryRow({ entry, collections, assistants, selected, category }: { entr
               remove={() => { menu.close(); void patchKnowledgeEntry(entry.id, { collections: entry.collections.filter((id) => id !== category) }); }}
               confirm={() => {
                 menu.close();
-                if (window.confirm(`删除「${entry.name}」？会从所有知识库里移除，不能恢复。`)) void deleteKnowledgeEntry(entry.id);
+                if (window.confirm(t("删除「{name}」？会从所有知识库里移除，不能恢复。", { name: entry.name }))) void deleteKnowledgeEntry(entry.id);
               }}
             />
           )}
@@ -249,9 +269,9 @@ function EntryRow({ entry, collections, assistants, selected, category }: { entr
 function EntryList({ knowledge, assistants, previewPath, upload }: { knowledge: KnowledgeState; assistants: AssistantSummary[]; previewPath?: string; upload: (files: File[]) => void }) {
   const collection = knowledge.collections.some((c) => c.id === knowledge.category);
   const empty = knowledge.category === "output" && !knowledge.q
-    ? "还没有助手产出。助手交给你的文件、图片和页面会自动收在这里。"
-    : knowledge.category === "chat" && !knowledge.q ? "还没有对话上传的文件。"
-      : knowledge.q ? "没有找到匹配的资料。" : "这里还没有资料。";
+    ? t("还没有助手产出。助手交给你的文件、图片和页面会自动收在这里。")
+    : knowledge.category === "chat" && !knowledge.q ? t("还没有对话上传的文件。")
+      : knowledge.q ? t("没有找到匹配的资料。") : t("这里还没有资料。");
   return (
     <div
       className="knowledge-list"
@@ -263,13 +283,13 @@ function EntryList({ knowledge, assistants, previewPath, upload }: { knowledge: 
       }}
     >
       {knowledge.error ? (
-        <Empty large action={{ label: "重试", onClick: () => void loadKnowledge() }}>加载失败：{knowledge.error}</Empty>
+        <Empty large action={{ label: t("重试"), onClick: () => void loadKnowledge() }}>{t("加载失败：{error}", { error: knowledge.error })}</Empty>
       ) : !knowledge.entries.length && !knowledge.loading ? <Empty large>{empty}</Empty> : null}
       {knowledge.entries.map((entry) => (
         <EntryRow key={entry.id} entry={entry} collections={knowledge.collections} assistants={assistants} selected={entry.path === previewPath} category={knowledge.category} />
       ))}
-      {knowledge.loading ? <Empty large>正在加载…</Empty> : null}
-      {knowledge.hasMore && !knowledge.loading ? <button className="knowledge-more" onClick={() => void loadKnowledge(true)}>加载更多</button> : null}
+      {knowledge.loading ? <Empty large>{t("正在加载…")}</Empty> : null}
+      {knowledge.hasMore && !knowledge.loading ? <button className="knowledge-more" onClick={() => void loadKnowledge(true)}>{t("加载更多")}</button> : null}
     </div>
   );
 }
@@ -279,7 +299,7 @@ export function AssistantChoices({ collectionId, collections, assistants, busy, 
 }
 
 export function IndexRetry({ id, busy, setBusy }: { id: string; busy: boolean; setBusy: (busy: boolean) => void }) {
-  return <button disabled={busy} onClick={() => { setBusy(true); void reindexKnowledge(id).then(() => loadKnowledge(false, true)).catch((e: unknown) => setNotice(`重试失败：${e instanceof Error ? e.message : String(e)}`)).finally(() => setBusy(false)); }}>重试</button>;
+  return <button disabled={busy} onClick={() => { setBusy(true); void reindexKnowledge(id).then(() => loadKnowledge(false, true)).catch((e: unknown) => setNotice(t("重试失败：{error}", { error: e instanceof Error ? e.message : String(e) }))).finally(() => setBusy(false)); }}>{t("重试")}</button>;
 }
 
 export function CollectionStatus({ collection, collections, assistants, embedding }: { collection: KnowledgeCollection; collections: KnowledgeCollection[]; assistants: AssistantSummary[]; embedding: boolean }) {
@@ -287,9 +307,9 @@ export function CollectionStatus({ collection, collections, assistants, embeddin
   const bound = assistants.filter((a) => a.knowledge?.includes(collection.id));
   const [busy, setBusy] = useState(false);
   return <div className="knowledge-status">
-    <div>{bound.length ? `给 ${bound.map((a) => a.name).join("、")} 用` : <strong>还没有助手用这个库</strong>} · <button onClick={(e) => menu.toggle(collection.id, e.currentTarget)}>{bound.length ? "修改" : "选择助手"}</button></div>
+    <div>{bound.length ? t("给 {assistants} 用", { assistants: bound.map((a) => a.name).join(t("、")) }) : <strong>{t("还没有助手用这个库")}</strong>} · <button onClick={(e) => menu.toggle(collection.id, e.currentTarget)}>{bound.length ? t("修改") : t("选择助手")}</button></div>
     {menu.menu && createPortal(<div className="amenu knowledge-popup" ref={menu.box}><AssistantChoices collectionId={collection.id} collections={collections} assistants={assistants} busy={busy} setBusy={setBusy} /></div>, document.body)}
-    <div>已建索引 {collection.indexed ?? 0}/{collection.count - (collection.unsupported ?? 0)}{(collection.failed ?? 0) > 0 ? <> · {collection.failed} 个失败 · <IndexRetry id={collection.id} busy={busy} setBusy={setBusy} /></> : null}{!embedding ? <> · 只按关键词查 · <button onClick={() => { openSettings(); setSection("knowledge"); }}>去设置向量模型</button></> : null}</div>
+    <div>{t("已建索引 {indexed}/{total}", { indexed: collection.indexed ?? 0, total: collection.count - (collection.unsupported ?? 0) })}{(collection.failed ?? 0) > 0 ? <> · {t("{n} 个失败", { n: collection.failed ?? 0 })} · <IndexRetry id={collection.id} busy={busy} setBusy={setBusy} /></> : null}{!embedding ? <> · {t("只按关键词查")} · <button onClick={() => { openSettings(); setSection("knowledge"); }}>{t("去设置向量模型")}</button></> : null}</div>
   </div>;
 }
 
@@ -314,8 +334,8 @@ export function Knowledge({ narrow, leaving }: { narrow: boolean; leaving: boole
     <main className={`setpage knowledge${narrow ? " narrow" : ""}${preview && !narrow ? " has-preview" : ""}${preview?.full && !narrow ? " preview-full" : ""}${leaving ? " leaving" : ""}`}>
       {narrow ? (
         <div className="sethead">
-          <button className="hob-icon-btn" title="返回" onClick={closeKnowledge}><Icon name="left" size={17} /></button>
-          <span className="t">知识库</span>
+          <button className="hob-icon-btn" title={t("返回")} onClick={closeKnowledge}><Icon name="left" size={17} /></button>
+          <span className="t">{t("知识库")}</span>
         </div>
       ) : null}
       <Categories collections={knowledge.collections} selected={knowledge.category} narrow={narrow} />

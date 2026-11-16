@@ -30,6 +30,8 @@ export interface PiHostOptions {
   nativeProviders?: Provider[];
   /** 服务商套进引擎（设 Key、注册兼容接口），引擎建好、拿到之前调一次 */
   configure?: (runtime: ModelRuntime) => Promise<void>;
+  /** 引擎的重试预算：不给就是三次、间隔 2 秒起；测试把间隔调小，失败用例不用干等 */
+  retry?: { maxRetries?: number; baseDelayMs?: number };
 }
 
 export interface OpenSessionOptions {
@@ -54,6 +56,46 @@ export interface OpenSessionOptions {
 export interface OpenedSession {
   session: AgentSession;
   manager: SessionManager;
+}
+
+/**
+ * 兼容接口（GPT、DeepSeek、GLM 走的都是这条）不传「这次调用出错了」，只有 Anthropic 的接口带 is_error，
+ * 所以失败要写在文字里，模型才看得出来这回事没办成。
+ */
+const FAILED_PREFIX = "调用失败：";
+
+/** 读文件的工具：出错就是「文件不存在」这类，模型看得懂，不用再加开头。 */
+const PLAIN_FAILURE_TOOLS = new Set(["read"]);
+
+/**
+ * 给会话装自定义工具时统一包一层：返回 isError 的，或者直接抛异常的，发给模型的文字前面加「调用失败：」。
+ * 抛出去的话引擎自己把异常文字做成错误结果，不经过这里，模型就看不到这回事没办成。
+ * 引擎自带工具的报错不动，各工具只写自己的原因。
+ */
+export function toolFailureText(tools: ToolDefinition<any, any>[]): ToolDefinition<any, any>[] {
+  return tools.map((tool) => {
+    if (PLAIN_FAILURE_TOOLS.has(tool.name)) return tool;
+    return {
+      ...tool,
+      execute: async (...args: Parameters<typeof tool.execute>) => {
+        let result: Awaited<ReturnType<typeof tool.execute>>;
+        try {
+          result = await tool.execute(...args);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return { content: [{ type: "text" as const, text: `${FAILED_PREFIX}${message}` }], details: undefined, isError: true };
+        }
+        if (!result.isError) return result;
+        let marked = false;
+        const content = result.content.map((block) => {
+          if (marked || block.type !== "text") return block;
+          marked = true;
+          return { ...block, text: `${FAILED_PREFIX}${block.text}` };
+        });
+        return { ...result, content };
+      },
+    };
+  });
 }
 
 /**
@@ -319,7 +361,7 @@ export class PiHost {
     mkdirSync(dirname(options.file), { recursive: true });
     const model = await this.model(options.model);
     const manager = SessionManager.open(options.file, dirname(options.file), options.cwd);
-    const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true } });
+    const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, ...(this.options.retry ?? {}) } });
     const resourceLoader = await this.resourceLoader(options, settingsManager);
     const memoryTools = MEMORY_TOOL_PATTERNS[options.memory ?? "off"];
     const { session } = await createAgentSession({
@@ -332,7 +374,7 @@ export class PiHost {
       sessionManager: manager,
       settingsManager,
       tools: [...options.tools, ...memoryTools],
-      customTools: options.customTools,
+      customTools: toolFailureText(options.customTools ?? []),
     });
     // resources_discover 由 bindExtensions 触发；Lore 注册技能目录，MCP 连服务（都在后台）
     if (options.memory === "lore") {

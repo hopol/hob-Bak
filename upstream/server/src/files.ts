@@ -81,6 +81,7 @@ function headOf(path: string): Uint8Array {
 export function lookupFile(home: string, requested: string, workDirs: string[] = []): Lookup {
   const root = realpathSync(resolve(home));
   let path: string;
+  let isFile: boolean;
   let size: number;
   let modifiedAt: string;
   // 迁移把文件搬走了，会话和卡片里还是老路径：不存在时按 moves.json 找新位置
@@ -89,7 +90,7 @@ export function lookupFile(home: string, requested: string, workDirs: string[] =
   try {
     path = realpathSync(candidate);
     const stats = statSync(path);
-    if (!stats.isFile()) return { ok: false, status: 404, error: "文件不存在" };
+    isFile = stats.isFile();
     size = stats.size;
     modifiedAt = stats.mtime.toISOString();
   } catch {
@@ -97,7 +98,9 @@ export function lookupFile(home: string, requested: string, workDirs: string[] =
   }
   const inHome = path.startsWith(`${root}${sep}`);
   const work = inHome ? undefined : workRoots(root, workDirs).find((dir) => path.startsWith(`${dir}${sep}`));
+  // 先说范围再说类型：范围外的目录报「不存在」，模型会以为路径写错了
   if (!inHome && !work) return { ok: false, status: 403, error: "只允许读 Hob 自己的文件" };
+  if (!isFile) return { ok: false, status: 404, error: "这是目录，不是文件" };
   const relativePath = relative(inHome ? root : work!, path);
   if ((inHome && denied(root, path)) || DENY_WORK_DIRS.test(relativePath) || DENY_WORK_FILE.test(basename(path)) || DENY_ANY_FILE.test(basename(path))) {
     return { ok: false, status: 403, error: "这个文件不对页面开放" };

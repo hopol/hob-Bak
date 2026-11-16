@@ -1,5 +1,6 @@
 // 拖文件进浏览器：整页浮一层「松开即可上传」，松手就把文件加进输入框。
 // 监听挂在 window 上：拖到哪里松手都算，顺便挡住浏览器「把文件当成要打开的页面」的默认动作。
+import { t } from "../../../shared/i18n.ts";
 import { useEffect, useRef, useState } from "react";
 import { droppedFiles, isFileDrag } from "../dropped-files.ts";
 import { attach, useApp } from "../store.ts";
@@ -71,8 +72,8 @@ export function DropFiles() {
   return (
     <div className="dropmask" role="status">
       <div className="dropcard">
-        <div className="t">松开即可上传</div>
-        <div className="d">{a ? `文件会加进和 ${a.name} 的输入框，发送时一起发出去` : "文件会加进输入框，发送时一起发出去"}</div>
+        <div className="t">{t("松开即可上传")}</div>
+        <div className="d">{a ? t("文件会加进和 {name} 的输入框，发送时一起发出去", { name: a.name }) : t("文件会加进输入框，发送时一起发出去")}</div>
       </div>
     </div>
   );

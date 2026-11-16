@@ -11,7 +11,6 @@ import {
 import {
   isPlainHttpAllowedHost,
   loreConnection,
-  memoryNoteText,
   memoryPromptLines,
   resolveMemoryProvider,
   saveLoreConnection,
@@ -398,15 +397,6 @@ describe("memories.json 迁移", () => {
     } finally {
       runtime.router.disposeAll();
     }
-  });
-});
-
-describe("note 文案", () => {
-  it("取首个非空行，去掉末尾冒号，超过 80 个字符截断", () => {
-    expect(memoryNoteText({ content: "\n  不看融资新闻： \n第二行" })).toBe("不看融资新闻");
-    expect(memoryNoteText({ content: "标题:，" })).toBe("标题");
-    expect(memoryNoteText({ content: "🙂".repeat(81) })).toBe(`${"🙂".repeat(80)}…`);
-    expect(memoryNoteText({ uri: "core://x" })).toBeUndefined();
   });
 });
 

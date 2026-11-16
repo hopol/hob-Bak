@@ -1,4 +1,6 @@
 // 思考档的规则：7 个标准档、默认档位、写给引擎的稀疏 thinkingLevelMap。前后端和假后端共用一份，别各写一遍。
+import type { Locale } from "./i18n.ts";
+import { t } from "./i18n.ts";
 import type { ThinkingLevel, ThinkingLevelMapSetting } from "./types.ts";
 
 /** 7 个标准档，从低到高（和引擎的 ThinkingLevel 一致）。 */
@@ -14,6 +16,10 @@ export const THINKING_TEXT: Record<ThinkingLevel, string> = {
   xhigh: "很高",
   max: "最高",
 };
+
+export function thinkingText(level: ThinkingLevel, locale?: Locale): string {
+  return t(THINKING_TEXT[level], {}, locale);
+}
 
 /** 思考档字符的长度上限（存得下，也给服务商发得出去）。 */
 export const THINKING_TEXT_MAX = 40;

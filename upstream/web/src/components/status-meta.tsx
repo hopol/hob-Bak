@@ -1,64 +1,55 @@
 import type { ReactNode } from "react";
-import type { Delegation, Job, JobStatus, ProjectStage, SedimentStatus } from "../../../shared/types.ts";
-import type { SubtaskStatus } from "../../../shared/project.ts";
+import type { Delegation, GroupSummary, Job, JobStatus, SedimentStatus } from "../../../shared/types.ts";
+import { t } from "../../../shared/i18n.ts";
 import { Icon, type IconName } from "../icons.tsx";
+import { todoProgress } from "./Todos.tsx";
 
 export function sedimentText(sediment: SedimentStatus): string {
-  if (sediment.status === "running") return "沉淀技能中…";
-  if (sediment.status === "empty") return "没有要沉淀的";
-  if (sediment.status === "failed") return "沉淀失败";
-  return sediment.updated ? `已更新技能「${sediment.title}」· 第 ${sediment.version} 版` : `已沉淀技能「${sediment.title}」`;
+  if (sediment.status === "running") return t("沉淀技能中…");
+  if (sediment.status === "empty") return t("没有要沉淀的");
+  if (sediment.status === "failed") return t("沉淀失败");
+  return sediment.updated ? t("已更新技能「{title}」· 第 {version} 版", { title: sediment.title, version: sediment.version }) : t("已沉淀技能「{title}」", { title: sediment.title });
 }
 
 export type StatusMeta = { text: string; icon: IconName; color: "" | "live" | "ok" | "bad"; spin: boolean };
 
+function dynamicMeta(text: string, icon: IconName, color: StatusMeta["color"], spin: boolean): StatusMeta {
+  return { get text() { return t(text); }, icon, color, spin };
+}
+
 export const JOB_STATUS: Record<JobStatus, StatusMeta> = {
-  queued: { text: "排队中", icon: "clock", color: "", spin: false },
-  running: { text: "进行中", icon: "spin", color: "live", spin: true },
-  waiting: { text: "等助手回复", icon: "pause", color: "", spin: false },
-  done: { text: "已完成", icon: "check", color: "ok", spin: false },
-  stuck: { text: "受阻", icon: "close", color: "bad", spin: false },
-  failed: { text: "失败", icon: "close", color: "bad", spin: false },
-  stopped: { text: "已停止", icon: "stop", color: "", spin: false },
+  queued: dynamicMeta("排队中", "clock", "", false),
+  running: dynamicMeta("进行中", "spin", "live", true),
+  waiting: dynamicMeta("等助手回复", "pause", "", false),
+  done: dynamicMeta("已完成", "check", "ok", false),
+  stuck: dynamicMeta("受阻", "close", "bad", false),
+  failed: dynamicMeta("失败", "close", "bad", false),
+  stopped: dynamicMeta("已停止", "stop", "", false),
 };
 
-/** 事项的阶段：还没走完的带转圈，结束的分别是完成和放弃。 */
-export const PROJECT_STAGE: Record<ProjectStage, StatusMeta> = {
-  clarify: { text: "需求澄清", icon: "spin", color: "live", spin: true },
-  plan: { text: "任务拆分", icon: "spin", color: "live", spin: true },
-  doing: { text: "执行中", icon: "spin", color: "live", spin: true },
-  review: { text: "验收中", icon: "spin", color: "live", spin: true },
-  done: { text: "已完成", icon: "check", color: "ok", spin: false },
-  dropped: { text: "已放弃", icon: "close", color: "bad", spin: false },
-};
-
-/** 子任务的状态。 */
-export const SUBTASK_STATUS: Record<SubtaskStatus, StatusMeta> = {
-  未开始: { text: "未开始", icon: "clock", color: "", spin: false },
-  等待前置任务: { text: "等待前置任务", icon: "clock", color: "", spin: false },
-  待开始: { text: "待开始", icon: "clock", color: "", spin: false },
-  进行中: { text: "进行中", icon: "spin", color: "live", spin: true },
-  已完成: { text: "已完成", icon: "check", color: "ok", spin: false },
-  受阻: { text: "受阻", icon: "close", color: "bad", spin: false },
-  待你执行: { text: "待你执行", icon: "user", color: "", spin: false },
-};
+/** 左栏话题行的小标签：话题有没做完的待办时写 k/n，鼠标悬停写全。 */
+export function todoStamp(g: GroupSummary): { text: string; title: string } | null {
+  const { done, total } = todoProgress(g.todos);
+  if (!total || done >= total) return null;
+  return { text: `${done}/${total}`, title: t("待办 {done}/{total}", { done, total }) };
+}
 
 export const DELEGATION_STATUS: Record<Delegation["status"], StatusMeta> = {
-  running: { text: "进行中", icon: "spin", color: "live", spin: true },
-  waiting: { text: "等你确认", icon: "pause", color: "", spin: false },
-  done: { text: "已完成", icon: "check", color: "ok", spin: false },
-  stuck: { text: "受阻", icon: "close", color: "bad", spin: false },
-  interrupted: { text: "已中断", icon: "close", color: "bad", spin: false },
-  returned: { text: "已退回", icon: "close", color: "bad", spin: false },
-  takenOver: { text: "已被你接手", icon: "user", color: "", spin: false },
+  running: dynamicMeta("进行中", "spin", "live", true),
+  waiting: dynamicMeta("等你确认", "pause", "", false),
+  done: dynamicMeta("已完成", "check", "ok", false),
+  stuck: dynamicMeta("受阻", "close", "bad", false),
+  interrupted: dynamicMeta("已中断", "close", "bad", false),
+  returned: dynamicMeta("已退回", "close", "bad", false),
+  takenOver: dynamicMeta("已被你接手", "user", "", false),
 };
 
-/** 排队里的任务在等前置任务：写等谁；多个前置写等几个。 */
+/** 排队里的任务在等前面的任务：写等谁；多个写等几个。 */
 export function jobStatusMeta(job: Job, jobs: Record<string, Job>): StatusMeta {
   if (job.status !== "queued" || !job.after?.length) return JOB_STATUS[job.status];
-  if (job.after.length > 1) return { ...JOB_STATUS.queued, text: `等 ${job.after.length} 个任务` };
+  if (job.after.length > 1) return { ...JOB_STATUS.queued, text: t("等 {n} 个任务", { n: job.after.length }) };
   const title = jobs[job.after[0]!]?.title;
-  return { ...JOB_STATUS.queued, text: `等${title ? `「${title}」` : "前置任务"}` };
+  return { ...JOB_STATUS.queued, text: title ? t("等「{title}」", { title }) : t("等前面的任务") };
 }
 
 export function jobStatusIcon(status: JobStatus, size: number, w?: number) {

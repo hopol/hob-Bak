@@ -23,7 +23,7 @@ describe("群技能", () => {
       const edit = buildRouterTools(hob.runtime, "hob", group.id).find((tool) => tool.name === "edit_skill")!;
       expect((await edit.execute("edit", { name: info.name, edits: [{ old: "个人步骤", new: "新个人步骤" }] })).isError).not.toBe(true);
       expect(readFileSync(own.path, "utf8")).toContain("新个人步骤");
-      hob.runtime.store.saveJob({ id: "t-active", assistantId: "hob", groupId: group.id, title: "任务", instruction: "测试", status: "running", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [], skills: [info.name] });
+      hob.runtime.store.saveJob({ id: "t-active", assistantId: "hob", groupId: group.id, title: "任务", instruction: "测试", status: "running", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [], skillsUsed: [info.name] });
       expect(() => deleteSkill(hob.runtime, "hob", info.name)).toThrow("正在被任务");
     } finally { hob.close(); }
   });
@@ -47,7 +47,7 @@ describe("群技能", () => {
     } finally { hob.close(); }
   });
 
-  it("群会话优先使用群技能，修改、删除和定时绑定按群检查", async () => {
+  it("群会话的任务带上群技能和自己的技能，多填 skills 照常开任务", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
       const group = hob.runtime.groups.create({ name: "群", purpose: "测试", ownerId: "hob", members: ["hob"] });
@@ -59,7 +59,8 @@ describe("群技能", () => {
       const open = vi.spyOn(hob.runtime.pi, "open");
       hob.faux.setResponses([call("report", { outcome: "done", result: "完成" }), text("完成")]);
       const start = buildRouterTools(hob.runtime, "hob", topic.id).find((tool) => tool.name === "start_job")!;
-      expect((await start.execute("start", { title: "测试", skills: [info.name, second.name] })).isError).not.toBe(true);
+      // 旧对话里的 skills 不再校验、不起作用，任务照常开
+      expect((await start.execute("start", { title: "测试", skills: ["missing", info.name, second.name] })).isError).not.toBe(true);
       await hob.runtime.jobs.waitIdle();
       const job = hob.runtime.store.jobs().find((item) => item.groupId === topic.id)!;
       const loaded = open.mock.calls.find(([options]) => options.file === hob.runtime.store.workerFile(job.id))?.[0].skills ?? [];

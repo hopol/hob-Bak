@@ -1,3 +1,4 @@
+import { t } from "../../shared/i18n.ts";
 // 浏览器这边的推送：VAPID 公钥转字节、订阅 / 退订、设备名。纯函数单独拿出来方便测。
 import type { PushSubscriptionJson } from "../../shared/types.ts";
 
@@ -9,7 +10,7 @@ export function deviceLabel(userAgent: string): string {
   if (/Macintosh|Mac OS X/i.test(userAgent)) return "Mac";
   if (/Windows/i.test(userAgent)) return "Windows";
   if (/Linux/i.test(userAgent)) return "Linux";
-  return "浏览器";
+  return t("浏览器");
 }
 
 /** VAPID 公钥是 base64url，PushManager 要 Uint8Array。 */
@@ -57,18 +58,18 @@ export async function currentSubscription(): Promise<PushSubscription | null> {
 
 /** 申请权限并订阅；被拒绝时把原因交给调用方显示。 */
 export async function subscribePush(publicKey: string): Promise<{ subscription: PushSubscriptionJson } | { error: string }> {
-  if (!pushSupported()) return { error: "这个浏览器不支持推送" };
+  if (!pushSupported()) return { error: t("这个浏览器不支持推送") };
   let permission = Notification.permission;
   if (permission === "default") {
     try {
       permission = await Notification.requestPermission();
     } catch {
-      return { error: "浏览器拒绝授予通知权限" };
+      return { error: t("浏览器拒绝授予通知权限") };
     }
   }
-  if (permission !== "granted") return { error: "浏览器未授予通知权限" };
+  if (permission !== "granted") return { error: t("浏览器未授予通知权限") };
   const registration = await navigator.serviceWorker.getRegistration();
-  if (!registration) return { error: "离线页面尚未就绪，请刷新后重试" };
+  if (!registration) return { error: t("离线页面尚未就绪，请刷新后重试") };
   const key = base64ToBytes(publicKey);
   let subscription = await registration.pushManager.getSubscription();
   // 浏览器里留着的订阅可能是旧密钥订的（服务端重置过）：推送服务会拒收，退掉重订
@@ -88,10 +89,10 @@ export async function subscribePush(publicKey: string): Promise<{ subscription: 
       });
     } catch (error) {
       // 无痕窗口、浏览器没连上推送服务都在这里失败
-      return { error: `浏览器订阅推送失败：${error instanceof Error ? error.message : String(error)}` };
+      return { error: t("浏览器订阅推送失败：{error}", { error: error instanceof Error ? error.message : String(error) }) };
     }
   }
   const json = subscriptionJson(subscription);
-  if (!json) return { error: "浏览器返回的订阅信息不完整" };
+  if (!json) return { error: t("浏览器返回的订阅信息不完整") };
   return { subscription: json };
 }

@@ -3,25 +3,33 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-    <meta name="theme-color" content="#f6f6f4" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <link rel="manifest" id="manifest" href="/manifest.webmanifest?v=4" />
     <script>
       (() => {
         let theme = "system";
         try { theme = localStorage.getItem("hob.theme") || "system"; } catch {}
         const dark = theme === "dark" || (theme !== "light" && theme !== "dark" && matchMedia("(prefers-color-scheme: dark)").matches);
-        document.documentElement.classList.toggle("dark", dark);
-        document.documentElement.style.colorScheme = dark ? "dark" : "light";
-        // 和 theme.ts 的 statusSurface 一致：手机用 --bg，宽屏用 --side
-        const narrow = innerWidth < 768;
+        const root = document.documentElement;
+        root.classList.toggle("dark", dark);
+        root.style.colorScheme = dark ? "dark" : "light";
+        // iPhone 主屏应用冷启动时这段脚本跑得早，innerWidth 偶尔还是 980 这类默认值，会被当成宽屏取 --side（深色 #1b1b1d），
+        // 而 iOS 状态栏只认启动时的颜色。屏幕宽度启动时就是准的，取两者较小的。
+        const narrow = Math.min(innerWidth || Infinity, screen.width || Infinity) < 768;
+        // 和 theme.ts 的 statusSurface 一致：手机用 --bg，宽屏用 --side。
+        // 这里先写上，React 挂载前顶栏就不会先露一层 :root 兜底的 --side（浅色是米白 #f6f6f4），开头不闪色。
+        root.style.setProperty("--status-background", `var(--${narrow ? "bg" : "side"})`);
         document.querySelector('meta[name="theme-color"]').content = narrow ? (dark ? "#151516" : "#ffffff") : dark ? "#1b1b1d" : "#f6f6f4";
+        // 装到主屏后，iOS 的状态栏和启动屏取 manifest 里的 theme_color / background_color，
+        // 而 manifest 只有一份、不跟系统主题走，所以按当前主题换一份深色的。
+        if (dark) document.getElementById("manifest").href = "/manifest-dark.webmanifest?v=4";
       })();
     </script>
-    <link rel="manifest" href="/manifest.webmanifest?v=3" />
     <link rel="icon" href="/icons/favicon-32.png?v=3" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon-180.png?v=3" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Hob" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>Hob</title>
   </head>
   <body>

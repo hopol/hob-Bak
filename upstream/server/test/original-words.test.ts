@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -39,16 +39,17 @@ describe("派活带上原话", () => {
     } finally { hob.close(); }
   });
 
-  it("备注超过 200 字时两种工具都返回明确错误", async () => {
+  it("备注超过 400 字时两种工具都返回明确错误", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
       const primary = hob.runtime.store.assistant("hob")!;
       hob.runtime.store.saveAssistant({ ...primary, id: "ops", name: "服务器", primary: false });
+      // 报错要说清没办成、现在多少字：只写上限时，有的模型当成没拿到结果，接着对用户说已经开了
       for (const name of ["start_job", "message_assistant"]) {
         const tool = buildRouterTools(hob.runtime, "hob").find((tool) => tool.name === name)!;
-        const result = await tool.execute("id", { title: "测试", assistantId: "ops", note: "字".repeat(201) });
+        const result = await tool.execute("id", { title: "测试", assistantId: "ops", note: "字".repeat(401) });
         expect(result.isError).toBe(true);
-        expect(result.content[0].text).toBe("备注最多 200 字；用户原话和最近的对话会自动带上，备注只写从原话里看不出的背景。");
+        expect(result.content[0].text).toBe(`备注 401 字，最多 400 字。用户原话和最近的对话会自动带上，备注只写从原话里看不出的背景，改短后再调用一次。`);
       }
     } finally { hob.close(); }
   });
@@ -64,6 +65,8 @@ describe("派活带上原话", () => {
       hob.faux.setResponses([call("report", { outcome: "done", result: "完成" }), text("完成")]);
       const job = await hob.runtime.jobs.start("hob", { title: "测试", instruction: "测试", cwd: outside });
       expect(job.cwd).toBe(outside);
+      // 指定了 cwd 的任务，自己的目录也建好
+      expect(existsSync(join(hob.home, "assistants", "hob", "jobs", job.id, "work"))).toBe(true);
       await hob.runtime.jobs.waitIdle();
       await hob.runtime.router.waitIdle("hob");
     } finally { hob.close(); rmSync(outside, { recursive: true, force: true }); }
@@ -118,6 +121,120 @@ describe("派活带上原话", () => {
       expect(job.instruction).toContain(`Hob 转来（${monthDayTimeText("Asia/Shanghai", new Date(forwarded!.at))}）：\n${delegation.text}`);
       expect(job.instruction).toContain("服务器 的备注：看日志");
       expect(job.inputs).toEqual(["/disk.txt"]);
+    } finally { hob.close(); }
+  });
+});
+
+/** 三人群：Hob（群主，软件开发）、服务器。 */
+function groupHob() {
+  const hob = makeHob({}, { memory: "off" });
+  const base = hob.runtime.store.assistant("hob")!;
+  hob.runtime.store.saveAssistant({ ...base, id: "ops", name: "服务器", primary: false });
+  const group = hob.runtime.groups.create({ name: "敏捷团队", purpose: "协作", ownerId: "hob", members: ["hob", "ops"], workflow: "software" });
+  return { hob, group };
+}
+
+function toolOf(hob: ReturnType<typeof makeHob>, name: string, gid?: string) {
+  const tool = buildRouterTools(hob.runtime, "hob", gid).find((item) => item.name === name);
+  if (!tool) throw new Error(`没有这个工具：${name}`);
+  return tool;
+}
+
+describe("群里的来由", () => {
+  const routineOf = (hob: ReturnType<typeof makeHob>, group: { id: string }) => hob.runtime.routines.create({
+    assistantId: "hob",
+    groupId: group.id,
+    name: "看 PR",
+    instruction: "看看有没有新 PR",
+    schedules: ["0 9 * * *"],
+  });
+  const fullText = "定时任务「看 PR」到点了，要做的事：看看有没有新 PR";
+
+  it("综合里定时触发派任务：拿到到点的记录和全文，没有最近的对话和更早的用户消息", async () => {
+    const { hob, group } = groupHob();
+    try {
+      hob.runtime.store.appendGroupItem(group.id, { kind: "user", speaker: "user", id: "g-901", at: "2026-11-08T02:00:00.000Z", text: "昨天的旧消息" });
+      const routine = routineOf(hob, group);
+      const start = vi.spyOn(hob.runtime.jobs, "start").mockResolvedValue({ id: "t-test", title: "回 PR", status: "queued" } as never);
+      hob.faux.setResponses([call("start_job", { title: "回 PR", note: "先看标题" }), text("好")]);
+      await hob.runtime.routines.runNow(routine.id);
+      await waitFor(() => start.mock.calls.length > 0);
+      const note = hob.runtime.store.groupItems(group.id).find((item) => item.kind === "note" && item.icon === "routine")!;
+      const time = monthDayTimeText("Asia/Shanghai", new Date(note.at));
+      const instruction = start.mock.calls[0][1].instruction;
+      expect(instruction).toContain(`定时任务到点的记录（${time}，在群「敏捷团队」里）：\n${fullText}`);
+      expect(instruction).toContain("Hob 的备注：先看标题");
+      expect(instruction).not.toContain("最近的对话");
+      expect(instruction).not.toContain("昨天的旧消息");
+      expect(start.mock.calls[0][1].groupId).toBe(group.id);
+    } finally { hob.close(); }
+  });
+
+  it("从定时记录开出来的话题里派任务：出处写群和话题", async () => {
+    const { hob, group } = groupHob();
+    try {
+      const routine = routineOf(hob, group);
+      const deliver = hob.runtime.groups.deliverEvent.bind(hob.runtime.groups);
+      hob.runtime.groups.deliverEvent = async () => undefined;
+      await hob.runtime.routines.runNow(routine.id);
+      await toolOf(hob, "open_topic", group.id).execute("c", { title: "回 PR" });
+      const topic = hob.runtime.groups.topicsOf(group.id)[0]!;
+      hob.runtime.groups.deliverEvent = deliver;
+      const start = vi.spyOn(hob.runtime.jobs, "start").mockResolvedValue({ id: "t-test", title: "回 PR", status: "queued" } as never);
+      hob.faux.setResponses([call("start_job", { title: "回 PR" }), text("好")]);
+      await hob.runtime.groups.deliverEvent(topic.id, "hob", "接着办");
+      await waitFor(() => start.mock.calls.length > 0);
+      const forwarded = hob.runtime.store.groupItems(topic.id).find((item) => item.kind === "note")!;
+      const time = monthDayTimeText("Asia/Shanghai", new Date(forwarded.at));
+      const instruction = start.mock.calls[0][1].instruction;
+      expect(instruction).toContain(`定时任务到点的记录（${time}，在群「敏捷团队」的话题「回 PR」里）：\n${fullText}`);
+      expect(instruction).not.toContain("最近的对话");
+      expect(start.mock.calls[0][1].groupId).toBe(topic.id);
+    } finally { hob.close(); }
+  });
+
+  it("来由后面还有别的条目：最近的对话只取来由之前的", async () => {
+    const { hob, group } = groupHob();
+    try {
+      const start = vi.spyOn(hob.runtime.jobs, "start").mockResolvedValue({ id: "t-test", title: "查磁盘", status: "queued" } as never);
+      hob.faux.setResponses([text("记下了"), text("稍后安排"), call("start_job", { title: "查磁盘" }), text("好")]);
+      const said = (words: string) => hob.runtime.store.groupItems(group.id).some((item) => item.kind === "assistant" && !item.streaming && item.text === words);
+      await hob.runtime.groups.send(group.id, { text: "旧消息" });
+      await waitFor(() => said("记下了"));
+      await hob.runtime.groups.send(group.id, { text: "帮我查下磁盘" });
+      await waitFor(() => said("稍后安排"));
+      // 事件回合里派任务：来由是那条用户消息，它后面已经有群主自己的回复
+      void hob.runtime.groups.deliverEvent(group.id, "hob", "可以开始了");
+      await waitFor(() => start.mock.calls.length === 1);
+      const instruction = start.mock.calls[0][1].instruction;
+      expect(instruction).toMatch(/^用户原话（[^）]*在群「敏捷团队」里）：\n帮我查下磁盘/);
+      const recent = instruction.split("最近的对话：\n")[1].split("\n\n")[0];
+      expect(recent).toContain("旧消息");
+      expect(recent).toContain("记下了");
+      expect(recent).not.toContain("帮我查下磁盘");
+      expect(recent).not.toContain("稍后安排");
+    } finally { hob.close(); }
+  });
+
+  it("用户消息触发：综合里写群名，话题里写群和话题，最近的对话照旧", async () => {
+    const { hob, group } = groupHob();
+    try {
+      const start = vi.spyOn(hob.runtime.jobs, "start").mockResolvedValue({ id: "t-test", title: "查磁盘", status: "queued" } as never);
+      hob.faux.setResponses([text("记下了"), call("start_job", { title: "查磁盘" }), call("start_job", { title: "查磁盘" }), text("好")]);
+      await hob.runtime.groups.send(group.id, { text: "旧消息" });
+      await waitFor(() => hob.runtime.store.groupItems(group.id).some((item) => item.kind === "assistant"));
+      const user = await hob.runtime.groups.send(group.id, { text: "帮我查下磁盘" });
+      await waitFor(() => start.mock.calls.length === 1);
+      const time = monthDayTimeText("Asia/Shanghai", new Date(user.at));
+      expect(start.mock.calls[0][1].instruction).toMatch(new RegExp(`^用户原话（${time}，在群「敏捷团队」里）：\n帮我查下磁盘`));
+      expect(start.mock.calls[0][1].instruction).toContain("最近的对话");
+
+      const topic = hob.runtime.groups.createTopic(group.id, "磁盘", "user");
+      hob.runtime.groups.forwardUserItem(group.id, topic.id, user);
+      const said = await hob.runtime.groups.send(topic.id, { text: "再看看磁盘" });
+      await waitFor(() => start.mock.calls.length === 2);
+      const topicTime = monthDayTimeText("Asia/Shanghai", new Date(said.at));
+      expect(start.mock.calls[1][1].instruction).toMatch(new RegExp(`^用户原话（${topicTime}，在群「敏捷团队」的话题「磁盘」里）：\n再看看磁盘`));
     } finally { hob.close(); }
   });
 });

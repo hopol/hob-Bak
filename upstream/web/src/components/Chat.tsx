@@ -1,13 +1,14 @@
 // 中间一栏：头部 + 消息区 + 输入框。
+import { currentLocale, t } from "../../../shared/i18n.ts";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { AssistantSummary, GroupItem, GroupSummary, Item } from "../../../shared/types.ts";
+import type { AssistantSummary, GroupItem, GroupSummary, Item, TodoItem } from "../../../shared/types.ts";
 import { isImagePath } from "../../../shared/media.ts";
 import { localPath } from "../outbox.ts";
 import { pastedFiles } from "../pasted-files.ts";
 import { fileIcon } from "../file-icons.ts";
 import { Icon } from "../icons.tsx";
-import { fmtElapsed, fmtWhen } from "../util.ts";
+import { fmtWhen } from "../util.ts";
 import { Avatar } from "../sprites.tsx";
 import { applyMention, filterMembers, mentionAt, stepPick } from "../mention.ts";
 import {
@@ -40,8 +41,8 @@ import { isStreamingTail } from "../merge.ts";
 import { afterScroll, expectAfterResize } from "../stick.ts";
 import { GroupItemList, ItemList } from "./Items.tsx";
 import { GroupCluster, membersOf } from "./Groups.tsx";
-import { ClosedTopic, TopicStage } from "./Topics.tsx";
-import { workflowInfo } from "../topics.ts";
+import { ClosedTopic } from "./Topics.tsx";
+import { TodoStrip, type RunningJob } from "./Todos.tsx";
 import { DelayedText } from "./Empty.tsx";
 
 export function conversationState(s: ReturnType<typeof useApp>) {
@@ -61,7 +62,7 @@ function Thinking({ leaving, gap, a }: { leaving: boolean; gap: boolean; a: Assi
       <div className={`hov think${leaving ? " leaving" : ""}`}>
         <div className="activity-line" role="status">
           <Avatar sprite={a.sprite} prop={a.prop} size={46} free motion={a.activity?.state === "tool" ? "work" : "think"} />
-          <span className="activity-shimmer">{a.activity?.label ?? "正在想…"}</span>
+          <span className="activity-shimmer">{a.activity?.label ?? t("正在想…")}</span>
         </div>
       </div>
     </>
@@ -185,7 +186,7 @@ function OlderStatus({ id, group = false }: { id: string | null; group?: boolean
   const s = useApp();
   const page = group ? s.groupPages[id ?? ""] : s.itemPages[id ?? ""];
   if (!page?.hasMore && !page?.loading && !page?.error) return null;
-  return <div className="older-messages" role="status">{page.error ? <button onClick={() => id && void (group ? loadOlderGroupItems(id, true) : loadOlderItems(id, true))}>读取失败：{page.error} · 重试</button> : page.loading ? <DelayedText text="正在读取更早的消息…" /> : null}</div>;
+  return <div className="older-messages" role="status">{page.error ? <button onClick={() => id && void (group ? loadOlderGroupItems(id, true) : loadOlderItems(id, true))}>{t("读取失败：{error}", { error: page.error })} · {t("重试")}</button> : page.loading ? <DelayedText text={t("正在读取更早的消息…")} /> : null}</div>;
 }
 
 /** 最后一条是不是自己刚发的（转自别的助手的不算）。 */
@@ -199,8 +200,8 @@ function JumpToBottom({ show, busy, onClick }: { show: boolean; busy: boolean; o
     <button
       className={`jump${show ? " show" : ""}`}
       onClick={onClick}
-      title="回到最新消息"
-      aria-label="回到最新消息"
+      title={t("回到最新消息")}
+      aria-label={t("回到最新消息")}
       aria-hidden={!show}
       tabIndex={show ? 0 : -1}
     >
@@ -217,31 +218,40 @@ function JumpToBottom({ show, busy, onClick }: { show: boolean; busy: boolean; o
   );
 }
 
+/** 这个对话里正在跑的任务，按卡片先后；交给输入框上方那一条显示。 */
+function runningJobs(s: ReturnType<typeof useApp>, items: Item[]): RunningJob[] {
+  const ids = [...new Set(items.flatMap((item) => (item.kind === "job" && s.jobs[item.jobId]?.status === "running" ? [item.jobId] : [])))];
+  return ids.map((id) => {
+    const job = s.jobs[id]!;
+    return { id, title: job.title, since: job.startedAt ?? job.createdAt };
+  });
+}
+
 /**
- * 这个对话里有任务在跑：标题栏里一颗小胶囊（标题和用时），点了滚到那张卡。
- * 任务跑完就收起来。几个任务同时跑时写个数，点了到最近的那张。
+ * 顶上正中：一个大头像浮着，名字在它下面，没有底框，消息从下面滚过去。
+ * 群是叠放头像和「综合 · 几位成员」；话题是群主的头像和话题名。
  */
-function RunningJobs({ items }: { items: Item[] }) {
+function ChatHead({ g, a, parent, mobile }: { g?: GroupSummary; a?: AssistantSummary; parent?: GroupSummary; mobile?: boolean }) {
   const s = useApp();
-  const running = [...new Set(items.flatMap((item) => (item.kind === "job" && s.jobs[item.jobId]?.status === "running" ? [item.jobId] : [])))];
-  const target = running.at(-1);
-  const job = target ? s.jobs[target] : undefined;
+  const size = mobile ? 56 : 48;
+  const owner = g && parent ? s.assistants.find((x) => x.id === g.ownerId) : undefined;
+  const face = owner ? <Avatar sprite={owner.sprite} prop={owner.prop} size={size} /> : g ? <GroupCluster g={g} assistants={s.assistants} size={size} /> : a ? <Avatar sprite={a.sprite} prop={a.prop} size={size} /> : null;
+  // 话题只写话题名：在哪个群，左栏（手机上是返回键）已经交代了；名字长了一行省略，悬停看全名
+  const sub = g && !parent ? <span className="ccap-sub">{t("综合 · {n} 位成员", { n: g.members.length })}</span> : null;
+  const name = g?.name ?? a?.name ?? "";
   return (
-    <button
-      className={`runpill${job ? " show" : ""}`}
-      aria-hidden={!job}
-      tabIndex={job ? 0 : -1}
-      title="看任务卡"
-      onClick={() => target && document.getElementById(`job-${target}`)?.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })}
-    >
-      <Icon name="spin" size={13} w={2.2} className="spin" />
-      {running.length > 1 ? <span className="t">{running.length} 个任务进行中</span> : job ? <><span className="t">{job.title}</span><small>{fmtElapsed(job.startedAt ?? job.createdAt)}</small></> : null}
-    </button>
+    <div className={`ccap${sub ? "" : " solo"}${g && !owner ? " cluster" : ""}`} title={name}>
+      <span className="ccap-face">{face}</span>
+      <span className="ccap-nm">{name}</span>
+      {sub}
+    </div>
   );
 }
 
 /** 交给主助手的几类事，点一下填进输入框（不直接发送）。 */
-const EXAMPLES = ["查看这台电脑的磁盘和内存占用", "每天早上 9 点给我一份科技新闻简报", "把附件里的会议记录整理成要点"];
+function examples(): string[] {
+  return [t("查看这台电脑的磁盘和内存占用"), t("每天早上 9 点给我一份科技新闻简报"), t("把附件里的会议记录整理成要点")];
+}
 
 /**
  * 还没有任何消息时：说明这个助手做什么。还没配模型就先引导去设置，否则发出去只会得到一行报错。
@@ -253,16 +263,16 @@ function EmptyChat({ a }: { a: AssistantSummary }) {
   return (
     <div className="hello">
       <Avatar sprite={a.sprite} prop={a.prop} size={88} free motion="home" />
-      <div className="t">{`我是${sendName(a.name, false)}${a.primary ? "，你的主助手" : ""}`}</div>
+      <div className="t">{a.primary ? t("我是{assistant}，你的主助手", { assistant: sendName(a.name, false) }) : t("我是{assistant}", { assistant: sendName(a.name, false) })}</div>
       <div className="d">
         {a.primary
-          ? "交给我的事，我会分派给后台任务执行，完成、受阻或需要你确认时再告诉你；也可以让我定时执行。同类工作多了，我会建议创建专属助手。"
-          : `负责${a.duty}。`}
+          ? t("交给我的事，我会分派给后台任务执行，完成、受阻或需要你确认时再告诉你；也可以让我定时执行。同类工作多了，我会建议创建专属助手。")
+          : t("负责{duty}。", { duty: a.duty })}
       </div>
       {ready ? (
         a.primary ? (
           <div className="ex">
-            {EXAMPLES.map((text) => (
+            {examples().map((text) => (
               <button
                 key={text}
                 className="hob-btn"
@@ -278,7 +288,7 @@ function EmptyChat({ a }: { a: AssistantSummary }) {
         ) : null
       ) : (
         <div className="setup">
-          <div>开始使用前，请先添加模型服务商并选择模型。</div>
+          <div>{t("开始使用前，请先添加模型服务商并选择模型。")}</div>
           <button
             className="hob-btn hob-btn-primary"
             onClick={() => {
@@ -286,7 +296,7 @@ function EmptyChat({ a }: { a: AssistantSummary }) {
               setSection("providers");
             }}
           >
-            前往设置
+            {t("前往设置")}
           </button>
         </div>
       )}
@@ -309,7 +319,7 @@ function GroupThinking({ g }: { g: GroupSummary }) {
           <div className="hov think" key={id}>
             <div className="activity-line" role="status">
               <Avatar sprite={m.sprite} prop={m.prop} size={40} free motion={s.groupActivity[g.id]?.[id]?.state === "tool" ? "work" : "think"} />
-              <span className="activity-shimmer">{`${sendName(m.name)}正在想…`}</span>
+              <span className="activity-shimmer">{t("{name}正在想…", { name: sendName(m.name) })}</span>
             </div>
           </div>
         );
@@ -325,7 +335,7 @@ function EmptyGroup({ g }: { g: GroupSummary }) {
     <div className="hello">
       <GroupCluster g={g} assistants={s.assistants} size={88} />
       <div className="t">{g.name}</div>
-      <div className="d">{g.parentId ? "这件事的讨论、提问和进展都放在这个话题里。" : g.purpose}</div>
+      <div className="d">{g.parentId ? t("这件事的讨论、提问和进展都放在这个话题里。") : g.purpose}</div>
     </div>
   );
 }
@@ -333,8 +343,8 @@ function EmptyGroup({ g }: { g: GroupSummary }) {
 /** 话题顶上那行灰字：谁开的、什么时候。（服务端记的是 createdBy） */
 function openLine(g: GroupSummary, assistants: AssistantSummary[]): string {
   const who = g.createdBy && g.createdBy !== "user"
-    ? `${assistants.find((a) => a.id === g.createdBy)?.name ?? g.createdBy}从综合开了这个话题`
-    : "你开了这个话题";
+    ? t("{name}从综合开了这个话题", { name: assistants.find((a) => a.id === g.createdBy)?.name ?? g.createdBy })
+    : t("你开了这个话题");
   return `${who} · ${fmtWhen(g.createdAt)}`;
 }
 
@@ -343,6 +353,8 @@ function openLine(g: GroupSummary, assistants: AssistantSummary[]): string {
  * tail=false：后面紧跟标点或句子结束，不留后空格。
  */
 export function sendName(name: string, tail = true): string {
+  // 中英文之间补空格是中文排版的规矩，英文句子里的空格由译文自己带
+  if (currentLocale() === "en") return name;
   const latin = (c: string | undefined) => Boolean(c && /[A-Za-z0-9]/.test(c));
   return `${latin(name[0]) ? " " : ""}${name}${tail && latin(name.at(-1)) ? " " : ""}`;
 }
@@ -381,42 +393,21 @@ export function Chat() {
 
   return (
     <main className="chat">
-      <div className="head">
-        {g && parent ? (
-          <>
-            <button className="crumb" title="回到综合" onClick={() => void selectGroup(parent.id)}>{parent.name}</button>
-            <Icon name="chev" size={14} className="crumb-sep" />
-            <span className="nm">{g.name}</span>
-          </>
-        ) : g ? (
-          <>
-            <GroupCluster g={g} assistants={s.assistants} size={26} />
-            <span className="nm">{g.name}</span>
-            <span className="gcount">{`综合 · ${g.members.length} 位成员`}</span>
-            {g.workflow ? <span className="wftag">{workflowInfo(g.workflow).label}</span> : null}
-          </>
-        ) : a ? (
-          <>
-            <Avatar sprite={a.sprite} prop={a.prop} size={24} />
-            <span className="nm">{a.name}</span>
-          </>
-        ) : null}
-        <span className="sp" />
-        <RunningJobs items={items} />
+      <div className="chead">
+        <ChatHead g={g} a={a} parent={parent} />
         {s.collapsed ? (
-          <button className="hob-icon-btn" title="展开右栏" onClick={expandPanel}>
+          <button className="chead-btn right" title={t("展开右栏")} onClick={expandPanel}>
             <Icon name="panel" size={18} />
           </button>
         ) : null}
       </div>
-      {g && parent && g.project ? <TopicStage topic={g} /> : null}
       <ConversationBody className="msgs" scrollRef={scrollRef} onScroll={onScroll} state={{ g, a, items, loaded, busy, empty, thinking }} scrollId={scrollId} think={think} stick={stick} />
-      {g?.closedAt ? <ClosedTopic g={g} /> : <Composer />}
+      {g?.closedAt ? <ClosedTopic g={g} /> : <Composer todos={g ? g.todos : a?.todos} jobs={runningJobs(s, items)} />}
     </main>
   );
 }
 
-export function Composer({ variant = "desktop" }: { variant?: "desktop" | "mobile" }) {
+export function Composer({ variant = "desktop", todos, jobs }: { variant?: "desktop" | "mobile"; todos?: TodoItem[]; jobs?: RunningJob[] }) {
   const s = useApp();
   const a = s.assistants.find((x) => x.id === s.sel);
   const g = groupById(s, s.gsel);
@@ -493,10 +484,11 @@ export function Composer({ variant = "desktop" }: { variant?: "desktop" | "mobil
 
   const body = (
     <div className={variant === "mobile" ? "mcomp" : "comp"} ref={compRef} onPaste={onPaste}>
+      <TodoStrip items={todos} jobs={jobs} busy={g ? g.busy.length > 0 : Boolean(a?.busy)} />
       {quote.mounted ? (
         <div className={`comp-quote${quote.leaving ? " leaving" : ""}`}>
           <div className="quote">{s.quote?.text}</div>
-          <button className="hob-icon-btn" style={{ width: 20, height: 20 }} onClick={() => setQuote(null)} title="取消引用">
+          <button className="hob-icon-btn" style={{ width: 20, height: 20 }} onClick={() => setQuote(null)} title={t("取消引用")}>
             <Icon name="close" size={13} />
           </button>
         </div>
@@ -509,10 +501,10 @@ export function Composer({ variant = "desktop" }: { variant?: "desktop" | "mobil
             const state = att.status === "uploading" ? " uploading" : att.status === "failed" ? " failed" : "";
             return isImagePath(att.name) ? (
               <span className={`comp-thumb${state}`} key={att.id}>
-                <img src={photoUrl(path)} alt={att.name} role="button" tabIndex={0} title="查看" onClick={() => openFilePreview(path, att.name)} onKeyDown={(e) => { if (e.key === "Enter") openFilePreview(path, att.name); }} />
+                <img src={photoUrl(path)} alt={att.name} role="button" tabIndex={0} title={t("查看")} onClick={() => openFilePreview(path, att.name)} onKeyDown={(e) => { if (e.key === "Enter") openFilePreview(path, att.name); }} />
                 {att.status === "uploading" ? <span className="att-spin"><Icon name="spin" size={18} w={2.2} className="spin" /></span> : null}
                 {att.status === "failed" ? <span className="att-bad">!</span> : null}
-                <button onClick={() => removeAttachment(att.id)} title="移除" aria-label="移除">
+                <button onClick={() => removeAttachment(att.id)} title={t("移除")} aria-label={t("移除")}>
                   <Icon name="close" size={11} w={2.2} />
                 </button>
               </span>
@@ -522,7 +514,7 @@ export function Composer({ variant = "desktop" }: { variant?: "desktop" | "mobil
                   {att.status === "uploading" ? <Icon name="spin" size={16} w={2.2} className="spin" /> : <Icon name={fileIcon(att.name)} size={16} />}
                 </span>
                 <span className="fn">{att.name}</span>
-                <button onClick={() => removeAttachment(att.id)} title="移除" aria-label="移除">
+                <button onClick={() => removeAttachment(att.id)} title={t("移除")} aria-label={t("移除")}>
                   <Icon name="close" size={12} />
                 </button>
               </span>
@@ -531,7 +523,7 @@ export function Composer({ variant = "desktop" }: { variant?: "desktop" | "mobil
         </div>
       ) : null}
       {showing && anchor ? createPortal(
-        <div className="mention-pop" style={{ left: anchor.left, bottom: anchor.bottom, width: anchor.width }} role="listbox" aria-label="成员">
+        <div className="mention-pop" style={{ left: anchor.left, bottom: anchor.bottom, width: anchor.width }} role="listbox" aria-label={t("成员")}>
           {options.map((m, i) => (
             <button
               key={m.id}
@@ -543,14 +535,14 @@ export function Composer({ variant = "desktop" }: { variant?: "desktop" | "mobil
             >
               <Avatar sprite={m.sprite} prop={m.prop} size={26} />
               <strong>{m.name}</strong>
-              <small>{m.id === g?.ownerId ? `群主 · ${m.duty}` : m.duty}</small>
+              <small>{m.id === g?.ownerId ? t("群主 · {duty}", { duty: m.duty }) : m.duty}</small>
             </button>
           ))}
         </div>,
         document.body,
       ) : null}
       <div className="comp-main">
-        <label className="pl" title="加文件（也可粘贴截图）">
+        <label className="pl" title={t("加文件（也可粘贴截图）")}>
           <Icon name="plus" size={19} />
           <input
             type="file"
@@ -568,7 +560,7 @@ export function Composer({ variant = "desktop" }: { variant?: "desktop" | "mobil
           className="ta"
           rows={1}
           value={s.text}
-          placeholder={g ? (g.parentId ? `在这个话题里说，不点名由${sendName(owner?.name ?? "")}接` : `发到综合，不点名由${sendName(owner?.name ?? "")}接`) : `给${sendName(a?.name ?? "")}发消息`}
+          placeholder={g ? (g.parentId ? t("在这个话题里说，不点名由{owner}接", { owner: sendName(owner?.name ?? "") }) : t("发到综合，不点名由{owner}接", { owner: sendName(owner?.name ?? "") })) : t("给{assistant}发消息", { assistant: sendName(a?.name ?? "") })}
           onChange={(e) => {
             setText(e.target.value);
             setCaret(e.target.selectionStart ?? e.target.value.length);
@@ -605,11 +597,11 @@ export function Composer({ variant = "desktop" }: { variant?: "desktop" | "mobil
         />
         {/* 群里有人正在说话、输入框又是空的：发送键换成停止（有任务在跑不算，那是任务卡的事） */}
         {(g ? groupSpeaking(s, g).length > 0 : a?.busy) && !has ? (
-          <button className="sendbtn stop" title="停止" onClick={() => void (g ? stopGroup(g.id) : a ? stopAssistant(a.id) : undefined)}>
+          <button className="sendbtn stop" title={t("停止")} onClick={() => void (g ? stopGroup(g.id) : a ? stopAssistant(a.id) : undefined)}>
             <Icon name="stop" size={18} />
           </button>
         ) : (
-          <button className="sendbtn" title="发送" disabled={!has} onClick={() => void send()}>
+          <button className="sendbtn" title={t("发送")} disabled={!has} onClick={() => void send()}>
             <Icon name="send" size={17} />
           </button>
         )}
@@ -641,28 +633,17 @@ export function ChatPage() {
 
   return (
     <>
-      <div className="mchat-head">
-        <button className="hob-icon-btn" style={{ marginLeft: -8 }} title="返回" onClick={leaveChat}>
+      <div className="chead mobile">
+        <button className="chead-btn left" title={t("返回")} onClick={leaveChat}>
           <Icon name="left" size={22} />
         </button>
-        {g && parent ? null : g ? <GroupCluster g={g} assistants={s.assistants} size={30} /> : a ? <Avatar sprite={a.sprite} prop={a.prop} size={30} /> : null}
-        {g ? (
-          <span className="gname">
-            <span className="nm">{g.name}</span>
-            <span className="gcount">{parent ? `${parent.name} · 话题` : `综合 · ${g.members.length} 位成员`}</span>
-          </span>
-        ) : (
-          <span className="nm">{a?.name ?? ""}</span>
-        )}
-        <span className="sp" />
-        <RunningJobs items={items} />
-        <button className="hob-icon-btn" title={g ? "群信息" : "助手信息"} onClick={openSheet}>
+        <ChatHead g={g} a={a} parent={parent} mobile />
+        <button className="chead-btn right" title={g ? t("群信息") : t("助手信息")} onClick={openSheet}>
           <Icon name="more" size={20} />
         </button>
       </div>
-      {g && parent && g.project ? <TopicStage topic={g} mobile /> : null}
       <ConversationBody className="mmsgs" scrollRef={scrollRef} onScroll={onScroll} state={{ g, a, items, loaded, busy, empty, thinking }} scrollId={scrollId} think={think} stick={stick} mobile />
-      {g?.closedAt ? <ClosedTopic g={g} /> : <Composer variant="mobile" />}
+      {g?.closedAt ? <ClosedTopic g={g} /> : <Composer variant="mobile" todos={g ? g.todos : a?.todos} jobs={runningJobs(s, items)} />}
     </>
   );
 }

@@ -7,6 +7,7 @@ import { prepareHome } from "./layout.ts";
 import { attachDesktopWebSocket } from "./desktop-control.ts";
 import { PiHost } from "./pi.ts";
 import { createRuntime, type HobRuntime } from "./runtime.ts";
+import { generalSkillsDir, syncGeneralIndex } from "./skills.ts";
 import { readLegacyModels } from "./settings.ts";
 
 export interface StartOptions {
@@ -39,9 +40,11 @@ export async function startHob(options: StartOptions = {}): Promise<HobServer> {
   });
 
   runtime.delegations.recovering = true;
+  // 通用技能目录里可能放着从别处来的技能：启动时给没登记的补上索引，之后改、删、回退都按索引走
+  syncGeneralIndex(generalSkillsDir(home));
   runtime.jobs.recover();
-  runtime.projects.recover();
   runtime.delegations.recover();
+  runtime.groups.recoverHandovers();
   runtime.routines.start();
   runtime.jobs.startWatchdog();
   runtime.desktopEvents.restart();

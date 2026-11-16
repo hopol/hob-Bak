@@ -258,23 +258,3 @@ export const MEMORY_TOOL_PATTERNS: Record<MemoryProvider, string[]> = {
   off: [],
 };
 
-/**
- * 会写记忆的工具：Router 调成功后在对话里出一行「记忆已更新 · …」。
- * 名字取自捆绑插件的实际注册（pi-memory 0.4.2 的 memory_write，Lore 插件的建/改节点）。
- */
-export const MEMORY_WRITE_TOOLS = new Set(["memory_write", "lore_create_node", "lore_update_node"]);
-
-/** note 里的摘要：写入内容的第一行，最多 80 个字符。 */
-export function memoryNoteText(params: unknown): string | undefined {
-  const record = isRecord(params) ? params : {};
-  for (const key of ["content", "text", "title", "new_text", "old_text"]) {
-    const value = record[key];
-    if (typeof value !== "string") continue;
-    const first = value.split("\n").map((line) => line.trim()).find((line) => line !== "");
-    if (!first) continue;
-    const chars = Array.from(first.replace(/[:：,，;；、]+\s*$/u, ""));
-    if (!chars.length) continue;
-    return chars.length > 80 ? `${chars.slice(0, 80).join("").replace(/[:：,，;；、]+\s*$/u, "")}…` : chars.join("");
-  }
-  return undefined;
-}

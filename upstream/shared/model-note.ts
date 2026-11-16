@@ -1,4 +1,5 @@
 import type { ModelScores } from "./types.ts";
+import { t } from "./i18n.ts";
 
 export const SCORE_STAGES = {
   smart: [{ value: 25, label: "一般" }, { value: 50, label: "较聪明" }, { value: 75, label: "很聪明" }, { value: 100, label: "最聪明" }],
@@ -16,11 +17,11 @@ export function guessModelScores(model: { id: string; name: string; reasoning: b
 }
 
 export function scoreLabel(kind: keyof ModelScores, value: number): string {
-  return SCORE_STAGES[kind].reduce((closest, stage) => Math.abs(stage.value - value) < Math.abs(closest.value - value) ? stage : closest).label;
+  return t(SCORE_STAGES[kind].reduce((closest, stage) => Math.abs(stage.value - value) < Math.abs(closest.value - value) ? stage : closest).label);
 }
 
 export function scoreSummary(scores: ModelScores): string {
-  return `聪明 ${scores.smart}% · 成本 ${scores.cost}% · 速度 ${scores.speed}%`;
+  return t("聪明 {smart}% · 成本 {cost}% · 速度 {speed}%", { smart: scores.smart, cost: scores.cost, speed: scores.speed });
 }
 
 export function contextText(contextWindow: number): string {

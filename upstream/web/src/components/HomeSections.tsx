@@ -1,15 +1,16 @@
 // 首页各组：待确认、进行中、日常、收起的助手、最近任务、定时任务。
 // 手机首页（Mobile）和桌面左栏（Sidebar）共用这一份，筛选规则在 ../home.ts，
 // 两边的头部（我的 / 搜索框 / 新建）各自保留。
-import { useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { t } from "../../../shared/i18n.ts";
 import type { AssistantSummary, GroupSummary, Job } from "../../../shared/types.ts";
 import { plainText } from "../../../shared/plain-text.ts";
 import { homeGroups } from "../home.ts";
 import { assistantStatus } from "../sidebar-data.ts";
 import { Icon } from "../icons.tsx";
 import { Avatar, type AvatarMark } from "../sprites.tsx";
-import { closePanelPages, getState, openJob, openJobs, openProject, openRoutine, select, selectGroup, useApp } from "../store.ts";
+import { closePanelPages, getState, openJob, openJobs, openRoutine, select, selectGroup, shallow, useAppSelect, type State } from "../store.ts";
 import { cronText, fmtElapsed, fmtList } from "../util.ts";
 import { useAssistantMenu } from "./AssistantMenu.tsx";
 import { useRowToPin, type PinDragTarget } from "./PinDrag.ts";
@@ -18,19 +19,46 @@ import { Empty } from "./Empty.tsx";
 import { activityParts } from "./Panel.tsx";
 import { GroupRow } from "./Groups.tsx";
 
+/** 行里的状态只看这几份数据：切页、打开别的对话都不牵动首页这些行。 */
+type StatusSource = Pick<State, "assistants" | "jobs" | "approvals" | "delegations">;
+const pickStatus = (s: State): StatusSource => ({
+  assistants: s.assistants,
+  jobs: s.jobs,
+  approvals: s.approvals,
+  delegations: s.delegations,
+});
+const pickJobs = (s: State) => ({ jobs: s.jobs });
+
+/** 首页那一份：分组要的数据。桌面上才关心当前选中谁（高亮用），手机上不带，切页就不重画。 */
+type HomeSlice = Pick<State, "assistants" | "groups" | "groupPrefs" | "jobs" | "approvals" | "routines" | "query" | "tick" | "sel" | "gsel">;
+const homeSlice = (s: State, marks: boolean): HomeSlice => ({
+  assistants: s.assistants,
+  groups: s.groups,
+  groupPrefs: s.groupPrefs,
+  jobs: s.jobs,
+  approvals: s.approvals,
+  routines: s.routines,
+  query: s.query,
+  tick: s.tick,
+  sel: marks ? s.sel : null,
+  gsel: marks ? s.gsel : null,
+});
+const pickHome = (s: State) => homeSlice(s, false);
+const pickHomeMarked = (s: State) => homeSlice(s, true);
+
 /**
  * 首页头像动不动：在忙的助手进页面时看一圈，之后每 30 秒再看一圈，几个在忙的轮流看、不同时动；一个助手只在一处动，免得桌面左栏加对话页满屏都在动。
  * 助手在回复、或有进行中的任务时，它的置顶或列表行在动；收到转交、对方的活还没干完时也算在忙（交出去的一方不算，它已经说完了）。
  * 桌面上正打开的那个不动（对话底部的小人在动）。
  * 任务行不动，状态那列已经有转圈；只有收起的助手折着时，由它的任务行替它动。
  */
-function isBusy(s: ReturnType<typeof useApp>, a: AssistantSummary): boolean {
+function isBusy(s: StatusSource, a: AssistantSummary): boolean {
   return assistantStatus(a, Object.values(s.jobs), Object.values(s.approvals), Object.values(s.delegations)) !== "空闲";
 }
 
 /** 在忙吗、轮到第几个看（按助手顺序给在忙的排号，头像按号错开时间看一圈）。 */
 function useHomeBusy(a: AssistantSummary | undefined): { busy: boolean; slot: number } {
-  const s = useApp();
+  const s = useAppSelect(pickStatus, shallow);
   if (!a || !isBusy(s, a)) return { busy: false, slot: 0 };
   return { busy: true, slot: s.assistants.filter((x) => isBusy(s, x)).findIndex((x) => x.id === a.id) };
 }
@@ -39,7 +67,7 @@ function useHomeBusy(a: AssistantSummary | undefined): { busy: boolean; slot: nu
  * 你上次看过之后最近结束的活算什么状态：自己名下的任务，加上自己转交出去、已经结束的转交。
  * 交出去以后自己这边没有任务，但对方干完／退回同样是一件事了结，主助手的头像要能挂上完成／受阻。
  */
-function lastEnded(s: ReturnType<typeof useApp>, a: AssistantSummary): "done" | "stuck" | undefined {
+function lastEnded(s: Pick<State, "jobs" | "delegations">, a: AssistantSummary): "done" | "stuck" | undefined {
   const ended: { at: string; mark: "done" | "stuck" }[] = [];
   for (const job of Object.values(s.jobs)) {
     if (job.assistantId !== a.id || !job.endedAt) continue;
@@ -61,7 +89,7 @@ function lastEnded(s: ReturnType<typeof useApp>, a: AssistantSummary): "done" | 
  * 受阻和完成未读由最近结束的活决定（任务或自己转交出去的转交），未读清零后不再显示。
  */
 function useMark(a: AssistantSummary, busy: boolean): AvatarMark | undefined {
-  const s = useApp();
+  const s = useAppSelect(pickStatus, shallow);
   if (assistantStatus(a, Object.values(s.jobs), Object.values(s.approvals), Object.values(s.delegations)) === "等你确认") return "ask";
   const last = lastEnded(s, a);
   if (a.unread > 0 && last === "stuck") return "stuck";
@@ -160,7 +188,7 @@ export function AssistantRow({
       {toPin.ghost ? createPortal(
         <div className={`pin-ghost${toPin.ghost.over ? " over" : ""}`} style={{ left: toPin.ghost.x, top: toPin.ghost.y }}>
           <Avatar sprite={a.sprite} prop={a.prop} size={40} />
-          <span>{toPin.ghost.over ? "松手置顶" : a.name}</span>
+          <span>{toPin.ghost.over ? t("松手置顶") : a.name}</span>
         </div>,
         document.body,
       ) : null}
@@ -216,7 +244,7 @@ function JobRow({
   size: number;
   onClick: () => void;
 }) {
-  const s = useApp();
+  const s = useAppSelect(pickJobs, shallow);
   return (
     <button className="list-row home-row job" onClick={onClick}>
       <Face owner={owner} size={size} moving={moving} />
@@ -260,8 +288,8 @@ function Slot({ title, text }: { title: string; text: string }) {
  * 行高（size）按各边的列表来：手机 36，桌面左栏 42。
  * markSel 只在桌面用：高亮当前打开的助手。
  */
-export function HomeSections({ size = 42, markSel = false }: { size?: number; markSel?: boolean }) {
-  const s = useApp();
+export const HomeSections = memo(function HomeSections({ size = 42, markSel = false }: { size?: number; markSel?: boolean }) {
+  const s = useAppSelect(markSel ? pickHomeMarked : pickHome, shallow);
   const [folded, setFolded] = useState(true);
   const g = homeGroups(s);
   const owner = (id: string) => s.assistants.find((a) => a.id === id);
@@ -278,23 +306,8 @@ export function HomeSections({ size = 42, markSel = false }: { size?: number; ma
 
   return (
     <>
-      {g.asks.length || g.mine.length ? (
-        <Section title="等你确认">
-          {g.mine.map(({ project, subtask }) => {
-            const who = owner(project.ownerId);
-            return (
-              <button className="list-row home-row" key={`${project.id}#${subtask.n}`} onClick={() => openProject(project.groupId, project.id)}>
-                <Face owner={who} size={size} />
-                <div className="main">
-                  <div className="l1">
-                    <span className="nm">待你执行：{subtask.title}</span>
-                    <span className="tm">{fmtList(project.updatedAt)}</span>
-                  </div>
-                  <div className="pv">{project.title}{who ? ` · ${who.name}` : ""}</div>
-                </div>
-              </button>
-            );
-          })}
+      {g.asks.length ? (
+        <Section title={t("等你确认")}>
           {g.asks.map((ap) => (
             <button
               className="list-row home-row"
@@ -307,7 +320,7 @@ export function HomeSections({ size = 42, markSel = false }: { size?: number; ma
                   <span className="nm">{ap.title}</span>
                   <span className="tm">{fmtList(ap.createdAt)}</span>
                 </div>
-                <div className="pv">{owner(ap.assistantId)?.name ?? ""} · 等待你的回答</div>
+                <div className="pv">{owner(ap.assistantId)?.name ?? ""} · {t("等待你的回答")}</div>
               </div>
             </button>
           ))}
@@ -315,7 +328,7 @@ export function HomeSections({ size = 42, markSel = false }: { size?: number; ma
       ) : null}
 
       {g.live.length ? (
-        <Section title="进行中">
+        <Section title={t("进行中")}>
           {g.live.map((job) => (
             <JobRow
               key={job.id}
@@ -332,7 +345,7 @@ export function HomeSections({ size = 42, markSel = false }: { size?: number; ma
       ) : null}
 
       {g.rows.length || g.hidden.length ? (
-        <Section title="对话">
+        <Section title={t("对话")}>
           {g.rows.map((row) =>
             row.kind === "assistant" ? (
               <AssistantRow key={row.id} a={row.a} size={size} sel={markSel && row.id === s.sel} />
@@ -342,7 +355,7 @@ export function HomeSections({ size = 42, markSel = false }: { size?: number; ma
           )}
           {g.hidden.length && !g.searching ? (
             <button className="fold" onClick={() => setFolded((v) => !v)}>
-              <span>收起的助手</span>
+              <span>{t("收起的助手")}</span>
               <span>
                 {g.hidden.length}
                 <Icon name={folded ? "chev" : "down"} size={13} />
@@ -359,10 +372,10 @@ export function HomeSections({ size = 42, markSel = false }: { size?: number; ma
 
       {g.recent.length ? (
         <Section
-          title="最近任务"
+          title={t("最近任务")}
           more={
             <button className="more" onClick={() => openJobs()}>
-              全部
+              {t("全部")}
             </button>
           }
         >
@@ -381,7 +394,7 @@ export function HomeSections({ size = 42, markSel = false }: { size?: number; ma
       ) : null}
 
       {g.routines.length ? (
-        <Section title="定时任务">
+        <Section title={t("定时任务")}>
           {g.routines.map((r) => {
             const run = r.runs[0];
             return (
@@ -402,7 +415,7 @@ export function HomeSections({ size = 42, markSel = false }: { size?: number; ma
                     <span className="tm">{cronText(r.schedules[0] ?? "")}</span>
                   </div>
                   <div className="pv">
-                    {run ? <>上次运行 {fmtList(run.at)} · {run.status === "handed" ? "交给群主" : <StatusTag meta={JOB_STATUS[run.status]} />}</> : "尚未运行"}
+                    {run ? <>{t("上次运行")} {fmtList(run.at)} · {run.status === "handed" ? t("交给群主") : <StatusTag meta={JOB_STATUS[run.status]} />}</> : t("尚未运行")}
                   </div>
                 </div>
               </button>
@@ -413,10 +426,10 @@ export function HomeSections({ size = 42, markSel = false }: { size?: number; ma
 
       {g.empty ? (
         <>
-          <Slot title="最近任务" text="分派的任务会显示在这里" />
-          <Slot title="定时任务" text="定时任务会显示在这里" />
+          <Slot title={t("最近任务")} text={t("分派的任务会显示在这里")} />
+          <Slot title={t("定时任务")} text={t("定时任务会显示在这里")} />
         </>
       ) : null}
     </>
   );
-}
+});

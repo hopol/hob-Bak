@@ -141,7 +141,7 @@ describe("群里的卡片和结果回流", () => {
       expect(job.instruction).toContain("查一下 /tmp/x 里有几个文件");
 
       // 结果进了它的群会话，它说的话写在时间线上；回复里 @ 了 Hob，接着轮到 Hob
-      expect(userTexts(hob.runtime.store.groupMemberFile(group.id, "ops")).at(-1)).toContain("[hob-event] 任务「数文件」");
+      expect(userTexts(hob.runtime.store.groupMemberFile(group.id, "ops")).at(-1)).toContain("[hob-event] 「服务器」的任务「数文件」");
       expect(assistantItems(hob, group.id).map((item) => item.speaker)).toEqual(["ops", "hob"]);
       expect(assistantItems(hob, group.id)[0]!.text).toContain("查完了：3 个文件。");
 
@@ -261,7 +261,7 @@ describe("群里的卡片和结果回流", () => {
 
       expect(hob.runtime.store.job(job.id)).toMatchObject({ status: "done", groupId: group.id });
       // 卡片在归档前就进了群；结果回不到群里，落回单聊
-      expect(readFileSync(hob.runtime.store.routerFile("ops"), "utf8")).toContain("[hob-event] 任务「清理旧快照」");
+      expect(readFileSync(hob.runtime.store.routerFile("ops"), "utf8")).toContain("[hob-event] 「服务器」的任务「清理旧快照」");
       expect(hob.runtime.router.items("ops").items.filter((item) => item.kind === "assistant").map((item) => item.text)).toEqual(["清掉了 3 个旧快照"]);
     } finally {
       hob.close();
@@ -311,6 +311,8 @@ describe("群里的卡片和结果回流", () => {
       expect(names).not.toContain("show_page");
       expect(names).toContain("set_rule");
       expect(names).toContain("create_routine");
+      // 自己的补充说明自己改（群里也拿得到）；主助手另有 update_*，群里也不发给它
+      expect(names).toContain("edit_notes");
     } finally {
       hob.close();
     }

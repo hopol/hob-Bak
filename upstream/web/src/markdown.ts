@@ -1,4 +1,5 @@
 // 对话里的 markdown 渲染；原始 HTML 不进入 DOM。
+import { t } from "../../shared/i18n.ts";
 import { Marked } from "marked";
 import markedCjkFriendly from "marked-cjk-friendly";
 import type katex from "katex";
@@ -62,7 +63,7 @@ const markdown = new Marked({
     code(token) {
       const lang = token.lang?.trim().split(/\s+/)[0] ?? "";
       const head = lang ? `<div class="code-head">${escapeHtml(lang)}</div>` : "";
-      return `<div class="code-block">${head}<button type="button" class="code-copy" aria-label="复制代码" title="复制代码">${iconSvg("copy", 15)}</button><pre><code>${escapeHtml(token.text)}\n</code></pre></div>`;
+      return `<div class="code-block">${head}<button type="button" class="code-copy" aria-label="${t("复制代码")}" title="${t("复制代码")}">${iconSvg("copy", 15)}</button><pre><code>${escapeHtml(token.text)}\n</code></pre></div>`;
     },
   },
 });

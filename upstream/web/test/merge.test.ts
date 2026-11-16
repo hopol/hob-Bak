@@ -27,6 +27,13 @@ describe("对话条目合并", () => {
     expect(done[0]).not.toHaveProperty("streaming");
   });
 
+  it("这一轮只调了工具没说话：流式条目收成空正文后不留空气泡", () => {
+    const live = mergeItems([], [user("u-1", "2026-11-01T01:00:00.000Z"), assistant("a-1", "2026-11-01T01:00:01.000Z", "\n", true)]);
+    const done = mergeItems(live, assistant("a-1", "2026-11-01T01:00:02.000Z", ""));
+    expect(done.map((item) => item.id)).toEqual(["u-1"]);
+    expect(isStreamingTail(done)).toBe(false);
+  });
+
   it("页面拉回来的一整页和已有的合并，按 id 去重", () => {
     const live = [user("u-1", "2026-11-01T01:00:00.000Z")];
     const page = [user("u-1", "2026-11-01T01:00:00.000Z"), assistant("a-1", "2026-11-01T01:00:01.000Z", "记住了")];

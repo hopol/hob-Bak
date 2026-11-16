@@ -1,6 +1,8 @@
 // 一个小的外部 store：bootstrap + 当前对话 + jobs/approvals/drafts 按 id 存，SSE 事件合并进来。
+import "./i18n/en/index.ts";
 import { parseRoute, type SettingsSection } from "./route.ts";
-import { useSyncExternalStore } from "react";
+import { useRef, useSyncExternalStore } from "react";
+import { currentLocale, localeFromBrowser, setLocale as setSharedLocale, t, type Locale } from "../../shared/i18n.ts";
 import type {
   AnswerApprovalBody,
   Approval,
@@ -33,7 +35,6 @@ import type {
   PageLive,
   ModelThinkingView,
   Profile,
-  Project,
   ProviderImportView,
   ProvidersView,
   PushView,
@@ -48,9 +49,8 @@ import type {
   TokenPrice,
   UsageModelPrice,
   UsageView,
-  WorkflowId,
 } from "../../shared/types.ts";
-import type { AssistantSkill } from "../../shared/skills.ts";
+import type { AssistantSkill, VisibleSkill } from "../../shared/skills.ts";
 import type { KnowledgeCollection, KnowledgeEntry, KnowledgeGroup } from "../../shared/knowledge.ts";
 import { defaultSearch, type SearchProviderName, type SearchSettings } from "../../shared/search.ts";
 import { ApiError, realApi, type HobApi } from "./api.ts";
@@ -62,7 +62,7 @@ import { isImagePath } from "../../shared/media.ts";
 import { createMock, SCENE_UI, type SceneId } from "./mock.ts";
 import { currentSubscription, deviceLabel, subscribePush } from "./push.ts";
 import { mergeStep, mergeSteps } from "./steps.ts";
-import { resolveTheme, updateStatusColor } from "./theme.ts";
+import { isNarrow, resolveTheme, updateManifest, updateStatusColor } from "./theme.ts";
 import { popPage, pushPage, removeMissingLivePages, replacePage, selectPanelStack, type PanelPage } from "./panel-stack.ts";
 export type { FilePreviewState, PanelPage } from "./panel-stack.ts";
 
@@ -72,8 +72,7 @@ export type PanelState =
   | { kind: "routine"; id: string }
   | { kind: "newRoutine" } // 还没创建的定时任务：填好名称和任务内容才真正创建
   | { kind: "assistant" }
-  | { kind: "routines" | "skills" | "knowledge" | "rules" }
-  | { kind: "project"; groupId: string; id: string }; // 演示场景里直接打开某个事项页
+  | { kind: "routines" | "skills" | "knowledge" | "rules" };
 export interface WorklogState {
   jobs: Job[];
   assistantId: string | null;
@@ -132,8 +131,6 @@ export interface State {
   groups: GroupSummary[];
   groupPrefs: Record<string, GroupPrefs>;
   groupItems: Record<string, GroupItem[]>;
-  projects: Record<string, Project[]>; // 群 id → 事项，新的在前
-  projectsError: Record<string, string | null>;
   groupGen: Record<string, number>; // 重新拉这个群的整条时间线 +1
   groupPages: Record<string, { hasMore: boolean; loading: boolean; error: string | null }>;
   groupActivity: Record<string, Record<string, RouterActivity>>; // 群 id → 正在说话的成员 → 当前活动
@@ -143,6 +140,7 @@ export interface State {
   approvals: Record<string, Approval>;
   drafts: Record<string, Draft>;
   settings: SettingsFile;
+  locale: Locale;
   globalRules: { rules: Rule[] | null; error: string | null; busy: boolean };
   page: "main" | "settings" | "knowledge";
   knowledge: { category: string; q: string; kind: KnowledgeGroup | ""; assistantId: string; entries: (KnowledgeEntry & { snippet?: string })[]; collections: KnowledgeCollection[]; collectionsLoaded: boolean; hasMore: boolean; loading: boolean; error: string | null };
@@ -154,6 +152,8 @@ export interface State {
   groupProfiles: Record<string, { value?: GroupProfile; error?: string }>;
   profiles: Record<string, Profile>;
   assistantSkills: Record<string, { skills: AssistantSkill[]; loaded: boolean; loading: boolean; error: string | null }>;
+  /** 一个助手（在一个群里）看得到的全部技能：定时任务的技能下拉用，键是 `${助手id}:${群id}`。 */
+  visibleSkills: Record<string, { skills: VisibleSkill[]; loaded: boolean; loading: boolean; error: string | null }>;
   sidebarJobs: Record<string, SidebarPage<Job>>;
   sidebarFiles: Record<string, SidebarPage<KnowledgeEntry>>;
   sel: string | null;
@@ -185,11 +185,11 @@ export interface State {
 
 const params = new URLSearchParams(location.search);
 export const MOCK = params.get("mock") === "1";
-const SCENES: SceneId[] = ["g-owns", "g-owns-dark", "readme-chat", "readme-cards", "readme-desktop", "readme-knowledge", "readme-profile", "readme-group-now", "readme-mobile-list", "readme-mobile-chat", "readme-mobile-project", "image", "act-demo", "act-think", "act-tool", "act-dark", "act-home", "boot", "bubbles", "bubbles-dark", "card-130", "card-130-dark", "job-after", "job-after-dark", "routine-check-dark", "routine-once", "routine-once-dark", "routine-once-list", "ask-rounds", "ask-rounds-answered", "ask-rounds-group", "ask-rounds-dark", "ask-rounds-mobile", "s1", "s2", "s3", "s4", "s6", "mlist", "mchat", "d-running", "d-waiting", "d-done", "d-dark", "d-source", "d-mobile", "h-hob", "h-dark", "h-source", "h-settings", "h-mobile", "g-chat", "g-mention", "g-mobile", "g-dark", "g-team", "p-clarify", "p-plan", "p-doing", "p-card", "p-check", "p-done", "p-dropped", "p-dark", "p-mobile", "topics", "topics-plain"];
+const SCENES: SceneId[] = ["g-owns", "g-owns-dark", "readme-chat", "readme-cards", "readme-desktop", "readme-knowledge", "readme-profile", "readme-group-now", "readme-mobile-list", "readme-mobile-chat", "readme-mobile-todos", "image", "act-demo", "act-think", "act-tool", "act-dark", "act-home", "boot", "bubbles", "bubbles-dark", "card-130", "card-130-dark", "job-after", "job-after-dark", "routine-check-dark", "routine-once", "routine-once-dark", "routine-once-list", "ask-rounds", "ask-rounds-answered", "ask-rounds-group", "ask-rounds-dark", "ask-rounds-mobile", "s1", "s2", "s3", "s4", "s6", "mlist", "mchat", "d-running", "d-waiting", "d-done", "d-dark", "d-source", "d-mobile", "h-hob", "h-dark", "h-source", "h-settings", "h-mobile", "g-chat", "g-mention", "g-mobile", "g-dark", "g-team", "todo-chat", "todo-topic", "todo-job", "topics", "topics-plain"];
 const sceneParam = params.get("scene") as SceneId | null;
 const scene: SceneId = sceneParam && SCENES.includes(sceneParam) ? sceneParam : "s1";
-const api: HobApi = MOCK ? createMock(scene) : realApi;
 const THEME_KEY = "hob.theme";
+const LOCALE_KEY = "hob.locale";
 /** 这台页面客户端的标识：上报可见性；SSE 断了服务端就把这台当不可见。 */
 const CLIENT_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 let watchingVisibility = false;
@@ -197,10 +197,6 @@ let watchingVisibility = false;
 function parsePanel(raw: string): PanelState {
   if (raw === "assistant" || raw === "now" || raw === "routines" || raw === "skills" || raw === "knowledge" || raw === "rules" || raw === "newRoutine") return { kind: raw };
   if (raw.startsWith("routine:")) return { kind: "routine", id: raw.slice("routine:".length) };
-  if (raw.startsWith("project:")) {
-    const [groupId, id] = raw.slice("project:".length).split("/");
-    return { kind: "project", groupId: groupId ?? "", id: id ?? "" };
-  }
   return { kind: "now" };
 }
 
@@ -208,6 +204,19 @@ function storedTheme(): Theme | null {
   const v = localStorage.getItem(THEME_KEY);
   return v === "light" || v === "dark" || v === "system" ? v : null;
 }
+
+function storedLocale(): Locale | null {
+  const value = localStorage.getItem(LOCALE_KEY);
+  return value === "zh-CN" || value === "en" ? value : null;
+}
+
+const urlParams = new URLSearchParams(location.search);
+const urlLocale = urlParams.get("lang") === "en" ? "en" : urlParams.get("lang") === "zh-CN" ? "zh-CN" : null;
+const initialLocale = urlLocale ?? storedLocale() ?? localeFromBrowser(navigator.languages);
+setSharedLocale(initialLocale);
+if (typeof document !== "undefined" && document.documentElement) document.documentElement.lang = initialLocale;
+// 演示数据也按界面语言出：mock 要在定好语言以后才建
+const api: HobApi = MOCK ? createMock(scene) : realApi;
 
 const GROUP_PREFS_KEY = "hob.groups.local";
 
@@ -249,8 +258,7 @@ function initial(): State {
     groups: [],
     groupPrefs: loadGroupPrefs(),
     groupItems: {},
-    projects: {},
-    projectsError: {},    groupGen: {},
+    groupGen: {},
     groupPages: {},
     groupActivity: {},
     jobs: {},
@@ -259,6 +267,7 @@ function initial(): State {
     approvals: {},
     drafts: {},
     settings: { revision: 0, settings: EMPTY_SETTINGS },
+    locale: initialLocale,
     globalRules: { rules: null, error: null, busy: false },
     page: "main",
     knowledge: { category: "all", q: "", kind: "", assistantId: "", entries: [], collections: [], collectionsLoaded: false, hasMore: false, loading: false, error: null },
@@ -270,6 +279,7 @@ function initial(): State {
     profiles: {},
     groupProfiles: {},
     assistantSkills: {},
+    visibleSkills: {},
     sidebarJobs: {},
     sidebarFiles: {},
     sel: null, // 没选中对话就是首页
@@ -335,7 +345,7 @@ let state: State = initial();
 function mobileWantsChat(): boolean {
   if (bootRoute.sel) return true;
   if (MOCK) return SCENE_UI[scene].mobile === "chat";
-  return !!params.get("a") || window.innerWidth >= 768;
+  return !!params.get("a") || !isNarrow();
 }
 let themeExplicit = MOCK || themeFromUrl || storedTheme() !== null;
 const listeners = new Set<() => void>();
@@ -355,6 +365,37 @@ export function useApp(): State {
   return useSyncExternalStore(subscribe, getState, getState);
 }
 
+/**
+ * 只订阅状态里的一部分：pick 出来的东西没变就不重渲染。
+ * 外面的 store 每次 set 都换一个新对象，useApp 的人全都跟着重画；
+ * 手机首页那种几千个节点的列表，切页改的只是 mobile/gsel，不该跟着重画一遍。
+ * pick 要稳定（放模块顶层），返回的要么是原样的引用（数组、对象），要么是浅比较比值。
+ */
+export function useAppSelect<T>(pick: (s: State) => T, eq: (a: T, b: T) => boolean = Object.is): T {
+  const cache = useRef<{ state: State; value: T } | null>(null);
+  const read = () => {
+    const hit = cache.current;
+    if (hit && hit.state === state) return hit.value;
+    const next = pick(state);
+    if (hit && eq(hit.value, next)) {
+      // 值没变：沿用原来那份，React 比到同一个引用就跳过这次渲染
+      cache.current = { state, value: hit.value };
+      return hit.value;
+    }
+    cache.current = { state, value: next };
+    return next;
+  };
+  return useSyncExternalStore(subscribe, read, read);
+}
+
+/** 浅比较：pick 出来的字段逐个比。 */
+export function shallow<T extends object>(a: T, b: T): boolean {
+  if (Object.is(a, b)) return true;
+  const ka = Object.keys(a) as (keyof T)[];
+  if (ka.length !== Object.keys(b).length) return false;
+  return ka.every((k) => Object.is(a[k], b[k]));
+}
+
 function errText(e: unknown): string {
   if (e instanceof ApiError) return e.message;
   return e instanceof Error ? e.message : String(e);
@@ -366,12 +407,31 @@ function index<T extends { id: string }>(list: T[]): Record<string, T> {
   return out;
 }
 
+/** 把这一页带来的任务/确认并进总表；一条都没有就把原来那张表原样返回，
+ *  免得整张表换新、首页每一行都跟着重画一遍。 */
+export function mergePage<T extends { id: string }>(base: Record<string, T>, list: T[] | undefined): Record<string, T> {
+  return list && list.length ? { ...base, ...index(list) } : base;
+}
+
 function upsert<T extends { id: string }>(list: T[], item: T): T[] {
   const i = list.findIndex((x) => x.id === item.id);
   if (i < 0) return [...list, item];
   const next = list.slice();
   next[i] = item;
   return next;
+}
+
+function applyLocale(locale: Locale) {
+  setSharedLocale(locale);
+  if (typeof document !== "undefined" && document.documentElement) document.documentElement.lang = locale;
+  localStorage.setItem(LOCALE_KEY, locale);
+}
+
+/** 换界面语言；登录页还没登录，只换本机显示，登录后由 bootstrap 存进设置。 */
+export function setLocale(locale: Locale, save = true) {
+  applyLocale(locale);
+  set({ locale });
+  if (save) void saveSettings({ general: { locale } });
 }
 
 function mergeSettings(base: Settings, patch: SettingsPatch): Settings {
@@ -412,11 +472,15 @@ export function saveSettings(patch: SettingsPatch | ((settings: SettingsFile["se
 async function writeSettings(patch: SettingsPatch): Promise<boolean> {
   const before = state.settings;
   const optimistic: SettingsFile = { revision: before.revision, settings: mergeSettings(before.settings, patch) };
-  set({ settings: optimistic, theme: optimistic.settings.general.theme });
+  const optimisticLocale = optimistic.settings.general.locale;
+  set({ settings: optimistic, ...(optimisticLocale ? { locale: optimisticLocale } : {}), theme: optimistic.settings.general.theme });
+  if (optimisticLocale) applyLocale(optimisticLocale);
   if (patch.general?.theme) applyTheme(patch.general.theme);
   try {
     const next = await api.putSettings(before.revision, patch);
-    set({ settings: next, theme: next.settings.general.theme });
+    const nextLocale = next.settings.general.locale;
+    set({ settings: next, ...(nextLocale ? { locale: nextLocale } : {}), theme: next.settings.general.theme });
+    if (nextLocale) applyLocale(nextLocale);
     applyTheme(next.settings.general.theme);
     if (patch.models) refreshGroupProfiles();
     localStorage.setItem(THEME_KEY, next.settings.general.theme);
@@ -425,15 +489,16 @@ async function writeSettings(patch: SettingsPatch): Promise<boolean> {
     if (e instanceof ApiError && e.status === 409) {
       try {
         const fresh = await api.settings();
-        set({ settings: fresh, theme: fresh.settings.general.theme });
-        applyTheme(fresh.settings.general.theme);
+        const freshLocale = fresh.settings.general.locale;
+        set({ settings: fresh, ...(freshLocale ? { locale: freshLocale } : {}), theme: fresh.settings.general.theme });
+        if (freshLocale) applyLocale(freshLocale);
       } catch {
         set({ settings: before });
       }
-      set({ notice: "设置已在别处修改，已刷新" });
+      set({ notice: t("设置已在别处修改，已刷新") });
       return false;
     }
-    set({ settings: before, theme: before.settings.general.theme, notice: `保存失败：${errText(e)}` });
+    set({ settings: before, theme: before.settings.general.theme, notice: t("保存失败：{error}", { error: errText(e) }) });
     applyTheme(before.settings.general.theme);
     return false;
   }
@@ -452,7 +517,7 @@ export async function loadAbout() {
   try {
     return await api.about();
   } catch (e) {
-    set({ notice: `无法读取版本信息：${errText(e)}` });
+    set({ notice: t("无法读取版本信息：{error}", { error: errText(e) }) });
     return null;
   }
 }
@@ -462,7 +527,7 @@ export async function loadUsage(): Promise<{ ok: true; view: UsageView } | { ok:
   try {
     return { ok: true, view: await api.usage() };
   } catch (e) {
-    return { ok: false, error: `无法读取消耗统计：${errText(e)}` };
+    return { ok: false, error: t("无法读取消耗统计：{error}", { error: errText(e) }) };
   }
 }
 
@@ -482,7 +547,7 @@ export async function loadModels(): Promise<ModelsView | null> {
   try {
     return await api.models();
   } catch (e) {
-    set({ notice: `无法读取模型列表：${errText(e)}` });
+    set({ notice: t("无法读取模型列表：{error}", { error: errText(e) }) });
     return null;
   }
 }
@@ -496,7 +561,7 @@ export async function loadRules() {
     const { rules } = await api.rules();
     if (generation === rulesGeneration) set((s) => ({ globalRules: { ...s.globalRules, rules, error: null } }));
   } catch (e) {
-    if (generation === rulesGeneration) set((s) => ({ globalRules: { ...s.globalRules, error: `无法读取全局规则：${errText(e)}` } }));
+    if (generation === rulesGeneration) set((s) => ({ globalRules: { ...s.globalRules, error: t("无法读取全局规则：{error}", { error: errText(e) }) } }));
   }
 }
 
@@ -509,7 +574,7 @@ export async function saveRules(rules: { id?: string; text: string; mode: Rule["
     set({ globalRules: { rules: saved.rules, error: null, busy: false } });
     return true;
   } catch (e) {
-    set((s) => ({ globalRules: { ...s.globalRules, busy: false, error: `保存失败：${errText(e)}` } }));
+    set((s) => ({ globalRules: { ...s.globalRules, busy: false, error: t("保存失败：{error}", { error: errText(e) }) } }));
     return false;
   }
 }
@@ -627,6 +692,7 @@ export const loadSkills = () => api.skills();
 export const loadSkillImports = (source: import("../../shared/skills.ts").SkillImportSource) => api.skillsImport(source);
 export const importSelectedSkills = (source: import("../../shared/skills.ts").SkillImportSource, ids: string[], overwrite: boolean) => api.importSkills(source, ids, overwrite);
 export const deleteSkill = (id: string) => api.deleteSkill(id);
+export const rollbackGeneralSkill = (name: string) => api.rollbackGeneralSkill(name);
 export const loadDesktop = () => api.desktop();
 export async function saveDesktop(body: { revision: number; url: string; enabled: boolean; token?: string }) {
   const view = await api.saveDesktop(body);
@@ -676,7 +742,7 @@ export async function loadImageKey(): Promise<ImageKeyView | null> {
   try {
     return await api.imageKey();
   } catch (e) {
-    set({ notice: `无法读取图像生成设置：${errText(e)}` });
+    set({ notice: t("无法读取图像生成设置：{error}", { error: errText(e) }) });
     return null;
   }
 }
@@ -697,7 +763,7 @@ export async function saveImage(
       } catch {
         /* 拉不到就等下一次操作 */
       }
-      return { ok: false, error: "设置已在别处修改，已刷新，请重新保存", conflict: true };
+      return { ok: false, error: t("设置已在别处修改，已刷新，请重新保存"), conflict: true };
     }
     return { ok: false, error: errText(e), conflict: false };
   }
@@ -711,7 +777,7 @@ export async function testImage(body: {
   try {
     return await api.imageTest(body);
   } catch (e) {
-    return { ok: false, error: `生成测试图片的请求失败：${errText(e)}` };
+    return { ok: false, error: t("生成测试图片的请求失败：{error}", { error: errText(e) }) };
   }
 }
 
@@ -726,7 +792,7 @@ export async function loadMemory(): Promise<MemoryResult> {
   try {
     return { ok: true, config: await api.memory() };
   } catch (e) {
-    return { ok: false, error: `无法读取记忆设置：${errText(e)}` };
+    return { ok: false, error: t("无法读取记忆设置：{error}", { error: errText(e) }) };
   }
 }
 
@@ -752,7 +818,7 @@ export async function testMemoryLore(body: { baseUrl?: string; token?: string })
   try {
     return { ok: true as const, result: await api.loreTest(body) };
   } catch (e) {
-    return { ok: false as const, error: `测试请求失败：${errText(e)}` };
+    return { ok: false as const, error: t("测试请求失败：{error}", { error: errText(e) }) };
   }
 }
 
@@ -782,7 +848,7 @@ export async function loadPush(): Promise<PushResult> {
   try {
     return { ok: true, view: await api.push() };
   } catch (e) {
-    return { ok: false, error: `无法读取推送设置：${errText(e)}` };
+    return { ok: false, error: t("无法读取推送设置：{error}", { error: errText(e) }) };
   }
 }
 
@@ -798,7 +864,7 @@ export async function connectPush(): Promise<PushResult> {
       view: await api.subscribePush(subscribed.subscription, deviceLabel(navigator.userAgent)),
     };
   } catch (e) {
-    return { ok: false, error: `订阅推送失败：${errText(e)}` };
+    return { ok: false, error: t("订阅推送失败：{error}", { error: errText(e) }) };
   }
 }
 
@@ -815,7 +881,7 @@ export async function disconnectPush(): Promise<PushResult> {
     }
     return removePushDevice(subscription?.endpoint ?? (await currentEndpointFromServer()));
   } catch (e) {
-    return { ok: false, error: `关闭推送失败：${errText(e)}` };
+    return { ok: false, error: t("关闭推送失败：{error}", { error: errText(e) }) };
   }
 }
 
@@ -830,7 +896,7 @@ export async function removePushDevice(endpoint: string): Promise<PushResult> {
   try {
     return { ok: true, view: await api.unsubscribePush(endpoint) };
   } catch (e) {
-    return { ok: false, error: `删除设备失败：${errText(e)}` };
+    return { ok: false, error: t("删除设备失败：{error}", { error: errText(e) }) };
   }
 }
 
@@ -853,7 +919,9 @@ function applyTheme(theme: Theme) {
   const { dark } = resolveTheme(theme, darkQuery.matches);
   document.documentElement.classList.toggle("dark", dark);
   document.documentElement.style.colorScheme = dark ? "dark" : "light";
-  updateStatusColor(state, window.innerWidth < 768);
+  updateManifest(dark);
+  // 冷启动时 innerWidth 可能还不准（见 index.html），手机按屏幕宽度认
+  updateStatusColor(state, isNarrow());
 }
 
 export function setTheme(theme: Theme) {
@@ -900,7 +968,7 @@ export async function login(password: string) {
   } catch (e) {
     set({
       loggingIn: false,
-      error: e instanceof ApiError && e.status === 401 ? "密码不正确" : `登录失败：${errText(e)}`,
+      error: e instanceof ApiError && e.status === 401 ? t("密码不正确") : t("登录失败：{error}", { error: errText(e) }),
     });
     return;
   }
@@ -926,7 +994,7 @@ async function loadGroups() {
   try {
     set({ groups: await api.groups() });
   } catch (e) {
-    set({ notice: `无法加载群：${errText(e)}，稍后自动重试` });
+    set({ notice: t("无法加载群：{error}，稍后自动重试", { error: errText(e) }) });
     groupRetry = setTimeout(() => void loadGroups(), 5000);
   }
 }
@@ -944,8 +1012,15 @@ async function loadBootstrap(reconnect = false) {
       routines: boot.routines,
       approvals: index(boot.approvals),
       settings: boot.settings,
+      ...(boot.settings.settings.general.locale ? { locale: boot.settings.settings.general.locale } : {}),
       theme: boot.settings.settings.general.theme,
     });
+    applyLocale(boot.settings.settings.general.locale ?? state.locale);
+    // 新装还没定界面语言：存下现在显示的语言，服务端这时才按它建默认规则和敏捷团队
+    if (!boot.settings.settings.general.locale) {
+      // 默认内容是存下语言时才建的，建完重拉一遍，界面上的助手和群才是新建的那份
+      void saveSettings({ general: { locale: state.locale } }).then((saved) => { if (saved) void loadBootstrap(true); });
+    }
     applyTheme(boot.settings.settings.general.theme);
     localStorage.setItem(THEME_KEY, boot.settings.settings.general.theme);
     if (!stopEvents) {
@@ -969,7 +1044,7 @@ async function loadBootstrap(reconnect = false) {
     await loadGroups();
     // 实时连接断了又连上：只补拉正看着的对话，不换页、不收右栏，正在打字的输入框和引用都留着
     if (reconnect) {
-      if (state.gsel) await Promise.all([loadGroupItems(state.gsel), loadProjects(state.gsel, true)]);
+      if (state.gsel) await loadGroupItems(state.gsel);
       else if (state.sel) await Promise.all([loadItems(state.sel), loadProfile(state.sel)]);
     }
     // 群地址代表综合时间线；手机刷新也应直接回到综合。
@@ -998,7 +1073,7 @@ export function applyEvent(ev: HobEvent) {
       const first = !state.livePages[ev.callId];
       set((s) => ({
         livePages: { ...s.livePages, [ev.callId]: ev },
-        ...(shouldOpenLive(ev, { seen: !first, closed: closedLivePages.has(ev.callId), assistantId: s.sel, inChat: s.page === "main" && (s.mobile === "chat" || !window.matchMedia("(max-width: 767px)").matches) })
+        ...(shouldOpenLive(ev, { seen: !first, closed: closedLivePages.has(ev.callId), assistantId: s.sel, inChat: s.page === "main" && (s.mobile === "chat" || !isNarrow()) })
           ? { panelStack: pushPage(s.panelStack, { kind: "file", path: "", full: false, liveId: ev.callId }) } : {}),
       }));
       break;
@@ -1094,9 +1169,10 @@ export function applyEvent(ev: HobEvent) {
       }));
       break;
     case "skills":
+      // 通用技能变了（改、删、新建、换进换出）对所有助手都成立：事件里的和已经拉过的清单全部重拉
       void loadAssistantSkills(ev.assistantId);
-      // 事件只带助手：群的技能（沉淀、改、删）也可能变了，已加载过的群一起重拉
-      for (const id of Object.keys(state.assistantSkills)) if (state.groups.some((group) => group.id === id)) void loadAssistantSkills(id);
+      for (const id of Object.keys(state.assistantSkills)) if (id !== ev.assistantId) void loadAssistantSkills(id);
+      for (const key of Object.keys(state.visibleSkills)) void loadVisibleSkills(key.slice(0, key.indexOf(":")), key.slice(key.indexOf(":") + 1) || undefined);
       break;
     case "group": {
       // 正看着这个群：新消息直接算已读，不亮未读
@@ -1153,9 +1229,6 @@ export function applyEvent(ev: HobEvent) {
         return { groupActivity: { ...s.groupActivity, [ev.groupId]: current } };
       });
       break;
-    case "project":
-      set((s) => ({ projects: { ...s.projects, [ev.project.groupId]: upsertProject(s.projects[ev.project.groupId], ev.project) } }));
-      break;
     case "knowledge":
       collectionsVersion++;
       set((s) => ({ knowledge: { ...s.knowledge, collectionsLoaded: false } }));
@@ -1179,11 +1252,6 @@ function withoutActivity(map: State["groupActivity"], groupId: string, speaker: 
   return { ...map, [groupId]: current };
 }
 
-/** 事项按 id 替换，新的在前面（按更新时间）。 */
-function upsertProject(list: Project[] | undefined, project: Project): Project[] {
-  return [...(list ?? []).filter((item) => item.id !== project.id), project].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-}
-
 /** 页面在前台就不推（服务端根据这个决定）。只存内存，SSE 断开会自动清掉。 */
 function reportVisibility(): void {
   void api.visibility(CLIENT_ID, document.visibilityState === "visible").catch(() => undefined);
@@ -1202,11 +1270,11 @@ function reportVisibility(): void {
 
 /** 用户正看着这个助手的对话：页面在前台、在主界面，手机上要进了对话页。 */
 function viewing(id: string): boolean {
-  return state.sel === id && state.page === "main" && globalThis.document?.visibilityState === "visible" && (window.innerWidth >= 768 || state.mobile === "chat");
+  return state.sel === id && state.page === "main" && globalThis.document?.visibilityState === "visible" && (!isNarrow() || state.mobile === "chat");
 }
 
 function viewingGroup(id: string): boolean {
-  return state.gsel === id && state.page === "main" && globalThis.document?.visibilityState === "visible" && (window.innerWidth >= 768 || state.mobile === "chat");
+  return state.gsel === id && state.page === "main" && globalThis.document?.visibilityState === "visible" && (!isNarrow() || state.mobile === "chat");
 }
 
 function watchVisibility(): void {
@@ -1244,7 +1312,7 @@ function dropGroupPrefs(id: string) {
 }
 
 /** 建群：建好直接进这个群。 */
-export async function createGroup(body: { name: string; purpose: string; ownerId: string; members: string[]; workflow?: WorkflowId | null }): Promise<string | null> {
+export async function createGroup(body: { name: string; purpose: string; ownerId: string; members: string[] }): Promise<string | null> {
   try {
     const group = await api.createGroup(body);
     set((s) => ({ groups: upsert(s.groups, { ...group, unread: 0, busy: [] }) }));
@@ -1255,7 +1323,7 @@ export async function createGroup(body: { name: string; purpose: string; ownerId
   }
 }
 
-/** 改群（名字、负责什么、成员、群主、工作方式）；列表由 group 事件刷新。 */
+/** 改群（名字、负责什么、成员、群主）；列表由 group 事件刷新。 */
 export async function patchGroup(id: string, patch: Parameters<HobApi["patchGroup"]>[1]): Promise<string | null> {
   try {
     await api.patchGroup(id, patch);
@@ -1285,7 +1353,7 @@ export async function openTopic(groupId: string, title: string): Promise<string 
   }
 }
 
-/** 关闭话题：里面没结束的事项按放弃处理，服务端会给原因。 */
+/** 关闭话题：里面没做完的待办一起关，服务端会给原因。 */
 export async function closeTopic(id: string, note?: string): Promise<string | null> {
   try {
     const topic = await api.closeTopic(id, note ? { note } : undefined);
@@ -1312,7 +1380,7 @@ export async function archiveGroup(id: string) {
   try {
     await api.archiveGroup(id);
   } catch (e) {
-    set({ notice: `结束群失败：${errText(e)}` });
+    set({ notice: t("结束群失败：{error}", { error: errText(e) }) });
   }
 }
 
@@ -1320,7 +1388,7 @@ export async function stopGroup(id: string) {
   try {
     await api.stopGroup(id);
   } catch (e) {
-    set({ notice: `停止失败：${errText(e)}` });
+    set({ notice: t("停止失败：{error}", { error: errText(e) }) });
   }
 }
 
@@ -1336,7 +1404,7 @@ export function pendingKeyOf(s: State): string | null {
 export async function selectGroup(id: string, nav = true, keepStack = false, forceChat = false) {
   const previous = state.gsel ?? state.sel;
   const group = state.groups.find((x) => x.id === id);
-  const narrow = window.innerWidth < 768;
+  const narrow = isNarrow();
   const opensTopics = !forceChat && narrow && Boolean(group && !group.parentId);
   set((s) => ({
     gsel: id,
@@ -1352,7 +1420,6 @@ export async function selectGroup(id: string, nav = true, keepStack = false, for
     void api.markGroupRead(id).catch(() => {});
   }
   await loadGroupItems(id);
-  void loadProjects(id, true);
 }
 
 /** 手机上从话题列表进综合：还是这个群，手机切到对话页。 */
@@ -1370,12 +1437,12 @@ export async function openNoteGroup(id: string) {
       group = groups.find((entry) => entry.id === id);
     }
     if (!group || group.parentId) {
-      set({ notice: "目标群不可用" });
+      set({ notice: t("目标群不可用") });
       return;
     }
     await openGroupHome(id);
   } catch (e) {
-    set({ notice: `无法打开目标群：${errText(e)}` });
+    set({ notice: t("无法打开目标群：{error}", { error: errText(e) }) });
   }
 }
 
@@ -1432,16 +1499,16 @@ async function loadItems(id: string) {
       items: { ...s.items, [id]: page.items },
       itemGen: { ...s.itemGen, [id]: (s.itemGen[id] ?? 0) + 1 },
       itemPages: { ...s.itemPages, [id]: { hasMore: page.hasMore, loading: false, error: null } },
-      jobs: { ...s.jobs, ...index(page.jobs) },
-      approvals: { ...s.approvals, ...index(page.approvals) },
-      drafts: { ...s.drafts, ...index(page.drafts) },
-      delegations: { ...s.delegations, ...index(page.delegations ?? []) },
+      jobs: mergePage(s.jobs, page.jobs),
+      approvals: mergePage(s.approvals, page.approvals),
+      drafts: mergePage(s.drafts, page.drafts),
+      delegations: mergePage(s.delegations, page.delegations ?? []),
     }));
     for (const event of events) applyEvent(event);
   } catch (e) {
     if (itemRequests.get(id) !== request) return;
     itemEvents.delete(id);
-    set({ notice: `无法加载对话：${errText(e)}` });
+    set({ notice: t("无法加载对话：{error}", { error: errText(e) }) });
   }
 }
 
@@ -1496,32 +1563,14 @@ async function loadGroupItems(id: string) {
       groupItems: { ...s.groupItems, [id]: page.items },
       groupGen: { ...s.groupGen, [id]: (s.groupGen[id] ?? 0) + 1 },
       groupPages: { ...s.groupPages, [id]: { hasMore: page.hasMore, loading: false, error: null } },
-      jobs: { ...s.jobs, ...index(page.jobs) },
-      approvals: { ...s.approvals, ...index(page.approvals) },
+      jobs: mergePage(s.jobs, page.jobs),
+      approvals: mergePage(s.approvals, page.approvals),
     }));
     for (const event of events) applyEvent(event);
   } catch (e) {
     if (groupRequests.get(id) !== request) return;
     groupEvents.delete(id);
-    set({ notice: `无法加载群消息：${errText(e)}` });
-  }
-}
-
-const projectRequests = new Map<string, number>();
-
-/** 拉这个群的事项（新的在前）；silent 表示后台拉，用户正在输消息时不打扰。 */
-export async function loadProjects(gid: string, silent = false): Promise<void> {
-  const request = (projectRequests.get(gid) ?? 0) + 1;
-  projectRequests.set(gid, request);
-  try {
-    const list = await api.projects(gid);
-    if (projectRequests.get(gid) !== request) return;
-    set((s) => ({ projects: { ...s.projects, [gid]: list }, projectsError: { ...s.projectsError, [gid]: null } }));
-  } catch (e) {
-    if (projectRequests.get(gid) !== request) return;
-    const message = errText(e);
-    if (silent) set((s) => ({ projectsError: { ...s.projectsError, [gid]: message } }));
-    else set({ notice: `无法加载事项：${message}` });
+    set({ notice: t("无法加载群消息：{error}", { error: errText(e) }) });
   }
 }
 
@@ -1560,7 +1609,7 @@ export async function loadProfile(id: string) {
     const p = await api.profile(id);
     set((s) => ({ profiles: { ...s.profiles, [id]: p } }));
   } catch (e) {
-    set({ notice: `无法加载档案：${errText(e)}` });
+    set({ notice: t("无法加载档案：{error}", { error: errText(e) }) });
   }
 }
 
@@ -1697,17 +1746,6 @@ export async function send() {
   await deliver(p);
 }
 
-/** 事项页底部的补充说明：发到群里并引用那张事项卡，所以轮到群主；不点成员的话就由它接。 */
-export async function sendProjectNote(groupId: string, project: Project, text: string): Promise<string | null> {
-  try {
-    const sent = await api.sendGroupMessage(groupId, { text, quote: { itemId: project.itemId, text: `事项「${project.title}」` } });
-    set((s) => ({ groupItems: { ...s.groupItems, [groupId]: mergeItems(s.groupItems[groupId] ?? [], sent.item) as GroupItem[] } }));
-    return null;
-  } catch (e) {
-    return errText(e);
-  }
-}
-
 /** 点了「未送达」的重试。 */export function retryPending(p: PendingMessage) {
   void deliver(p);
 }
@@ -1740,7 +1778,7 @@ export async function stopAssistant(id: string) {
   try {
     await api.stopAssistant(id);
   } catch (e) {
-    set({ notice: `停止失败：${errText(e)}` });
+    set({ notice: t("停止失败：{error}", { error: errText(e) }) });
   }
 }
 
@@ -1768,7 +1806,7 @@ export async function answer(approvalId: string, answer: AnswerApprovalBody) {
     await api.answerApproval(approvalId, answer);
     return true;
   } catch (e) {
-    set({ approvals: { ...state.approvals, [approvalId]: ap }, notice: `提交失败：${errText(e)}` });
+    set({ approvals: { ...state.approvals, [approvalId]: ap }, notice: t("提交失败：{error}", { error: errText(e) }) });
     return false;
   }
 }
@@ -1777,7 +1815,7 @@ export async function createDraft(id: string) {
   try {
     await api.createDraft(id);
   } catch (e) {
-    set({ notice: `创建助手失败：${errText(e)}` });
+    set({ notice: t("创建助手失败：{error}", { error: errText(e) }) });
   }
 }
 
@@ -1785,7 +1823,7 @@ export async function dismissDraft(id: string) {
   try {
     await api.dismissDraft(id);
   } catch (e) {
-    set({ notice: `撤销失败：${errText(e)}` });
+    set({ notice: t("撤销失败：{error}", { error: errText(e) }) });
   }
 }
 
@@ -1796,7 +1834,7 @@ export async function archiveAssistant(id: string) {
     const primary = state.assistants.find((a) => a.primary);
     if (state.sel === id && primary) await select(primary.id);
   } catch (e) {
-    set({ notice: `归档失败：${errText(e)}` });
+    set({ notice: t("归档失败：{error}", { error: errText(e) }) });
   }
 }
 
@@ -1804,7 +1842,7 @@ export async function archiveAssistant(id: string) {
 
 export async function retryDelegation(id: string) {
   try { await api.retryDelegation(id); }
-  catch (e) { set({ notice: `重新转交失败：${errText(e)}` }); }
+  catch (e) { set({ notice: t("重新转交失败：{error}", { error: errText(e) }) }); }
 }
 
 export async function jumpToHandback(assistantId: string, id: string, forwarded: boolean) {
@@ -1829,9 +1867,9 @@ async function jumpToLink(assistantId: string, id: string, kind: "forward" | "de
   if (state.sel !== assistantId || !state.items[assistantId]) await select(assistantId);
   const matches = (item: Item) => kind === "forward" ? item.kind === "user" && item.from?.delegationId === id : kind === "handback" ? item.kind === "note" && item.handbackId === id : item.kind === "delegation" && item.delegationId === id;
   try {
-    if (!await findConversationItem(assistantId, matches)) { set({ notice: "未找到对应的转交消息" }); return; }
+    if (!await findConversationItem(assistantId, matches)) { set({ notice: t("未找到对应的转交消息") }); return; }
     requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById(`${kind}-${id}`)?.scrollIntoView({ block: "center", behavior: "smooth" })));
-  } catch (e) { set({ notice: `无法定位转交消息：${errText(e)}` }); }
+  } catch (e) { set({ notice: t("无法定位转交消息：{error}", { error: errText(e) }) }); }
 }
 
 export async function replyJob(jobId: string, text: string): Promise<boolean> {
@@ -1839,7 +1877,7 @@ export async function replyJob(jobId: string, text: string): Promise<boolean> {
     await api.replyJob(jobId, text);
     return true;
   } catch (e) {
-    set({ notice: `发送失败：${errText(e)}` });
+    set({ notice: t("发送失败：{error}", { error: errText(e) }) });
     return false;
   }
 }
@@ -1848,7 +1886,7 @@ export async function stopJob(jobId: string) {
   try {
     await api.stopJob(jobId);
   } catch (e) {
-    set({ notice: `停止失败：${errText(e)}` });
+    set({ notice: t("停止失败：{error}", { error: errText(e) }) });
   }
 }
 
@@ -1876,6 +1914,20 @@ export async function loadAssistantSkills(id: string) {
   }
 }
 
+const visibleSkillLoads: Record<string, number> = {};
+/** 定时任务的技能下拉要的：本群、自己的、通用（含只读）。 */
+export async function loadVisibleSkills(assistantId: string, groupId?: string) {
+  const key = `${assistantId}:${groupId ?? ""}`;
+  const generation = visibleSkillLoads[key] = (visibleSkillLoads[key] ?? 0) + 1;
+  set((s) => ({ visibleSkills: { ...s.visibleSkills, [key]: { skills: s.visibleSkills[key]?.skills ?? [], loaded: s.visibleSkills[key]?.loaded ?? false, loading: true, error: null } } }));
+  try {
+    const skills = await api.visibleSkills(assistantId, groupId);
+    if (visibleSkillLoads[key] === generation) set((s) => ({ visibleSkills: { ...s.visibleSkills, [key]: { skills, loaded: true, loading: false, error: null } } }));
+  } catch (e) {
+    if (visibleSkillLoads[key] === generation) set((s) => ({ visibleSkills: { ...s.visibleSkills, [key]: { skills: s.visibleSkills[key]?.skills ?? [], loaded: s.visibleSkills[key]?.loaded ?? false, loading: false, error: errText(e) } } }));
+  }
+}
+
 export async function changeAssistantSkill(id: string, name: string, action: "enable" | "disable" | "rollback" | "delete") {
   try {
     const group = state.groups.some((item) => item.id === id);
@@ -1883,13 +1935,13 @@ export async function changeAssistantSkill(id: string, name: string, action: "en
     else if (action === "delete") await (group ? api.deleteGroupSkill(id, name) : api.deleteAssistantSkill(id, name));
     else await (group ? api.patchGroupSkill(id, name, action === "enable") : api.patchAssistantSkill(id, name, action === "enable"));
     await loadAssistantSkills(id);
-  } catch (e) { set({ notice: `操作失败：${errText(e)}` }); }
+  } catch (e) { set({ notice: t("操作失败：{error}", { error: errText(e) }) }); }
 }
 
 export async function sedimentJob(id: string) {
   try { await api.sedimentJob(id); return true; }
   catch (e) {
-    set({ notice: `沉淀失败：${errText(e)}` });
+    set({ notice: t("沉淀失败：{error}", { error: errText(e) }) });
     return false;
   }
 }
@@ -1904,7 +1956,7 @@ export async function saveRoutine(id: string, patch: Omit<Partial<Routine>, "ski
   try {
     await api.patchRoutine(id, patch);
   } catch (e) {
-    set({ routines: state.routines.map((r) => (r.id === id ? before : r)), notice: `保存失败：${errText(e)}` });
+    set({ routines: state.routines.map((r) => (r.id === id ? before : r)), notice: t("保存失败：{error}", { error: errText(e) }) });
   }
 }
 
@@ -1913,7 +1965,7 @@ export async function createRoutine(body: Omit<Routine, "id" | "createdAt" | "ru
     const { routine } = await api.createRoutine(body);
     set((s) => ({ routines: upsert(s.routines, routine), panelStack: replacePage(s.panelStack, { kind: "routine", id: routine.id }) }));
   } catch (e) {
-    set({ notice: `创建失败：${errText(e)}` });
+    set({ notice: t("创建失败：{error}", { error: errText(e) }) });
   }
 }
 
@@ -1921,18 +1973,18 @@ export async function deleteRoutine(id: string) {
   try {
     await api.deleteRoutine(id);
   } catch (e) {
-    set({ notice: `删除失败：${errText(e)}` });
+    set({ notice: t("删除失败：{error}", { error: errText(e) }) });
   }
 }
 
 export async function runRoutine(id: string) {
   try {
     const result = await api.runRoutine(id);
-    if (result?.outcome === "quiet") set({ notice: "检查过了，没有变化" });
-    else if (result?.outcome === "failed") set({ notice: `检查失败：${result.reason ?? "原因未知"}` });
-    else if (result?.outcome === "notify") set({ notice: "检查有新内容，已发到对话" });
+    if (result?.outcome === "quiet") set({ notice: t("检查过了，没有变化") });
+    else if (result?.outcome === "failed") set({ notice: t("检查失败：{error}", { error: result.reason ?? t("原因未知") }) });
+    else if (result?.outcome === "notify") set({ notice: t("检查有新内容，已发到对话") });
   } catch (e) {
-    set({ notice: `运行失败：${errText(e)}` });
+    set({ notice: t("运行失败：{error}", { error: errText(e) }) });
   }
 }
 
@@ -1941,7 +1993,7 @@ export async function runRoutine(id: string) {
 export async function patchAssistant(id: string, patch: Partial<Assistant>) {
   const before = state.assistants.find((a) => a.id === id);
   const beforeProfile = state.profiles[id];
-  if (!before) return "助手不存在。";
+  if (!before) return t("助手不存在。");
   set((s) => ({
     assistants: s.assistants.map((a) => (a.id === id ? { ...a, ...patch } : a)),
     profiles: s.profiles[id]
@@ -1956,7 +2008,7 @@ export async function patchAssistant(id: string, patch: Partial<Assistant>) {
     if (patch.models) refreshGroupProfiles(id);
     return null;
   } catch (e) {
-    const message = `保存失败：${errText(e)}`;
+    const message = t("保存失败：{error}", { error: errText(e) });
     set((s) => ({
       assistants: s.assistants.map((a) => (a.id === id ? before : a)),
       profiles: beforeProfile ? { ...s.profiles, [id]: beforeProfile } : s.profiles,
@@ -2013,7 +2065,7 @@ export async function savePinOrder(ids: string[]): Promise<string | null> {
   const failed = changed.filter((_, index) => results[index]?.status === "rejected");
   if (!failed.length) return null;
   const first = results.find((result) => result.status === "rejected");
-  const message = `保存失败：${errText(first?.status === "rejected" ? first.reason : "未知错误")}`;
+  const message = t("保存失败：{error}", { error: errText(first?.status === "rejected" ? first.reason : t("未知错误")) });
   set((s) => ({
     assistants: s.assistants.map((a) => failed.some((entry) => entry.id === a.id) ? before.find((old) => old.id === a.id) ?? a : a),
     notice: message,
@@ -2024,11 +2076,11 @@ export async function savePinOrder(ids: string[]): Promise<string | null> {
 export async function addRule(assistantId: string, text: string, mode: "ask" | "allow"): Promise<string | null> {
   if (state.groups.some((group) => group.id === assistantId)) {
     try { await api.patchGroup(assistantId, { rule: { text, mode } }); await loadGroupProfile(assistantId); return null; }
-    catch (e) { return `保存失败：${errText(e)}`; }
+    catch (e) { return t("保存失败：{error}", { error: errText(e) }); }
   }
   try {
     const result = await api.patchAssistant(assistantId, { rule: { text, mode } });
-    if (!result?.rule) throw new Error("保存响应缺少规则。");
+    if (!result?.rule) throw new Error(t("保存响应缺少规则。"));
     const rule = result.rule;
     set((s) => {
       const profile = s.profiles[assistantId];
@@ -2037,14 +2089,14 @@ export async function addRule(assistantId: string, text: string, mode: "ask" | "
     });
     return null;
   } catch (e) {
-    return `保存失败：${errText(e)}`;
+    return t("保存失败：{error}", { error: errText(e) });
   }
 }
 
 export async function updateRule(assistantId: string, rule: { id: string; text?: string; mode?: "ask" | "allow" }): Promise<string | null> {
   if (state.groups.some((group) => group.id === assistantId)) {
     try { await api.patchGroup(assistantId, { rule }); await loadGroupProfile(assistantId); return null; }
-    catch (e) { return `保存失败：${errText(e)}`; }
+    catch (e) { return t("保存失败：{error}", { error: errText(e) }); }
   }
   try {
     await api.patchAssistant(assistantId, { rule });
@@ -2055,14 +2107,14 @@ export async function updateRule(assistantId: string, rule: { id: string; text?:
     });
     return null;
   } catch (e) {
-    return `保存失败：${errText(e)}`;
+    return t("保存失败：{error}", { error: errText(e) });
   }
 }
 
 export async function deleteRule(assistantId: string, ruleId: string) {
   if (state.groups.some((group) => group.id === assistantId)) {
     try { await api.deleteGroupRule(assistantId, ruleId); await loadGroupProfile(assistantId); }
-    catch (e) { set({ notice: `删除失败：${errText(e)}` }); }
+    catch (e) { set({ notice: t("删除失败：{error}", { error: errText(e) }) }); }
     return;
   }
   const p = state.profiles[assistantId];
@@ -2073,7 +2125,7 @@ export async function deleteRule(assistantId: string, ruleId: string) {
   try {
     await api.deleteRule(assistantId, ruleId);
   } catch (e) {
-    set({ profiles: { ...state.profiles, [assistantId]: p }, notice: `删除失败：${errText(e)}` });
+    set({ profiles: { ...state.profiles, [assistantId]: p }, notice: t("删除失败：{error}", { error: errText(e) }) });
   }
 }
 
@@ -2090,7 +2142,7 @@ export async function loadTranscript(jobId: string) {
       steps: { ...s.steps, [job.id]: s.steps[job.id] ? mergeSteps(s.steps[job.id], steps) : steps },
     }));
   } catch (e) {
-    set({ notice: `无法加载任务过程：${errText(e)}` });
+    set({ notice: t("无法加载任务过程：{error}", { error: errText(e) }) });
   }
 }
 
@@ -2132,7 +2184,7 @@ export async function loadWorklog(filter: { assistantId?: string | null; status?
     });
     if (request === worklogRequest) applyJobsPage(page, assistantId, status);
   } catch (e) {
-    if (request === worklogRequest) set({ worklog: null, notice: `无法加载任务记录：${errText(e)}` });
+    if (request === worklogRequest) set({ worklog: null, notice: t("无法加载任务记录：{error}", { error: errText(e) }) });
   }
 }
 
@@ -2152,7 +2204,7 @@ export async function moreWorklog() {
     });
     if (request === worklogRequest) applyJobsPage(page, log.assistantId, log.status);
   } catch (e) {
-    if (request === worklogRequest) set((s) => ({ worklog: s.worklog ? { ...s.worklog, loading: false } : null, notice: `无法加载更多：${errText(e)}` }));
+    if (request === worklogRequest) set((s) => ({ worklog: s.worklog ? { ...s.worklog, loading: false } : null, notice: t("无法加载更多：{error}", { error: errText(e) }) }));
   }
 }
 
@@ -2177,7 +2229,7 @@ export function newAssistant() {
   const primary = state.assistants.find((a) => a.primary);
   if (!primary) return;
   void select(primary.id);
-  set({ text: "我想创建一个专属助手，负责：", nonce: state.nonce + 1, mobile: "chat", sheet: false });
+  set({ text: t("我想创建一个专属助手，负责："), nonce: state.nonce + 1, mobile: "chat", sheet: false });
 }
 
 /** 从定时运行记录打开任务所在对话及详情。 */
@@ -2200,35 +2252,7 @@ export function openNewRoutine() {
   set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "newRoutine", groupId }) }));
 }
 
-/** 打开一个事项页（群信息、事项卡都走它）。 */
-export function openProject(groupId: string, id: string) {
-  set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "project", groupId, id }) }));
-  if (!state.projects[groupId]) void loadProjects(groupId, true);
-}
-
-/** 用户点了拆分卡片或事项页的「开始执行」：和 start_subtasks 走同一段。 */
-export async function startProject(project: Pick<Project, "groupId" | "id">): Promise<string | null> {
-  try {
-    const saved = await api.startProject(project.groupId, project.id);
-    set((s) => ({ projects: { ...s.projects, [project.groupId]: upsertProject(s.projects[project.groupId], saved) } }));
-    return null;
-  } catch (e) {
-    return errText(e);
-  }
-}
-
-/** 用户的子任务：按钮点了等服务器回来再改（不先改界面）。 */
-export async function doneSubtask(project: Project, n: number): Promise<string | null> {
-  try {
-    const saved = await api.doneSubtask(project.groupId, project.id, n);
-    set((s) => ({ projects: { ...s.projects, [project.groupId]: upsertProject(s.projects[project.groupId], saved) } }));
-    return null;
-  } catch (e) {
-    return errText(e);
-  }
-}
-
-/** 群信息里点成员：右栏推进这个助手的信息页（返回回到群信息），群聊不动。 */export function openMemberPanel(id: string) {
+export function openMemberPanel(id: string) {
   set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "member", id }) }));
   void loadProfile(id);
 }
@@ -2324,31 +2348,31 @@ export async function createKnowledgeCollection(name: string, select = true) {
     if (select) setKnowledgeFilter({ category: collection.id });
     else await loadKnowledge(false, true);
     return collection;
-  } catch (e) { set({ notice: `新建失败：${errText(e)}` }); return null; }
+  } catch (e) { set({ notice: t("新建失败：{error}", { error: errText(e) }) }); return null; }
 }
 export async function renameKnowledgeCollection(id: string, name: string) {
   try { await api.renameKnowledgeCollection(id, name.trim()); await loadKnowledge(false, true); return true; }
-  catch (e) { set({ notice: `改名失败：${errText(e)}` }); return false; }
+  catch (e) { set({ notice: t("改名失败：{error}", { error: errText(e) }) }); return false; }
 }
 export async function deleteKnowledgeCollection(id: string) {
   try {
     const { deleted } = await api.deleteKnowledgeCollection(id);
     if (state.knowledge.category === id) setKnowledgeFilter({ category: "all" });
     else await loadKnowledge(false, true);
-    set({ notice: deleted ? `已删除知识库，一起删掉 ${deleted} 个文件` : "已删除知识库" });
-  } catch (e) { set({ notice: `删除失败：${errText(e)}` }); }
+    set({ notice: deleted ? t("已删除知识库，一起删掉 {n} 个文件", { n: deleted }) : t("已删除知识库") });
+  } catch (e) { set({ notice: t("删除失败：{error}", { error: errText(e) }) }); }
 }
 export async function patchKnowledgeEntry(id: string, patch: { name?: string; collections?: string[] }) {
   try { await api.patchKnowledgeEntry(id, patch); await loadKnowledge(false, true); return true; }
-  catch (e) { set({ notice: `保存失败：${errText(e)}` }); return false; }
+  catch (e) { set({ notice: t("保存失败：{error}", { error: errText(e) }) }); return false; }
 }
 export async function deleteKnowledgeEntry(id: string) {
   try { await api.deleteKnowledgeEntry(id); await loadKnowledge(false, true); }
-  catch (e) { set({ notice: `删除失败：${errText(e)}` }); }
+  catch (e) { set({ notice: t("删除失败：{error}", { error: errText(e) }) }); }
 }
 export async function uploadKnowledge(collection: string, files: File[]) {
   try { await api.uploadKnowledge(collection, files); await loadKnowledge(false, true); }
-  catch (e) { set({ notice: `上传失败：${errText(e)}` }); }
+  catch (e) { set({ notice: t("上传失败：{error}", { error: errText(e) }) }); }
 }
 export function openKnowledge() {
   set({ page: "knowledge", panelStack: [], sheet: false });
@@ -2359,20 +2383,20 @@ export async function jumpToItem(assistantId: string, itemId: string) {
   set({ page: "main", panelStack: [] });
   await select(assistantId);
   try {
-    if (!await findConversationItem(assistantId, (item) => item.id === itemId)) { set({ notice: "未找到对应的对话消息" }); return; }
+    if (!await findConversationItem(assistantId, (item) => item.id === itemId)) { set({ notice: t("未找到对应的对话消息") }); return; }
     const deadline = performance.now() + 1500;
     const locate = () => {
       if (state.page !== "main" || state.sel !== assistantId) return;
       const el = Array.from(document.querySelectorAll<HTMLElement>("[data-item-id]")).find((node) => node.dataset.itemId === itemId);
       if (!el) {
         if (performance.now() < deadline) requestAnimationFrame(locate);
-        else set({ notice: "没能定位到这条消息" });
+        else set({ notice: t("没能定位到这条消息") });
         return;
       }
       flashItem(el);
     };
     requestAnimationFrame(locate);
-  } catch (e) { set({ notice: `无法定位对话消息：${errText(e)}` }); }
+  } catch (e) { set({ notice: t("无法定位对话消息：{error}", { error: errText(e) }) }); }
 }
 
 export function openSettings() {

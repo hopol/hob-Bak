@@ -8,12 +8,8 @@ function ok(text: string) {
   return { content: [{ type: "text" as const, text }], details: undefined };
 }
 
-/** Worker 的收尾工具：必须调用一次提交结果。验收子任务的任务另有逐条验收结果（checks）。 */
+/** Worker 的收尾工具：必须调用一次提交结果。 */
 export function registerReportTool(runtime: HobRuntime, jobId: string, sediment = false): ToolDefinition<any, any> {
-  // 验收子任务的任务才逐条交结果：别处给了这个参数也没用（不对照验收标准）
-  const job = runtime.store.job(jobId);
-  const project = job?.project && job.groupId ? runtime.store.project(job.groupId, job.project.id) : undefined;
-  const acceptance = Boolean(project?.subtasks.find((subtask) => subtask.n === job?.project?.n)?.check);
   return {
     name: "report",
     label: "提交结果",
@@ -24,21 +20,6 @@ export function registerReportTool(runtime: HobRuntime, jobId: string, sediment 
       ),
       result: Type.String({ description: "完整结果，按这个顺序写：结论；做了什么；验证了什么、怎么验证的；没验证或不确定的；需要用户决定的。带上数据、链接和文件路径，写给派活的助手。" }),
       files: Type.Optional(Type.Array(Type.String(), { description: "交给助手的文件（绝对路径），比如要给用户看的图。" })),
-      ...(acceptance
-        ? {
-            checks: Type.Optional(
-              Type.Array(
-                Type.Object({
-                  index: Type.Number({ description: "验收标准的序号，从 1 开始。" }),
-                  passed: Type.Boolean({ description: "这条通过没有。" }),
-                  evidence: Type.String({ description: "证据：命令和输出、截图、文件；不通过时写清通过不了的是什么、应该是什么。" }),
-                  files: Type.Optional(Type.Array(Type.String(), { description: "可选，证据里的文件（绝对路径）。" })),
-                }),
-                { description: "逐条验收结果，每条写验收标准的序号、是否通过、证据（说明和文件路径）。" },
-              ),
-            ),
-          }
-        : {}),
     }),
     execute: async (_id, params: any) => {
       // 不认识的结果不能当成已完成：退回让模型重新调用
@@ -54,14 +35,6 @@ export function registerReportTool(runtime: HobRuntime, jobId: string, sediment 
         const outcome = await runtime.jobs.reportSediment(jobId, String(params.result ?? ""));
         if (outcome.ok) return ok(outcome.text);
         return { content: [{ type: "text" as const, text: outcome.text }], details: undefined, isError: true };
-      }
-      // 验收结果先存进事项：序号、通过没通过、证据不对就退回，不把半份结果当成验完了
-      if (acceptance && (params.checks !== undefined || params.outcome === "done")) {
-        try {
-          runtime.projects.recordChecks(jobId, params.outcome, params.checks ?? []);
-        } catch (error) {
-          return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }], details: undefined, isError: true };
-        }
       }
       runtime.jobs.reportFromTool(jobId, {
         outcome: params.outcome,

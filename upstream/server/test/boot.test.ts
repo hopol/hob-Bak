@@ -64,6 +64,13 @@ describe("启动时把环境指向 HOB_HOME", () => {
     expect(env.PATH).toBe("/usr/bin");
   });
 
+  it("启动方式带来的 NODE_ENV 不传给任务的 shell", () => {
+    const env: NodeJS.ProcessEnv = { NODE_ENV: "production", PATH: "/usr/bin" };
+    applyEngineEnv(env, tempHome());
+    expect(env.NODE_ENV).toBeUndefined();
+    expect(env.PATH).toBe("/usr/bin");
+  });
+
   it("不碰 Hob 自己的设置和其他变量", () => {
     const env: NodeJS.ProcessEnv = { HOB_PASSWORD: "secret", HOB_HOME: "/tmp/hob", TZ: "Asia/Shanghai", OPENAI_API_KEY: "sk" };
     applyEngineEnv(env, "/tmp/hob-data");

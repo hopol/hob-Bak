@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Job, JobStep } from "../../shared/types.ts";
 import { jobProcessLines, jobView } from "../src/job-view.ts";
@@ -30,6 +30,27 @@ describe("任务查看", () => {
     expect(text).toContain("原因：缺权限");
     expect(text).toContain("结果（共 1001 字，全文：/report.md）：");
     expect(text).toContain("之前的轮次：第 1 轮 已完成，用时 12 秒");
+  });
+  it("bash 步骤用原命令，没有原命令时退回 title", () => {
+    const at = "2026-11-05T15:59:00Z";
+    const line = jobProcessLines([{ id: "c", kind: "tool", name: "bash", title: "运行 `git cherry-pick abc`", args: { command: "cd /tmp/lane1   &&  timeout 60 git cherry-pick\n abc" }, at }], "Asia/Shanghai", now)[0];
+    expect(line).toBe("11-05 23:59 运行 `cd /tmp/lane1 && timeout 60 git cherry-pick abc`");
+    expect(jobProcessLines([{ id: "d", kind: "tool", name: "bash", title: "运行 `npm test`", at }], "Asia/Shanghai", now)[0]).toContain("运行 `npm test`");
+  });
+  it("不是这个会话开的任务：查看多一行出处", async () => {
+    const hob = makeHob();
+    try {
+      const group = hob.runtime.groups.create({ name: "团队", purpose: "协作", ownerId: "hob", members: ["hob"] });
+      const topic = hob.runtime.groups.createTopic(group.id, "相册", "user");
+      hob.runtime.store.saveJob({ ...base, groupId: topic.id });
+      const check = async (jobId: string) => (await buildRouterTools(hob.runtime, "hob", group.id).find((tool) => tool.name === "check_job")!.execute("id", { jobId }, undefined, undefined, {} as never)).content[0].text as string;
+      const lines = (await check("t-1")).split("\n");
+      expect(lines[0]).toContain(`任务「检查」（t-1）：`);
+      expect(lines[1]).toBe("这个任务是话题「相册」开的，结果回到那边。");
+      // 这个会话自己开的：不多这一行
+      const own = jobView({ ...base, id: "t-own", groupId: group.id }, [], [], [], "UTC", now);
+      expect(own.split("\n")[1]).toContain("工作目录");
+    } finally { hob.close(); }
   });
   it("主助手可看其他助手，其他助手只能看自己的", async () => {
     const hob = makeHob();
@@ -66,31 +87,88 @@ describe("Router 技能工具", () => {
       expect(readFileSync(join(skill.path, "../scripts/a.sh"), "utf8")).toBe("echo yes");
       expect(existsSync(join(skill.path, "../.history/1/SKILL.md"))).toBe(true);
       expect(events).toEqual(["hob"]);
-      expect(hob.runtime.router.items("hob").items).toContainEqual(expect.objectContaining({ kind: "note", icon: "skill", path: skill.path, text: "已更新技能「统计」· 第 2 版" }));
+      // 改技能是给模型和技能页的事，对话里不落行
+      expect(hob.runtime.router.items("hob").items.filter((item) => item.kind === "note")).toEqual([]);
     } finally { hob.close(); }
   });
-  it("派活选择启用技能，助手叫停有名字", async () => {
+  it("通用技能也是普通技能：能改、能绑定时、能删；只读的那两类才拦住", async () => {
+    const hob = makeHob();
+    const previous = process.env.HOME;
+    const temp = join(hob.home, "fake-home");
+    try {
+      mkdirSync(join(hob.home, "skills", "table-summary"), { recursive: true });
+      writeFileSync(join(hob.home, "skills", "table-summary", "SKILL.md"), "---\nname: table-summary\ndescription: 汇总表格时使用\n---\n\n正文");
+      process.env.HOME = temp;
+      const local = join(temp, ".agents", "skills", "local-only");
+      mkdirSync(local, { recursive: true });
+      writeFileSync(join(local, "SKILL.md"), "---\nname: local-only\ndescription: 本机别的工具也用\n---\n正文\n");
+      hob.runtime.store.saveJob({ ...base, status: "done" });
+      const tools = buildRouterTools(hob.runtime, "hob");
+      const run = async (name: string, params: Record<string, unknown>) => (await tools.find((tool) => tool.name === name)!.execute("id", params as never, undefined, undefined, {} as never)).content[0].text;
+      // 通用技能能改、能绑、能删
+      expect(await run("edit_skill", { name: "table-summary", edits: [{ old: "正文", new: "新正文" }] })).toBe("已更新技能「table-summary」，第 2 版。");
+      expect(readFileSync(join(hob.home, "skills", "table-summary", "SKILL.md"), "utf8")).toContain("新正文");
+      const bind = await tools.find((tool) => tool.name === "create_routine")!.execute("id", { name: "汇总", instruction: "汇总表格", schedules: ["0 9 * * *"], skill: "table-summary" } as never, undefined, undefined, {} as never);
+      expect(bind.isError).not.toBe(true);
+      expect(hob.runtime.store.routines()[0].skill).toBe("table-summary");
+      // 两样都没填、名字也不对：说清怎么改
+      expect(await run("edit_skill", { name: "table-summary" })).toBe("edits 和 general 至少填一样：改正文填 edits，换给谁用填 general。");
+      expect(await run("edit_skill", { name: "none", edits: [] })).toBe("没有这个技能：none");
+      // 只读的本机技能拦得住
+      expect(await run("edit_skill", { name: "local-only", edits: [{ old: "正文", new: "新" }] })).toBe("local-only 在本机 ~/.agents/skills 里，只能照着用，Hob 里改不了；要改得在那个目录里改，或者让任务另存一份 Hob 的技能。");
+      // 绑着它的定时任务没改绑之前不让删
+      expect(await run("delete_skill", { name: "table-summary" })).toContain("被定时任务「汇总」用着");
+      expect(await run("update_routine", { routineId: hob.runtime.store.routines()[0].id, skill: "" })).toContain("已修改");
+      expect(await run("delete_skill", { name: "table-summary" })).toBe("已删除技能「table-summary」，移到了归档。");
+    } finally {
+      if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous;
+      hob.close();
+    }
+  });
+  it("派活不再点名技能：多填 skills 也照常开任务，助手叫停有名字", async () => {
     const hob = makeHob();
     try {
       saveAssistantSkill(hob.home, "hob", { name: "dir-size", title: "统计", description: "统计用", content: "正文" });
       const tools = buildRouterTools(hob.runtime, "hob");
       const start = vi.spyOn(hob.runtime.jobs, "start").mockResolvedValue({ ...base, status: "running" });
       const tool = tools.find((item) => item.name === "start_job")!;
-      const execute = (skills: string[]) => tool.execute("id", { title: "测试", skills }, undefined, undefined, {} as never);
-      expect((await execute(["missing"])).content[0].text).toBe("没有这个技能：missing。能用的有：dir-size");
-      await execute(["dir-size"]);
-      expect(start.mock.calls[0][1].instruction).toMatch(/^按技能「统计」做（先读它的 SKILL.md）。\n/);
-      expect(start.mock.calls[0][1].skills).toEqual(["dir-size"]);
-      await execute([]);
-      expect(start.mock.calls[1][1].instruction).not.toContain("按技能");
-      saveAssistantSkill(hob.home, "hob", { name: "another", title: "检查", description: "检查用", content: "正文" });
-      await execute(["dir-size", "another"]);
-      expect(start.mock.calls[2][1].instruction).toMatch(/^按技能「统计」「检查」做（先读它们的 SKILL.md）。\n/);
-      expect(start.mock.calls[2][1].skills).toEqual(["dir-size", "another"]);
+      // 参数里去掉了 skills：任何情况下都没东西可填错，也没有名字校验
+      expect(tool.parameters.properties.skills).toBeUndefined();
+      const execute = (extra: Record<string, unknown>) => tool.execute("id", { title: "测试", ...extra }, undefined, undefined, {} as never);
+      // 旧对话里带下来的 skills：不报错、不起作用，照常开任务
+      expect((await execute({ skills: ["missing", "dir-size"] })).isError).not.toBe(true);
+      expect(start.mock.calls[0]![1].instruction).not.toContain("按技能");
+      expect(start.mock.calls[0]![1]).not.toHaveProperty("skills");
+      await execute({});
+      expect(start.mock.calls[1]![1].instruction).not.toContain("按技能");
       hob.runtime.store.saveJob(base);
       const stop = vi.spyOn(hob.runtime.jobs, "stop").mockResolvedValue();
       await tools.find((item) => item.name === "stop_job")!.execute("id", { jobId: "t-1" }, undefined, undefined, {} as never);
       expect(stop).toHaveBeenCalledWith("t-1", `${hob.runtime.store.assistant("hob")!.name}叫停了`);
+    } finally { hob.close(); }
+  });
+  it("在别的会话里补充、停止：返回和停止原因都写出处", async () => {
+    const hob = makeHob();
+    try {
+      const group = hob.runtime.groups.create({ name: "团队", purpose: "协作", ownerId: "hob", members: ["hob"] });
+      const topicA = hob.runtime.groups.createTopic(group.id, "相册", "user");
+      const topicB = hob.runtime.groups.createTopic(group.id, "打印机", "user");
+      hob.runtime.store.saveJob({ ...base, groupId: topicA.id });
+      const reply = vi.spyOn(hob.runtime.jobs, "reply").mockResolvedValue();
+      const stop = vi.spyOn(hob.runtime.jobs, "stop").mockResolvedValue();
+      const run = async (gid: string, name: string) => (await buildRouterTools(hob.runtime, "hob", gid).find((tool) => tool.name === name)!.execute("id", { jobId: "t-1", text: "再查一次" }, undefined, undefined, {} as never)).content[0].text as string;
+      // 在综合里：任务在话题「相册」
+      expect(await run(group.id, "reply_job")).toBe("已交给任务「检查」（t-1），它会接着做。这个任务是话题「相册」开的，结果回到那边。");
+      expect(await run(group.id, "stop_job")).toBe("已停止。这个任务是话题「相册」开的。");
+      expect(stop).toHaveBeenLastCalledWith("t-1", `${hob.runtime.store.assistant("hob")!.name}在综合叫停了`);
+      // 在话题 B 里停话题 A 的任务：原因写话题「B」
+      expect(await run(topicB.id, "stop_job")).toBe("已停止。这个任务是话题「相册」开的。");
+      expect(stop).toHaveBeenLastCalledWith("t-1", `${hob.runtime.store.assistant("hob")!.name}在话题「打印机」叫停了`);
+      // 这个会话自己开的：和以前一样
+      expect(await run(topicA.id, "reply_job")).toBe("已交给任务「检查」（t-1），它会接着做。");
+      expect(await run(topicA.id, "stop_job")).toBe("已停止。");
+      expect(stop).toHaveBeenLastCalledWith("t-1", `${hob.runtime.store.assistant("hob")!.name}叫停了`);
+      expect(reply).toHaveBeenCalled();
     } finally { hob.close(); }
   });
 });

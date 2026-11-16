@@ -1,3 +1,4 @@
+import { t } from "../../shared/i18n.ts";
 import { distinctSprite, parseSprite } from "../../shared/sprites.ts";
 import type { AnswerApprovalBody, Approval, ApprovalAnswer, ApprovalQuestion, Assistant, Draft } from "../../shared/types.ts";
 import { newId, slugify } from "./ids.ts";
@@ -97,8 +98,6 @@ export async function answerApproval(runtime: HobRuntime, approvalId: string, in
     answeredAt: new Date().toISOString(),
   };
   store.saveApproval(answered);
-  // 提问的成员在这个群里负责一件在需求澄清的事项：问答记进那件事
-  runtime.projects.recordAnswers(answered);
   // 话题里的提问卡答了：左栏和话题卡上的「等你」跟着变
   if (answered.groupId) runtime.groups.publish(answered.groupId);
   // 转交里 Router 问的：答案回到目标助手接着办，办完才算转交结束（任务里的提问由任务自己接着跑）
@@ -122,7 +121,7 @@ export async function answerApproval(runtime: HobRuntime, approvalId: string, in
     await router.addItem(approval.assistantId, {
       kind: "note",
       icon: "rule",
-      text: `已记入${approval.groupId && store.group(approval.groupId) ? "本群" : assistant?.name ?? approval.assistantId}的规则 · ${ruleText}`,
+      text: t("已记入{owner}的规则 · {rule}", { owner: approval.groupId && store.group(approval.groupId) ? "本群" : assistant?.name ?? approval.assistantId, rule: ruleText }),
     }, approval.groupId);
     bus.emit({ type: "profile", assistantId: approval.assistantId });
   }
@@ -265,21 +264,21 @@ export async function createFromDraft(runtime: HobRuntime, draftId: string): Pro
     }
   }
   const routineReport = [
-    ...(createdRoutines.length ? [`定时任务：${createdRoutines.join("、")}`] : []),
-    ...(failedRoutines.length ? [`定时处理失败：${failedRoutines.join("、")}`] : []),
+    ...(createdRoutines.length ? [t("定时任务：{items}", { items: createdRoutines.join("、") })] : []),
+    ...(failedRoutines.length ? [t("定时处理失败：{items}", { items: failedRoutines.join("、") })] : []),
   ];
 
-  const splitNote = `${monthDayText(runtime.settings.settings.general.timezone)} 由 Hob 创建`;
+  const splitNote = `${monthDayText(runtime.settings.settings.general.timezone)} ${t("由 Hob 创建")}`;
   await router.ensure(assistant.id);
   await router.addItem(assistant.id, { kind: "note", icon: "split", text: splitNote });
   // 新助手自己的开场：固定模板，不过模型
   await router.addItem(assistant.id, {
     kind: "assistant",
-    text: [`我是${assistant.name}，负责${assistant.duty}。`, ...routineReport].join(
+    text: [t("我是{assistant}，负责{duty}。", { assistant: assistant.name, duty: assistant.duty }), ...routineReport].join(
       "\n",
     ),
   });
-  await router.addItem(draft.assistantId, { kind: "note", icon: "split", text: `已创建「${assistant.name}」` });
+  await router.addItem(draft.assistantId, { kind: "note", icon: "split", text: t("已创建「{name}」", { name: assistant.name }) });
 
   const created: Draft = { ...draft, routines: savedRoutines, routinesText: createdRoutines.join("、"), status: "created", createdAssistantId: assistant.id };
   store.saveDraft(created);

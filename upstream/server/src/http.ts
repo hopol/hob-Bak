@@ -1,4 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { userError } from "./user-facing.ts";
+import { setLocale } from "../../shared/i18n.ts";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -45,8 +47,8 @@ import type { HobRuntime } from "./runtime.ts";
 import { readSecrets, writeSecret } from "./secrets.ts";
 import { SEARCH_PROVIDERS } from "../../shared/search.ts";
 import { WebSearch } from "./search.ts";
-import { deleteOwnSkill, importSkills, listImportSkills, skillViews } from "./skills.ts";
-import { groupSkillsDir, listAssistantSkills, listSkills, rollbackAssistantSkill, rollbackSkill, setAssistantSkillEnabled, setSkillEnabled } from "./assistant-skills.ts";
+import { archiveSkill, groupSkillsDir, listAssistantSkills, listSkills, rollbackAssistantSkill, rollbackSkill, setAssistantSkillEnabled, setSkillEnabled } from "./assistant-skills.ts";
+import { generalSkillsDir, importSkills, listImportSkills, skillViews, visibleSkills } from "./skills.ts";
 import { deleteSkill } from "./delete-skill.ts";
 import type { SkillImportSource } from "../../shared/skills.ts";
 
@@ -80,6 +82,15 @@ export function validCookie(config: HobRuntime["config"], value: string | undefi
 
 export function createApp(runtime: HobRuntime, options: { webDir?: string; home: string }): Hono {
   const { store, bus, router, jobs, routines, config } = runtime;  const app = new Hono();
+  app.use("*", async (c, next) => {
+    await next();
+    if (c.res.status < 400 || !c.res.headers.get("content-type")?.includes("application/json")) return;
+    const body = await c.res.clone().json().catch(() => undefined) as { error?: unknown } | undefined;
+    if (!body || typeof body.error !== "string") return;
+    const localized = new Response(JSON.stringify({ ...body, error: userError(body.error) }), { status: c.res.status, headers: c.res.headers });
+    localized.headers.delete("content-length");
+    c.res = localized;
+  });
   // ponytail: 每次取文件都扫一遍 job.json（几十上百个），慢了再缓存
   const workDirs = () => store.jobs().flatMap((job) => (job.cwd ? [job.cwd] : []));
 
@@ -148,6 +159,7 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
+    const hadLocale = runtime.settings.settings.general.locale !== undefined;
     let next;
     try {
       next = runtime.settings.patch(body.revision, patch);
@@ -155,6 +167,8 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
     if (!next) return c.json({ error: "设置已在别处修改，已刷新" }, 409);
+    if (next.settings.general.locale) setLocale(next.settings.general.locale);
+    if (!hadLocale && next.settings.general.locale) runtime.initializeLocale(next.settings.general.locale);
     // 改了设置立即生效：并发、无响应判定、定时时区都不需要重启
     if (patch.models || patch.general?.showPage !== undefined) router.releaseSessions();
     runtime.jobs.pump();
@@ -247,11 +261,39 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
   app.post("/api/skills/import/:source", async (c) => {
     const body = await c.req.json().catch(() => ({})) as { ids?: unknown; overwrite?: unknown };
     if (!Array.isArray(body.ids) || !body.ids.every((id) => typeof id === "string") || typeof body.overwrite !== "boolean") return c.json({ error: "导入参数无效" }, 400);
-    try { return c.json(importSkills(options.home, c.req.param("source") as SkillImportSource, body.ids, body.overwrite)); }
+    try {
+      const result = importSkills(options.home, c.req.param("source") as SkillImportSource, body.ids, body.overwrite);
+      // 通用技能变了：所有助手看得到的清单都变了
+      if (result.imported.length) bus.emit({ type: "skills", assistantId: "hob" });
+      return c.json(result);
+    }
     catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
   });
+  // 设置页删除通用技能：和助手删技能一样移到归档，不直接删掉
   app.delete("/api/skills/:id", (c) => {
-    try { deleteOwnSkill(options.home, c.req.param("id")); return c.json({ ok: true }); }
+    const name = c.req.param("id");
+    try {
+      archiveSkill(generalSkillsDir(options.home), name);
+      bus.emit({ type: "skills", assistantId: "hob" });
+      return c.json({ ok: true });
+    }
+    catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
+  });
+  app.post("/api/skills/:name/rollback", (c) => {
+    try {
+      const skill = rollbackSkill(generalSkillsDir(options.home), c.req.param("name"));
+      bus.emit({ type: "skills", assistantId: "hob" });
+      return c.json(skill);
+    } catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
+  });
+  // 一个助手看得到哪些技能：定时任务的技能下拉用它（本群、自己、通用、只读）
+  app.get("/api/skills/visible", (c) => {
+    const assistantId = c.req.query("assistantId") ?? "hob";
+    if (!store.assistant(assistantId)) return c.json({ error: "助手不存在" }, 404);
+    const groupId = c.req.query("groupId");
+    const group = groupId ? store.group(groupId) : undefined;
+    if (groupId && !group) return c.json({ error: "群不存在" }, 404);
+    try { return c.json(visibleSkills(runtime, assistantId, group)); }
     catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
   });
 
@@ -954,7 +996,7 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
     }
   });
 
-  // 用户关闭话题：没结束的事项按放弃处理；正在跑的回合和任务不停
+  // 用户关闭话题：记录关闭结论；正在跑的回合和任务不停
   app.post("/api/groups/:id/close", async (c) => {
     const id = c.req.param("id");
     if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
@@ -1000,45 +1042,6 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
         ...(files.length ? { files } : {}),
       });
       return c.json({ item }, 202);
-    } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
-    }
-  });
-
-  // 事项：这个群的全部事项（新的在前）和单个事项
-  app.get("/api/groups/:id/projects", (c) => {
-    const id = c.req.param("id");
-    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
-    return c.json(runtime.projects.list(id));
-  });
-
-  app.get("/api/groups/:id/projects/:pid", (c) => {
-    const id = c.req.param("id");
-    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
-    const project = runtime.projects.get(id, c.req.param("pid"));
-    if (!project) return c.json({ error: "事项不存在" }, 404);
-    return c.json(project);
-  });
-
-  // 用户点「开始执行」：和 start_subtasks 走同一段
-  app.post("/api/groups/:id/projects/:pid/start", (c) => {
-    const id = c.req.param("id");
-    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
-    try {
-      return c.json(runtime.projects.start(id, c.req.param("pid")));
-    } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
-    }
-  });
-
-  // 用户点了自己那个子任务的「已完成」
-  app.post("/api/groups/:id/projects/:pid/subtasks/:n/done", (c) => {
-    const id = c.req.param("id");
-    if (!store.group(id)) return c.json({ error: "群不存在" }, 404);
-    const n = Number(c.req.param("n"));
-    if (!Number.isInteger(n) || n < 1) return c.json({ error: "子任务序号要是从 1 开始的整数" }, 400);
-    try {
-      return c.json(runtime.projects.done(id, c.req.param("pid"), n));
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
@@ -1120,6 +1123,8 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
         ...(body.groupId ? { groupId: body.groupId } : {}),
         name: body.name,
         instruction: body.instruction,
+        // 界面上建的：「要做的事」是用户自己写的，也没有助手转述时那一轮的原话
+        instructionBy: "user",
         schedules: body.schedules,
         ...(body.active !== undefined ? { active: body.active } : {}),
         ...(body.skill !== undefined ? { skill: body.skill } : {}),
@@ -1145,7 +1150,15 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
       once?: boolean;
     };
     try {
-      const routine = routines.update(c.req.param("id"), body);
+      const id = c.req.param("id");
+      const found = store.routine(id);
+      // 界面常常整张表单一起提交：内容没变的不算用户改了它
+      const changed = typeof body.instruction === "string" && body.instruction !== found?.instruction;
+      const { instructionBy: _ignoredBy, userWords: _ignoredWords, ...patch } = body as typeof body & { instructionBy?: unknown; userWords?: unknown };
+      const routine = routines.update(id, {
+        ...patch,
+        ...(changed ? { instructionBy: "user", userWords: null } : {}),
+      });
       return c.json({ routine });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

@@ -17,3 +17,5 @@ document.addEventListener("gesturestart", (event) => event.preventDefault());
 
 // 只在生产构建里注册：开发时免得 Vite 的热更新被缓存的旧壳挡住
 if (import.meta.env.PROD) registerServiceWorker();
+
+

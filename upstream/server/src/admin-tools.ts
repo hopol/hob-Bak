@@ -4,7 +4,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import { propArtSchema } from "./prop-art-schema.ts";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { STAGE_TEXT } from "../../shared/project.ts";
 import {
   PROP_IDS,
   PROPS,
@@ -54,15 +53,6 @@ function filled(value: unknown): string | undefined {
   return text ? text : undefined;
 }
 
-/** 工作方式：software 是软件开发，none 是普通群（null）；没填是 undefined；别的值返回 false。 */
-function workflowParam(value: unknown): "software" | null | undefined | false {
-  const given = filled(value);
-  if (given === undefined) return undefined;
-  if (given === "software") return "software";
-  if (given === "none" || given === "null") return null;
-  return false;
-}
-
 /** 内容只留前 200 字。 */
 function cut(text: string, max = 200): string {
   const chars = [...text.trim()];
@@ -81,8 +71,6 @@ function itemText(store: Store, item: GroupItem, gid: string): string | undefine
       return `问了「${store.approval(item.approvalId)?.title ?? "一件事"}」`;
     case "topic":
       return `开了话题「${store.group(item.topicId)?.name ?? item.topicId}」`;
-    case "project":
-      return `立了事项「${store.project(gid, item.projectId)?.title ?? item.projectId}」`;
     case "file":
       return `发了文件「${item.name}」`;
     case "image":
@@ -158,7 +146,7 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
     for (const rule of rules) lines.push(`- ${rule.id} · ${rule.mode === "ask" ? "执行前确认" : "直接执行"} · ${rule.text}`);
     const routines = store.routines().filter((routine) => routine.assistantId === target.id);
     lines.push(routines.length ? "定时任务：" : "定时任务：没有");
-    for (const routine of routines) lines.push(`- ${routine.id} · ${routine.name} · ${routine.schedules.map(cronToChinese).join("、")} · ${routine.active ? "启用" : "已暂停"} · ${routine.instruction}`);
+    for (const routine of routines) lines.push(`- ${routine.id} · ${routine.name} · ${routine.schedules.map((schedule) => cronToChinese(schedule)).join("、")} · ${routine.active ? "启用" : "已暂停"} · ${routine.instruction}`);
     try {
       const skills = listAssistantSkills(runtime.home, target.id);
       lines.push(skills.length ? "技能：" : "技能：没有");
@@ -209,7 +197,7 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
       name: "show_group",
       label: "查看群",
       description:
-        "看群。不填 groupId，列出全部群，每个一行：名字、id、群主、成员、工作方式、进行中的话题数；填了，看这个群的详情：负责什么、话题（进行中的和已关闭的）、事项进度和消息。填话题 id 就看这个话题。",
+        "看群。不填 groupId，列出全部群，每个一行：名字、id、群主、成员、进行中的话题数；填了，看这个群的详情：负责什么、话题（进行中的和已关闭的）和消息。填话题 id 就看这个话题。",
       parameters: Type.Object({
         groupId: Type.Optional(Type.String({ description: "可选，群或话题的 id" })),
         query: Type.Optional(Type.String({ description: "可选，关键词。不填 groupId 时按群名、负责什么、成员和话题名找群；填了 groupId 时在这个群和它的话题的消息里找" })),
@@ -231,7 +219,7 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
           const page = Math.min(pageOf(params.page), pages);
           const rows = listed.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((group) => {
             const active = runtime.groups.activeTopics(group.id).length;
-            return `${group.name}（${group.id}）：群主 ${nameOf(group.ownerId)}；成员 ${group.members.map(nameOf).join("、")}${group.workflow === "software" ? "；工作方式 软件开发" : ""}${active ? `；进行中的话题 ${active} 个` : ""}`;
+            return `${group.name}（${group.id}）：群主 ${nameOf(group.ownerId)}；成员 ${group.members.map(nameOf).join("、")}${active ? `；进行中的话题 ${active} 个` : ""}`;
           });
           return ok([...rows, pageHint(page, listed.length, pages, "个")].join("\n"));
         }
@@ -266,19 +254,15 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
           const host = store.group(group.parentId);
           lines.push(`所属的群：${host ? `${host.name}（${host.id}）` : group.parentId}`);
           lines.push(`状态：${group.closedAt ? `已关闭${group.closeNote ? ` · 结论：${group.closeNote}` : ""}` : "进行中"}`);
-          const project = runtime.projects.topicOf(group);
-          if (project) lines.push(`事项：「${project.title}」· ${STAGE_TEXT[project.stage]} · 子任务 ${project.done}/${project.total}`);
         } else {
           lines.push(`负责什么：${group.purpose}`);
           lines.push(`群主：${nameOf(group.ownerId)}`);
           lines.push(`成员：${group.members.map(nameOf).join("、")}`);
-          lines.push(`工作方式：${group.workflow === "software" ? "软件开发" : "无"}`);
           const topics = runtime.groups.topicsOf(group.id);
           lines.push(topics.length ? "话题：" : "话题：还没有");
           for (const topic of topics) {
-            const project = runtime.projects.topicOf(topic);
             const state = topic.closedAt ? `已关闭${topic.closeNote ? ` · 结论：${topic.closeNote}` : ""}` : "进行中";
-            lines.push(`- ${topic.name}（${topic.id}）· ${state}${project ? ` · 事项「${project.title}」· ${STAGE_TEXT[project.stage]} · 子任务 ${project.done}/${project.total}` : ""}`);
+            lines.push(`- ${topic.name}（${topic.id}）· ${state}`);
           }
         }
         const all = runtime.groups.timeline(group.id).flatMap((item) => {
@@ -457,20 +441,16 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
       parameters: Type.Object({
         name: Type.String({ description: "群名，最多 40 字" }),
         purpose: Type.String({ description: "这个群负责什么，最多 200 字" }),
-        members: Type.Array(Type.String(), { description: "成员的助手 id" }),
-        ownerId: Type.String({ description: "群主的助手 id，要在成员里" }),
-        workflow: Type.Optional(Type.String({ description: "可选，工作方式，填 software（软件开发）；不填是普通群" })),
+        members: Type.Array(Type.String(), { description: "成员的助手 id，可以有你自己。" }),
+        ownerId: Type.String({ description: "群主的助手 id，要在成员里，可以是你自己。" }),
       }),
       execute: async (_id, params: any) => {
-        const workflow = workflowParam(params.workflow);
-        if (workflow === false) return fail(`workflow 要填 software（软件开发），普通群不填，收到「${params.workflow}」。`);
         try {
           const group = runtime.groups.create({
             name: params.name,
             purpose: params.purpose,
             members: params.members,
             ownerId: params.ownerId,
-            ...(workflow ? { workflow } : {}),
           });
           await announce({ conversation: `已建好群「${group.name}」`, targetGroupId: group.id });
           return ok(`已建好群「${group.name}」（${group.id}）。`);
@@ -491,14 +471,13 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
         addMembers: Type.Optional(Type.Array(Type.String(), { description: "要加的成员 id" })),
         removeMembers: Type.Optional(Type.Array(Type.String(), { description: "要减的成员 id" })),
         ownerId: Type.Optional(Type.String({ description: "新群主的助手 id，要在成员里" })),
-        workflow: Type.Optional(Type.String({ description: "software 是软件开发，none 是普通群" })),
       }),
       execute: async (_id, params: any) => {
         const id = String(params.groupId ?? "").trim();
         const group = store.group(id);
         if (!group) return fail(`没有这个群：${id}`);
         if (group.parentId) return fail(`${id} 是话题，不是群；改话题名用 manage_topic。`);
-        const patch: { name?: unknown; purpose?: unknown; instructions?: unknown; members?: string[]; ownerId?: unknown; workflow?: unknown } = {};
+        const patch: { name?: unknown; purpose?: unknown; instructions?: unknown; members?: string[]; ownerId?: unknown } = {};
         const changes: string[] = [];
         const name = filled(params.name);
         if (name !== undefined && name !== group.name) { patch.name = name; changes.push("名字"); }
@@ -515,9 +494,6 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
         if (addedReal.length || removedReal.length) { patch.members = members; changes.push("成员"); }
         const ownerId = filled(params.ownerId);
         if (ownerId !== undefined && ownerId !== group.ownerId) { patch.ownerId = ownerId; changes.push("群主"); }
-        const workflow = workflowParam(params.workflow);
-        if (workflow === false) return fail(`workflow 要填 software（软件开发）或 none（普通群），收到「${params.workflow}」。`);
-        if (workflow !== undefined && workflow !== (group.workflow ?? null)) { patch.workflow = workflow; changes.push("工作方式"); }
         if (!changes.length) return fail("没有要改的项：至少填一项和现在不一样的。");
         let next: Group;
         try { next = runtime.groups.update(id, patch); }
@@ -526,16 +502,12 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
         const clauses = (inGroup: boolean) => {
           const list: string[] = [];
           if (changes.includes("名字")) list.push(inGroup ? `把群名改成「${next.name}」` : `把${group.name}改名为「${next.name}」`);
-          if (changes.includes("负责什么")) list.push("改了负责什么");
-          if (changes.includes("补充说明")) list.push("改了补充说明");
+          if (changes.includes("负责什么")) list.push(inGroup ? "改了负责什么" : `改了${next.name}的负责什么`);
+          if (changes.includes("补充说明")) list.push(inGroup ? "改了补充说明" : `改了${next.name}的补充说明`);
           const who = (ids: string[]) => ids.map(nameOf).join("、");
           if (addedReal.length) list.push(inGroup ? `把${who(addedReal)}拉进了群` : `把${who(addedReal)}拉进${next.name}`);
           if (removedReal.length) list.push(inGroup ? `把${who(removedReal)}移出了群` : `把${who(removedReal)}移出${next.name}`);
           if (changes.includes("群主")) list.push(inGroup ? `群主换成${nameOf(next.ownerId)}` : `把${next.name}的群主换成${nameOf(next.ownerId)}`);
-          if (changes.includes("工作方式")) {
-            const how = next.workflow === "software" ? "软件开发" : "无";
-            list.push(inGroup ? `工作方式改成${how}` : `把${next.name}的工作方式改成${how}`);
-          }
           return list.join("；");
         };
         await announce({ conversation: `已${clauses(false)}`, group: { gid: id, text: `${nameOf(assistantId)} ${clauses(true)}` } });
@@ -545,7 +517,7 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
     {
       name: "manage_topic",
       label: "管理话题",
-      description: "开、关、重开或改名任何一个群的话题。",
+      description: "开、关、重开或改名任何一个群的话题。开出来的话题是空的：不转消息，也不叫群主。",
       parameters: Type.Object({
         action: Type.Unsafe<"open" | "close" | "reopen" | "rename">(Type.String({ description: "open 开新话题，close 关，reopen 重开，rename 改名" })),
         groupId: Type.Optional(Type.String({ description: "open 时填群 id" })),
@@ -567,7 +539,7 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
           if (here === group.id && group.ownerId === assistantId) return fail("在这个群开话题用 open_topic，它会把用户的原话转进话题。");
           try {
             const topic = runtime.groups.createTopic(group.id, title, assistantId);
-            await announce({ conversation: `已开话题「${topic.name}」`, group: { gid: group.id, text: `${nameOf(assistantId)} 开了话题「${topic.name}」` } });
+            await announce({ conversation: `已在${group.name}开了话题「${topic.name}」`, group: { gid: group.id, text: `${nameOf(assistantId)} 开了话题「${topic.name}」` } });
             return ok(`已开话题「${topic.name}」（${topic.id}）。`);
           } catch (error) {
             return fail(error instanceof Error ? error.message : String(error));
@@ -577,17 +549,17 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
         const topic = store.group(topicId);
         if (!topic) return fail(`没有这个话题：${topicId}`);
         const host = topic.parentId ?? topic.id;
+        // 在别的对话里说：带上群名，读的人才知道是哪个群的话题
+        const hostName = store.group(host)?.name ?? host;
         try {
           if (action === "close") {
-            const project = runtime.projects.active(topicId)[0];
-            if (project) return fail(`话题「${topic.name}」里的事项「${project.title}」还没结束，事项由群主「${nameOf(topic.ownerId)}」结束。`);
             const closed = runtime.groups.closeByUser(topicId, params.note);
-            await announce({ conversation: `已关闭话题「${closed.name}」`, group: { gid: host, text: `${nameOf(assistantId)} 关闭了话题「${closed.name}」` } });
+            await announce({ conversation: `已关闭${hostName}的话题「${closed.name}」`, group: { gid: host, text: `${nameOf(assistantId)} 关闭了话题「${closed.name}」` } });
             return ok(`已关闭话题「${closed.name}」。`);
           }
           if (action === "reopen") {
             const reopened = runtime.groups.reopen(topicId);
-            await announce({ conversation: `已重开话题「${reopened.name}」`, group: { gid: host, text: `${nameOf(assistantId)} 重开了话题「${reopened.name}」` } });
+            await announce({ conversation: `已重开${hostName}的话题「${reopened.name}」`, group: { gid: host, text: `${nameOf(assistantId)} 重开了话题「${reopened.name}」` } });
             return ok(`已重开话题「${reopened.name}」。`);
           }
           if (action === "rename") {
@@ -595,7 +567,7 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
             const title = String(params.title ?? "").trim();
             if (!title) return fail("title 不能为空：rename 时填新的话题名。");
             const renamed = runtime.groups.update(topicId, { name: title });
-            await announce({ conversation: `已把话题改名为「${renamed.name}」`, group: { gid: host, text: `${nameOf(assistantId)} 把话题改名为「${renamed.name}」` } });
+            await announce({ conversation: `已把${hostName}的话题「${topic.name}」改名为「${renamed.name}」`, group: { gid: host, text: `${nameOf(assistantId)} 把话题改名为「${renamed.name}」` } });
             return ok(`已把话题改名为「${renamed.name}」。`);
           }
           return fail(`action 要填 open、close、reopen 或 rename，收到「${action}」。`);

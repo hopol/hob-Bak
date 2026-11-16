@@ -58,15 +58,45 @@
 | 改文件 | 修改文件 |
 | 工作（设置分区） | 任务 |
 | 跑 / 读 / 写 / 改 / 搜 / 找 / 看（任务过程里的动作） | 运行 / 读取 / 写入 / 修改 / 搜索 / 查找 / 列出 |
-| 群里要办的一件事 | 事项 |
-| 拆出来的每一份工作（执行时就是一个任务） | 子任务 |
-| 要先完成的 | 前置任务；状态「等待前置任务」 |
-| 需要用户亲自做的 | 待你执行 |
-| 五个阶段 | 需求澄清 → 需求说明 → 任务拆分 → 执行 → 验收 |
-| 验收清单 | 验收标准 |
-| 用户最初那句话 | 原始需求 |
-| 把一件事立成事项（动作） | 立事项 |
-| 子任务状态：还没开始执行、轮到了还没派任务、任务在跑、任务做完、任务受阻、轮到你做 | 未开始 / 待开始 / 进行中 / 已完成 / 受阻 / 待你执行 |
-| 事项结束时的两种结果 | 已完成 / 已放弃（写明原因） |
+| 事项 / 待办清单 / 拆出来的子任务 / 完成标准 / 检查结果 | 待办（一个会话一份，每项只有做什么和做到哪儿：未开始 / 进行中 / 已完成） |
 
 表里没有的词，按同样的标准选：正式软件产品的设置页、提示里会怎么写，就怎么写。
+
+## English
+
+### Principles
+
+- Keep wording short and plain, using sentence case: `Add provider`, not `Add Provider`.
+- Explain what happened and how to recover in errors, such as `Couldn't save: invalid time zone.` and `Can't connect to Hob. Check your network or make sure the server is running.`
+- Use consistent action verbs: Create, Save, Delete, Run, Stop, View, Generate, Assign, Confirm, Cancel.
+- Do not use exclamation marks or mention the engine name.
+- Use an ellipsis for an active state, such as `Saving…`.
+- Write natural English rather than translating word for word.
+
+### Terms
+
+| 中文 | English |
+|---|---|
+| 助手 / 主助手 | assistant / main assistant |
+| 任务 / 任务卡 / 任务记录 | job / job card / job history |
+| 转交 / 转交卡 | delegation / delegation card |
+| 定时任务 / 立即运行 / 检查脚本 | schedule / Run now / check script |
+| 规则 / 全局规则 | rule / global rules |
+| 执行前确认 / 直接执行 | Ask first / Go ahead |
+| 技能 / 沉淀技能 | skill / save as a skill |
+| 通用技能 / 本群技能 / 你的技能 | shared skill / group skill / your skill |
+| 职责简介 / 详细职责 / 补充说明 | role / responsibilities / notes |
+| 个人信息 | About you |
+| 群 / 群主 / 成员 | group / owner / member |
+| 话题 | topic |
+| 待办 / 一项待办 | To-dos / to-do item |
+
+| 服务商 / 对话模型 / 任务模型 / 可分派的模型 / 用途说明 / 思考档 | provider / chat model / job model / assignable models / when to use / thinking level |
+| 知识库 / 记忆 / 联网搜索 / 图像生成 / 云桌面 / 页面 / 用量 / 通知 | knowledge base / memory / web search / image generation / cloud desktop / page / usage / notifications |
+| 最大并行任务数 / 无响应判定时间 | max parallel jobs / stall timeout |
+| 归档 / 收起（助手） | archive / hide |
+| 排队中 / 进行中 / 等助手回复 / 已完成 / 受阻 / 失败 / 已停止 | Queued / Running / Waiting for assistant / Done / Blocked / Failed / Stopped |
+| 等你确认 / 已中断 / 已退回 / 已被你接手 | Waiting for you / Interrupted / Returned / Taken over by you |
+| 需求澄清 / 任务拆分 / 执行中 / 验收中 / 已完成 / 已放弃 | Clarifying / Planning / Executing / In review / Done / Dropped |
+| 未开始 / 等前面的 / 待开始 / 进行中 / 已完成 / 受阻 / 待你执行 | Not started / Waiting on earlier items / Ready / In progress / Done / Blocked / Your turn |
+| 关闭 / 最低 / 低 / 中 / 高 / 很高 / 最高 | Off / Minimal / Low / Medium / High / Very high / Max |

@@ -181,8 +181,8 @@ const STATUS_WORDS = new Set(["排队中", "进行中", "待确认", "等你确�
  * 以前的版本把 outcome 存成了「受阻」「待确认」，那不是原因，不能往卡片上再写一遍。
  */
 /**
- * 对话里第 round 张任务卡显示的样子：任务续做过的话，前面几张停在那一轮结束时；
- * 最后一轮（以及没续做过的）就是任务本身，跟着实时变。
+ * 第 round 轮的样子：任务续做过的话，前几轮停在那一轮结束时；
+ * 最后一轮（以及没续做过的）就是任务本身，跟着实时变。对话里只放最新一轮那张卡。
  */
 export function jobRoundView(job: Job, round = 0): Job {
   const past = job.rounds?.[round];

@@ -1,16 +1,26 @@
+import { currentLocale, t } from "../../shared/i18n.ts";
 import { Cron } from "croner";
 import type { Approval, AssistantSummary, Delegation, Job, Routine } from "../../shared/types.ts";
 import type { KnowledgeEntry } from "../../shared/knowledge.ts";
-import type { AssistantSkill } from "../../shared/skills.ts";
+import type { AssistantSkill, VisibleSkill } from "../../shared/skills.ts";
 
 export function followingModel(source: "group" | "assistant" | "global", name: string) {
-  const label = source === "group" ? "本群" : "助手";
-  return { text: `跟随${label} · ${name}`, option: `跟随${label}（${name}）` };
+  const label = source === "group" ? t("本群") : t("助手");
+  return { text: t("跟随{label} · {name}", { label, name }), option: t("跟随{label}（{name}）", { label, name }) };
 }
 
 export function routineSkills(group: AssistantSkill[], member: AssistantSkill[]) {
   const own = group.filter((skill) => skill.enabled);
   return [...own.map((skill) => ({ skill, group: true })), ...member.filter((skill) => skill.enabled && !own.some((item) => item.name === skill.name)).map((skill) => ({ skill, group: false }))];
+}
+
+/** 定时任务的技能下拉：看得到的全列上，本群、自己的、通用（含只读的），通用的标「（通用）」。 */
+export function routineSkillOptions(skills: VisibleSkill[]): { value: string; label: string }[] {
+  return skills.filter((skill) => skill.enabled !== false).map((skill) => {
+    const title = skill.title ?? skill.name;
+    const scope = skill.scope === "group" ? `（${t("本群")}）` : skill.scope === "general" ? `（${t("通用")}）` : "";
+    return { value: skill.name, label: `${title}${scope}` };
+  });
 }
 
 export function nextRoutine(routines: Routine[], timezone: string, now = new Date()): { routine: Routine; at: Date } | undefined {
@@ -46,22 +56,23 @@ export function formatNext(at: Date, timezone: string, now = new Date()): string
   const day = date(at);
   const [year, month, dayOfMonth] = date(now).split("-").map(Number);
   const tomorrow = new Date(Date.UTC(year!, month! - 1, dayOfMonth! + 1)).toISOString().slice(0, 10);
-  const time = new Intl.DateTimeFormat("zh-CN", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(at);
-  if (day === date(now)) return `今天 ${time}`;
-  if (day === tomorrow) return `明天 ${time}`;
-  const md = new Intl.DateTimeFormat("zh-CN", { timeZone: timezone, month: "numeric", day: "numeric" }).format(at);
+  const locale = currentLocale() === "en" ? "en-US" : "zh-CN";
+  const time = new Intl.DateTimeFormat(locale, { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(at);
+  if (day === date(now)) return t("今天 {time}", { time });
+  if (day === tomorrow) return t("明天 {time}", { time });
+  const md = new Intl.DateTimeFormat(locale, { timeZone: timezone, month: "short", day: "numeric" }).format(at);
   return `${md} ${time}`;
 }
 
 export function routineSummary(routines: Routine[], timezone: string, now = new Date()): string {
-  if (!routines.length) return "没有";
+  if (!routines.length) return t("没有");
   const next = nextRoutine(routines, timezone, now);
-  if (!next) return `${routines.length} 个 · ${routines.some((r) => r.active) ? "无下次执行时间" : "已暂停"}`;
-  return `${routines.length} 个 · ${formatNext(next.at, timezone, now)}`;
+  if (!next) return `${routines.length} ${t("个")} · ${routines.some((r) => r.active) ? t("无下次执行时间") : t("已暂停")}`;
+  return `${routines.length} ${t("个")} · ${formatNext(next.at, timezone, now)}`;
 }
 
 export function sidebarInfoValues(skillCount: number, knowledgeNames: string[], ruleCount: number) {
-  return { skills: skillCount ? `${skillCount} 个` : "没有", knowledge: knowledgeNames.length ? knowledgeNames.join("、") : "未开启", rules: ruleCount ? `${ruleCount} 条` : "没有" };
+  return { skills: skillCount ? `${skillCount} ${t("个")}` : t("没有"), knowledge: knowledgeNames.length ? knowledgeNames.join(t("、")) : t("未开启"), rules: ruleCount ? `${ruleCount} ${t("条")}` : t("没有") };
 }
 
 export function groupSidebarFiles(entries: KnowledgeEntry[], now = new Date()) {

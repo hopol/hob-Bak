@@ -74,8 +74,8 @@ describe("任务依赖（after）", () => {
       expect(hob.runtime.jobs.transcript(b.id).filter((step) => step.kind === "tool")).toHaveLength(0);
       expect(hob.runtime.jobs.transcript(c.id).filter((step) => step.kind === "tool")).toHaveLength(0);
       const sent = event.mock.calls.map((args) => String(args[1]));
-      expect(sent.filter((line) => line.startsWith("任务「再写总结」") && line.includes("前置任务「先查目录」没做成"))).toHaveLength(1);
-      expect(sent.filter((line) => line.startsWith("任务「发布总结」") && line.includes("前置任务「再写总结」没做成"))).toHaveLength(1);
+      expect(sent.filter((line) => line.startsWith("「Hob」的任务「再写总结」") && line.includes("前置任务「先查目录」没做成"))).toHaveLength(1);
+      expect(sent.filter((line) => line.startsWith("「Hob」的任务「发布总结」") && line.includes("前置任务「再写总结」没做成"))).toHaveLength(1);
     } finally {
       hob.close();
     }

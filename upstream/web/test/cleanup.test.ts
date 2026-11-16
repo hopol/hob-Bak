@@ -12,7 +12,6 @@ beforeAll(async () => {
     server: { port: 0, host: "127.0.0.1", proxy: {} },
     plugins: [{ name: "cleanup-test-exports", enforce: "pre", transform(code, id) {
       if (id.endsWith("/components/Items.tsx")) return `${code}\nexport { SingleQuestionCard, JobCard };`;
-      if (id.endsWith("/components/Projects.tsx")) return `${code}\nexport { NoteBox };`;
       if (id.endsWith("/components/Settings.tsx")) return `${code}\nexport { McpDetail };`;
     } }],
   });
@@ -21,11 +20,11 @@ beforeAll(async () => {
   if (!address || typeof address === "string") throw new Error("测试服务器没有端口");
   base = `http://127.0.0.1:${address.port}`;
   browser = await chromium.launch({ executablePath: "/usr/bin/google-chrome", args: ["--no-sandbox"] });
-  page = await browser.newPage();
+  page = await browser.newPage({ locale: "zh-CN" });
 });
 afterAll(async () => { await page?.close(); await browser?.close(); await server?.close(); });
 
-async function fixture(name: string) { await page.goto(`${base}/test/cleanup-fixture.html?fixture=${name}`); }
+async function fixture(name: string) { await page.goto(`${base}/test/cleanup-fixture.html?fixture=${name}&lang=zh-CN`); }
 async function calls(key: string) { return page.evaluate((k) => (window as unknown as { cleanupCalls: Record<string, number> }).cleanupCalls[k], key); }
 
 describe("前端失败路径", () => {
@@ -57,15 +56,6 @@ describe("前端失败路径", () => {
     await page.getByRole("button", { name: "发送", exact: true }).click();
     await expect.poll(() => calls("reply")).toBe(1);
     await expect.poll(() => input.inputValue()).toBe("保留这段文字");
-  });
-  it("F22 事项补话组字 Enter 不发送", async () => {
-    await fixture("project");
-    const input = page.getByPlaceholder("补充说明…");
-    await input.fill("补充");
-    await input.dispatchEvent("keydown", { key: "Enter", isComposing: true });
-    expect(await calls("project")).toBe(0);
-    await input.press("Enter");
-    await expect.poll(() => calls("project")).toBe(1);
   });
   it("F29 翻页提示在深浅主题都使用 text3", async () => {
     await fixture("older");

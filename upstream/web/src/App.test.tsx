@@ -26,7 +26,7 @@ vi.mock("./components/Mobile.tsx", () => ({ MobileList: () => null, Sheet: () =>
 vi.mock("./components/Settings.tsx", () => ({ SettingsPage: () => null }));
 vi.mock("./components/Markdown.tsx", () => ({ Markdown: () => null }));
 vi.mock("./pwa.ts", () => ({ applyUpdate: vi.fn() }));
-vi.mock("./theme.ts", () => ({ updateStatusColor: vi.fn() }));
+vi.mock("./theme.ts", () => ({ updateStatusColor: vi.fn(), updateManifest: vi.fn(), isNarrow: () => window.innerWidth < 768 }));
 
 import { App } from "./App.tsx";
 import { backPanel } from "./store.ts";
@@ -38,9 +38,9 @@ describe("桌面文件预览", () => {
     state.panelStack = [{ kind: "file", path: "/mock/page.html", full: false }];
   });
 
-  it("盖在右栏上，收起的右栏也能显示；全宽保留聊天组件", () => {
+  it("右栏收起时也展开成侧边栏，把对话区挤窄；全宽保留聊天组件", () => {
     let html = renderToStaticMarkup(<App />);
-    expect(html).toContain('class="panelwrap off"');
+    expect(html).toContain('class="panelwrap wide page"');
     expect(html).toContain('<div class="panel-layer wide"><div class="fp-embedded">');
     expect(html).not.toContain("fpwrap");
     state.panelStack[0]!.full = true;

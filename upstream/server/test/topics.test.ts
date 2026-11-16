@@ -1,11 +1,11 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { Approval, Assistant, Group, GroupItem, GroupSummary, Job, Project } from "../../shared/types.ts";
+import type { Approval, Assistant, Group, GroupItem, GroupSummary, Job } from "../../shared/types.ts";
 import { createApp } from "../src/http.ts";
-import { buildSystemPrompt, PROJECT_OPEN_LINE, PROJECT_RECALL_LINE, TOPIC_OPEN_LINE, topicPromptLine } from "../src/prompt.ts";
+import { buildSystemPrompt, PROJECT_RECALL_LINE, TOPIC_OPEN_LINE, topicPromptLine } from "../src/prompt.ts";
 import { buildRouterTools } from "../src/router-tools.ts";
-import { CLOSED_TOPIC_REASON, TOPIC_CLOSED } from "../src/groups.ts";
+import { CLOSED_TOPIC_REASON, TOPIC_CLOSED, requestText } from "../src/groups.ts";
 import { call, makeHob, text, waitFor, type TestHob } from "./helpers.ts";
 
 const ISO = "2026-11-08T02:00:00.000Z";
@@ -17,8 +17,8 @@ function addAssistant(hob: TestHob, id: string, name: string, duty: string): Ass
   return assistant;
 }
 
-/** 三人群：Hob（群主）、服务器、写作。默认是「软件开发」。 */
-function setup(workflow?: "none"): { hob: TestHob; group: Group } {
+/** 三人群：Hob（群主）、服务器、写作。 */
+function setup(): { hob: TestHob; group: Group } {
   const hob = makeHob({}, { memory: "off" });
   addAssistant(hob, "ops", "服务器", "机器");
   addAssistant(hob, "write", "写作", "周报");
@@ -27,7 +27,6 @@ function setup(workflow?: "none"): { hob: TestHob; group: Group } {
     purpose: "机器上的事",
     ownerId: "hob",
     members: ["hob", "ops", "write"],
-    ...(workflow === "none" ? {} : { workflow: "software" }),
   });
   return { hob, group };
 }
@@ -80,13 +79,12 @@ function toolOf(hob: TestHob, name: string, gid?: string) {
 const textOf = (result: Awaited<ReturnType<ReturnType<typeof toolOf>["execute"]>>) => (result.content[0] as { text: string }).text;
 const isError = (result: { isError?: boolean }) => Boolean(result.isError);
 
-function prompt(hob: TestHob, assistantId: string, group: Group, projects?: Project[]): string {
+function prompt(hob: TestHob, assistantId: string, group: Group): string {
   return buildSystemPrompt(hob.runtime.store, assistantId, {
     timezone: "Asia/Shanghai",
     aboutYou: { name: "", language: "", notes: "" },
     memory: "off",
     group,
-    ...(projects ? { projects } : {}),
   });
 }
 
@@ -99,7 +97,7 @@ function appendUser(hob: TestHob, gid: string, text: string): GroupItem {
 
 function job(patch: Partial<Job> & Pick<Job, "id" | "assistantId">): Job {
   return {
-    title: "做子任务",
+    title: "做待办",
     instruction: "",
     status: "running",
     createdAt: ISO,
@@ -110,7 +108,7 @@ function job(patch: Partial<Job> & Pick<Job, "id" | "assistantId">): Job {
 }
 
 describe("话题的存储", () => {
-  it("话题读出来带所属群的成员、群主、负责什么和工作方式；群改了话题跟着变，group.json 里没有这些字段", () => {
+  it("话题读出来带所属群的成员、群主和负责什么；群改了话题跟着变，group.json 里没有这些字段", () => {
     const { hob, group } = setup();
     try {
       const topic = hob.runtime.groups.createTopic(group.id, "相册备份出错", "user");
@@ -121,7 +119,6 @@ describe("话题的存储", () => {
         members: group.members,
         ownerId: "hob",
         purpose: group.purpose,
-        workflow: "software",
       });
 
       // 群改了成员、换了群主：话题读到的跟着变
@@ -133,48 +130,28 @@ describe("话题的存储", () => {
       expect(raw).toMatchObject({ id: topic.id, parentId: group.id, name: "相册备份出错", createdBy: "user" });
       for (const key of ["members", "ownerId", "purpose", "workflow"]) expect(raw[key], key).toBeUndefined();
       // 群那边照旧存着这些
-      expect(JSON.parse(readFileSync(join(hob.home, "groups", group.id, "group.json"), "utf8"))).toMatchObject({ ownerId: "ops", members: ["hob", "ops"], workflow: "software" });
+      expect(JSON.parse(readFileSync(join(hob.home, "groups", group.id, "group.json"), "utf8"))).toMatchObject({ ownerId: "ops", members: ["hob", "ops"] });
     } finally {
       hob.close();
     }
   });
-  it("群成员、群主和工作方式变化后，下一轮在群和话题里使用新的权限", async () => {
+  it("旧群文件的 workflow 读改名保存；接口带旧字段，新群文件不写回", async () => {
     const { hob, group } = setup();
     try {
-      const topic = hob.runtime.groups.createTopic(group.id, "相册备份出错", "user");
-      const single = (await hob.runtime.router.ensure("ops")).session;
-      const turn = async (gid: string, message: string) => {
-        hob.faux.setResponses([text("收到")]);
-        await hob.runtime.groups.send(gid, { text: message });
-        await waitFor(() => hob.runtime.groups.summary(gid).busy.length === 0);
-      };
-      for (const gid of [group.id, topic.id]) {
-        await turn(gid, "先看一下");
-        expect((await hob.runtime.router.ensure("hob", gid)).session!.getActiveToolNames()).toContain("open_project");
-        await turn(gid, "@写作 看一下");
-      }
-      hob.runtime.groups.update(group.id, { members: ["hob", "ops"] });
-      for (const gid of [group.id, topic.id]) {
-        const before = userTexts(memberFile(hob, gid, "write")).length;
-        await turn(gid, "@写作 再看一下");
-        expect(userTexts(memberFile(hob, gid, "write"))).toHaveLength(before);
-      }
-      hob.runtime.groups.update(group.id, { ownerId: "ops" });
-      for (const gid of [group.id, topic.id]) {
-        await turn(gid, "现在请群主处理");
-        expect((await hob.runtime.router.ensure("ops", gid)).session!.getActiveToolNames()).toContain("open_project");
-        await turn(gid, "@Hob 也看看");
-        expect((await hob.runtime.router.ensure("hob", gid)).session!.getActiveToolNames()).not.toContain("open_project");
-      }
-      hob.runtime.groups.update(group.id, { workflow: null });
-      for (const gid of [group.id, topic.id]) {
-        await turn(gid, "再请群主处理");
-        expect((await hob.runtime.router.ensure("ops", gid)).session!.getActiveToolNames()).not.toContain("open_project");
-      }
-      expect((await hob.runtime.router.ensure("ops")).session).toBe(single);
-    } finally {
-      hob.close();
-    }
+      const file = join(hob.home, "groups", group.id, "group.json");
+      const original = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+      writeFileSync(file, JSON.stringify({ ...original, workflow: "software" }) + "\n");
+      expect(hob.runtime.store.group(group.id)?.workflow).toBe("software");
+      hob.runtime.groups.update(group.id, { name: "改过名字" });
+      expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ name: "改过名字", workflow: "software" });
+
+      const { app, cookie } = await loggedIn(hob);
+      const created = await app.request("/api/groups", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ name: "接口兼容", purpose: "测试", ownerId: "hob", members: ["hob"], workflow: "software" }) });
+      expect(created.status).toBe(201);
+      const newGroup = (await created.json()) as Group;
+      const newFile = JSON.parse(readFileSync(join(hob.home, "groups", newGroup.id, "group.json"), "utf8")) as Record<string, unknown>;
+      expect(newFile.workflow).toBeUndefined();
+    } finally { hob.close(); }
   });
 });
 
@@ -186,7 +163,7 @@ describe("话题的接口", () => {
       const created = await post(`/api/groups/${group.id}/topics`, { title: "相册备份出错" });
       expect(created.status).toBe(201);
       const topic = (await created.json()) as Group;
-      expect(topic).toMatchObject({ name: "相册备份出错", parentId: group.id, createdBy: "user", workflow: "software" });
+      expect(topic).toMatchObject({ name: "相册备份出错", parentId: group.id, createdBy: "user" });
       expect(hob.runtime.store.groupItems(group.id).find((item) => item.kind === "topic")).toMatchObject({ speaker: "user", topicId: topic.id });
 
       const nested = await post(`/api/groups/${topic.id}/topics`, { title: "再开一个" });
@@ -235,22 +212,20 @@ describe("话题的接口", () => {
     }
   });
 
-  it("关闭有事项的话题：事项按放弃处理，原因写「用户关闭了这个话题」", async () => {
+  it("关闭话题：记录用户给的结论", async () => {
     const { hob, group } = setup();
     try {
       const { post } = await loggedIn(hob);
       const topic = hob.runtime.groups.createTopic(group.id, "相册备份出错", "user");
-      const project = hob.runtime.projects.open({ group: topic, ownerId: "hob", title: "相册备份出错" });
 
       expect((await post(`/api/groups/${topic.id}/close`, { note: "先不弄了" })).status).toBe(200);
-      expect(hob.runtime.store.project(topic.id, project.id)).toMatchObject({ stage: "dropped", summary: CLOSED_TOPIC_REASON });
       expect(hob.runtime.store.group(topic.id)).toMatchObject({ closeNote: "先不弄了" });
     } finally {
       hob.close();
     }
   });
 
-  it("PATCH：话题只能改名；工作方式只收 software 和空；有没结束的事项时不能改成「无」", async () => {
+  it("PATCH：话题只能改名；旧字段忽略；有无关字段也不影响", async () => {
     const { hob, group } = setup();
     try {
       const { patch, post } = await loggedIn(hob);
@@ -260,142 +235,12 @@ describe("话题的接口", () => {
       expect(renamed.status).toBe(200);
       expect((await renamed.json()) as Group).toMatchObject({ name: "相册备份好了" });
 
-      for (const body of [{ members: ["hob"] }, { ownerId: "ops" }, { purpose: "别的事" }, { workflow: "software" }]) {
+      for (const body of [{ members: ["hob"] }, { ownerId: "ops" }, { purpose: "别的事" }]) {
         const result = await patch(`/api/groups/${topic.id}`, body);
         expect(result.status, JSON.stringify(body)).toBe(400);
-        expect(await result.json()).toMatchObject({ error: "话题的成员、群主、负责什么和工作方式跟着所属的群，在群里改" });
+        expect(await result.json()).toMatchObject({ error: "话题的成员、群主、负责什么跟着所属的群，在群里改" });
       }
 
-      const bogus = await patch(`/api/groups/${group.id}`, { workflow: "dev" });
-      expect(bogus.status).toBe(400);
-      expect(await bogus.json()).toMatchObject({ error: "工作方式只能填 software（软件开发），或者不填" });
-      expect((await post("/api/groups", { name: "x", purpose: "y", ownerId: "hob", members: ["hob"], workflow: "dev" })).status).toBe(400);
-
-      // 有没结束的事项：不能改成「无」
-      const project = hob.runtime.projects.open({ group: topic, ownerId: "hob", title: "相册备份" });
-      const none = await patch(`/api/groups/${group.id}`, { workflow: null });
-      expect(none.status).toBe(400);
-      expect(await none.json()).toMatchObject({ error: "这个群还有没结束的事项，结束以后才能改工作方式" });
-
-      // 事项结束以后可以改；群和话题读到的跟着变
-      hob.runtime.projects.close(topic.id, project.id, "done", "处理完了");
-      const cleared = await patch(`/api/groups/${group.id}`, { workflow: null });
-      expect(cleared.status).toBe(200);
-      expect(((await cleared.json()) as Group).workflow).toBeUndefined();
-      expect(hob.runtime.store.group(topic.id)?.workflow).toBeUndefined();
-    } finally {
-      hob.close();
-    }
-  });
-
-  it("归档群：话题目录一起搬进 archive，每个话题都发 group_removed；话题本身不走归档", async () => {
-    const { hob, group } = setup();
-    try {
-      const { post } = await loggedIn(hob);
-      const first = hob.runtime.groups.createTopic(group.id, "相册备份出错", "user");
-      const second = hob.runtime.groups.createTopic(group.id, "打印机连不上", "hob");
-      expect((await post(`/api/groups/${first.id}/archive`)).status).toBe(400);
-
-      const removed: string[] = [];
-      hob.runtime.bus.subscribe((event) => {
-        if (event.type === "group_removed") removed.push(event.id);
-      });
-      expect((await post(`/api/groups/${group.id}/archive`)).status).toBe(200);
-
-      expect(hob.runtime.store.group(group.id)).toBeUndefined();
-      expect(hob.runtime.store.group(first.id)).toBeUndefined();
-      expect(hob.runtime.store.group(second.id)).toBeUndefined();
-      expect(removed).toEqual(expect.arrayContaining([group.id, first.id, second.id]));
-
-      const archived = readdirSync(join(hob.home, "archive", "groups"));
-      expect(archived).toHaveLength(1);
-      const folder = join(hob.home, "archive", "groups", archived[0]!);
-      expect(existsSync(join(folder, "group.json"))).toBe(true);
-      expect(existsSync(join(folder, "topics", first.id, "group.json"))).toBe(true);
-      expect(existsSync(join(folder, "topics", second.id, "group.json"))).toBe(true);
-    } finally {
-      hob.close();
-    }
-  });
-
-  it("GET /api/groups：话题带 parentId 和 project，done / total / waitingUser / current 算得对", async () => {
-    const { hob, group } = setup();
-    try {
-      const { get } = await loggedIn(hob);
-      const topic = hob.runtime.groups.createTopic(group.id, "相册备份出错", "user");
-      hob.runtime.store.saveJob(job({ id: "t-topic", assistantId: "ops", groupId: topic.id, status: "running" }));
-      const project: Project = {
-        id: "p-topic",
-        groupId: topic.id,
-        title: "相册备份出错",
-        ownerId: "hob",
-        stage: "doing",
-        request: { text: "相册备份出错", at: ISO },
-        clarify: [],
-        subtasks: [
-          { n: 1, title: "改备份脚本", assignee: "ops", brief: "", after: [], jobId: "t-topic" },
-          { n: 2, title: "你去手机上点一次", assignee: "user", brief: "", after: [1], notifiedAt: ISO },
-          { n: 3, title: "你已经点过的", assignee: "user", brief: "", after: [], doneAt: ISO },
-        ],
-        startedAt: ISO,
-        itemId: "g-1",
-        createdAt: ISO,
-        updatedAt: ISO,
-      };
-      hob.runtime.store.saveProject(project);
-
-      const listed = async () => ((await get("/api/groups")).json() as Promise<GroupSummary[]>);
-      const found = async () => (await listed()).find((item) => item.id === topic.id)!;
-      expect((await found()).parentId).toBe(group.id);
-      expect((await found()).project).toMatchObject({ id: "p-topic", title: "相册备份出错", stage: "doing", done: 1, total: 3, waitingUser: true, current: "ops" });
-
-      // 提问卡没答也算等你；任务跑完、还没轮到下一批时 current 是负责人
-      const approval: Approval = {
-        id: "q-topic",
-        assistantId: "hob",
-        title: "用哪个目录",
-        options: [{ key: "A", label: "老目录" }, { key: "B", label: "新目录" }],
-        status: "pending",
-        source: "router",
-        groupId: topic.id,
-        createdAt: ISO,
-      };
-      hob.runtime.store.saveApproval(approval);
-      hob.runtime.store.saveJob(job({ id: "t-topic", assistantId: "ops", groupId: topic.id, status: "done" }));
-      hob.runtime.store.saveProject({ ...project, subtasks: project.subtasks.map((subtask) => (subtask.n === 2 ? { ...subtask, doneAt: ISO } : subtask)), stage: "plan", updatedAt: ISO });
-      expect((await found()).project).toMatchObject({ waitingUser: true, current: "hob", done: 3 });
-
-      // 提问卡答了：子任务拆好了等你点开始，也算等你；还在澄清就不算
-      hob.runtime.store.saveApproval({ ...approval, status: "answered" });
-      expect((await found()).project).toMatchObject({ waitingUser: true });
-      hob.runtime.store.saveProject({ ...project, stage: "clarify", subtasks: [], updatedAt: ISO });
-      expect((await found()).project).toMatchObject({ waitingUser: false });
-
-      // 事项结束以后不填 current
-      hob.runtime.store.saveProject({ ...project, stage: "done", updatedAt: ISO });
-      const ended = (await found()).project!;
-      expect(ended.current).toBeUndefined();
-      expect(ended.stage).toBe("done");
-    } finally {
-      hob.close();
-    }
-  });
-});
-
-describe("open_topic：把综合里的原话转到话题里", () => {
-  it("定时记录是触发项时转发记录而不是最后的用户消息", async () => {
-    const { hob, group } = setup();
-    try {
-      appendUser(hob, group.id, "无关的旧消息");
-      const note = hob.runtime.groups.appendItem(group.id, "hob", { kind: "note", icon: "routine", text: "定时任务「监听」到点了，检查到：新问题" });
-      hob.runtime.groups.triggerOf = () => note;
-      const events: string[] = [];
-      hob.runtime.groups.deliverEvent = async (_gid, _aid, event) => { events.push(event); };
-      const result = await toolOf(hob, "open_topic", group.id).execute("c", { title: "新问题", note: "处理第一条" });
-      expect(isError(result)).toBe(false);
-      const topic = hob.runtime.groups.topicsOf(group.id)[0]!;
-      expect(hob.runtime.store.groupItems(topic.id)).toContainEqual(expect.objectContaining({ kind: "note", text: "定时任务「监听」到点了，检查到：新问题", forwardedFrom: { groupId: group.id, itemId: note.id } }));
-      expect(events[0]).toContain("处理第一条");
     } finally { hob.close(); }
   });
   it("开新话题：综合里有话题卡，话题里有带 forwardedFrom 的用户消息，群主在话题里开了一轮", async () => {
@@ -417,11 +262,46 @@ describe("open_topic：把综合里的原话转到话题里", () => {
       const forwarded = hob.runtime.store.groupItems(topic.id).find((item) => item.kind === "user")!;
       expect(forwarded).toMatchObject({ speaker: "user", text: "相册备份一直报错", files: ["/tmp/截图.png"], forwardedFrom: { groupId: group.id } });
 
-      // 话题里那一轮的输入：先是用户原话，再是事件和备注
+      // 话题里那一轮的输入：先是用户原话，再是事件（带综合里前面几句）和备注
       expect(inputBody(memberFile(hob, topic.id, "hob")).split("\n\n")).toEqual([
         "用户：相册备份一直报错（附件：/tmp/截图.png）",
-        "[hob-event] 这个话题是你从综合开的，上面是用户在综合里的原话。\n你留的备注：备份目录是 /vol/photo",
+        "[hob-event] 这个话题是你从综合开的，上面是用户在综合里的原话。",
+        expect.stringMatching(/^用户原话（[^）]*，在群「家里机器」里）：\n相册备份一直报错$/),
+        "附件：/tmp/截图.png",
+        "Hob 的备注：备份目录是 /vol/photo",
       ]);
+    } finally {
+      hob.close();
+    }
+  });
+
+  it("开话题：交给群主的那条带着综合里前面几句，转进话题的只有触发的那一条", async () => {
+    const { hob, group } = setup();
+    try {
+      // 综合里先说两句，再交代要办的事
+      hob.faux.setResponses([text("先记一下"), call("open_topic", { title: "相册备份" }), text("我来安排")]);
+      await hob.runtime.groups.send(group.id, { text: "这周整理相册" });
+      await waitFor(() => hob.runtime.store.groupItems(group.id).some((item) => item.kind === "assistant" && item.text === "先记一下"));
+      const delivered: string[] = [];
+      const deliver = hob.runtime.groups.deliverEvent.bind(hob.runtime.groups);
+      hob.runtime.groups.deliverEvent = async (gid, _aid, words, trigger) => {
+        if (hob.runtime.store.group(gid)?.parentId) delivered.push(words);
+        else await deliver(gid, _aid, words, trigger);
+      };
+      await hob.runtime.groups.send(group.id, { text: "相册备份一直报错", files: ["/tmp/截图.png"] });
+      await waitFor(() => hob.runtime.groups.topicsOf(group.id).length === 1);
+      const topic = hob.runtime.groups.topicsOf(group.id)[0]!;
+
+      // 事件：来由的原文 + 综合里前面那一句
+      expect(delivered.at(-1)).toContain("最近的对话：");
+      expect(delivered.at(-1)).toContain("这周整理相册");
+      expect(delivered.at(-1)).toContain("相册备份一直报错");
+
+      // 话题里只转进触发这一轮的那一条，前面那句不当条目转过去
+      const carried = hob.runtime.store.groupItems(topic.id).filter((item) => item.kind === "user");
+      expect(carried).toHaveLength(1);
+      expect(carried[0]).toMatchObject({ text: "相册备份一直报错", files: ["/tmp/截图.png"] });
+      expect(hob.runtime.store.groupItems(topic.id).some((item) => item.text.includes("这周整理相册"))).toBe(false);
     } finally {
       hob.close();
     }
@@ -445,7 +325,9 @@ describe("open_topic：把综合里的原话转到话题里", () => {
         text: "转到了话题「打印机连不上」",
       });
       await waitFor(() => userTexts(memberFile(hob, topic.id, "hob")).length > 0);
-      expect(inputBody(memberFile(hob, topic.id, "hob")).split("\n\n").at(-1)).toBe("[hob-event] 上面是用户在综合里的原话。");
+      const body = inputBody(memberFile(hob, topic.id, "hob"));
+      expect(body).toContain("[hob-event] 上面是用户在综合里的原话。");
+      expect(body).toMatch(/用户原话（[^）]*，在群「家里机器」里）：\n打印机又连不上了/);
     } finally {
       hob.close();
     }
@@ -491,87 +373,35 @@ describe("open_topic：把综合里的原话转到话题里", () => {
   });
 });
 
-describe("close_topic：群主关话题", () => {
-  it("在话题里不填 topic 就关这个话题；综合里要填；有没结束的事项时不关", async () => {
+describe("close_topic：结论", () => {
+  it("没有 note 的话题也能关闭", async () => {
     const { hob, group } = setup();
     try {
-      const inside = hob.runtime.groups.createTopic(group.id, "相册备份出错", "user");
-      const outside = hob.runtime.groups.createTopic(group.id, "打印机连不上", "user");
-      const project = hob.runtime.projects.open({ group: outside, ownerId: "hob", title: "打印机连不上" });
-
-      // 话题里有没结束的事项：让群主用 close_project
-      const blocked = await toolOf(hob, "close_topic", outside.id).execute("c", {});
-      expect(isError(blocked)).toBe(true);
-      expect(textOf(blocked)).toBe("话题「打印机连不上」里的事项「打印机连不上」还没结束：用 close_project 结束事项，话题会跟着关。");
-
-      const closed = await toolOf(hob, "close_topic", inside.id).execute("c", { note: "办完了" });
-      expect(isError(closed)).toBe(false);
-      expect(textOf(closed)).toBe("话题「相册备份出错」已关闭。");
-      expect(hob.runtime.store.group(inside.id)).toMatchObject({ closeNote: "办完了" });
-
-      // 综合里没填 topic：列进行中的话题
-      const missing = await toolOf(hob, "close_topic", group.id).execute("c", {});
-      expect(isError(missing)).toBe(true);
-      expect(textOf(missing)).toContain("topic 不能为空");
-      expect(textOf(missing)).toContain(`打印机连不上（${outside.id}）`);
-      expect(textOf(missing)).not.toContain(`相册备份出错（${inside.id}）`);
-
-      // 填了别的群的话题也不行
-      const other = hob.runtime.groups.create({ name: "别的群", purpose: "别的事", ownerId: "hob", members: ["hob", "ops"] });
-      const elsewhere = hob.runtime.groups.createTopic(other.id, "别的话题", "user");
-      expect(textOf(await toolOf(hob, "close_topic", inside.id).execute("c", { topic: elsewhere.id }))).toContain("不是这个群的话题");
-      expect(hob.runtime.store.project(outside.id, project.id)?.stage).toBe("clarify");
-    } finally {
-      hob.close();
-    }
-  });
-});
-
-describe("open_project：在话题里立", () => {
-  it("话题里立的事项挂在话题上；一个话题只放一件；close_project 结束以后话题跟着关", async () => {
-    const { hob, group } = setup();
-    try {
-      hob.faux.setResponses([text("先问一句"), text("改好了")]);
-      const topic = hob.runtime.groups.createTopic(group.id, "相册备份出错", "user");
-      const open = toolOf(hob, "open_project", topic.id);
-      const first = await open.execute("c", { title: "相册备份出错" });
-      expect(isError(first)).toBe(false);
-      const project = hob.runtime.projects.list(topic.id)[0]!;
-      expect(project.groupId).toBe(topic.id);
-      expect(hob.runtime.store.groupItems(topic.id).find((item) => item.kind === "project")).toMatchObject({ speaker: "hob", projectId: project.id });
-      expect(textOf(first)).toContain(`事项「相册备份出错」（${project.id}）已立，现在是需求澄清。记录：`);
-
-      const second = await open.execute("c", { title: "另一件事" });
-      expect(isError(second)).toBe(true);
-      expect(textOf(second)).toContain(`这个话题已经有事项「相册备份出错」（${project.id}）：一个话题只放一件事项。`);
-
-      // close_project 结束事项：话题跟着关，关闭说明就是结论
-      const closed = await toolOf(hob, "close_project", topic.id).execute("c", { project: project.id, outcome: "done", summary: "备份恢复正常，验证过了" });
-      expect(isError(closed)).toBe(false);
-      expect(hob.runtime.store.group(topic.id)).toMatchObject({ closeNote: "备份恢复正常，验证过了" });
+      const topic = hob.runtime.groups.createTopic(group.id, "直接结束", "user");
+      const result = await toolOf(hob, "close_topic", topic.id).execute("c", {});
+      expect(isError(result)).toBe(false);
       expect(hob.runtime.store.group(topic.id)?.closedAt).toBeTruthy();
-      expect(hob.runtime.groups.summary(group.id).project).toBeUndefined();
-    } finally {
-      hob.close();
-    }
+    } finally { hob.close(); }
   });
 });
 
-describe("工具和提示词按工作方式和会话分开", () => {
-  it("「无」的群：群主只有 open_topic / close_topic，没有事项的工具和提示词", () => {
-    const { hob, group } = setup("none");
+describe("工具和提示词按话题会话分开", () => {
+  it("普通群：群主有开话题和关闭话题工具，人人都有 update_todos", () => {
+    const { hob, group } = setup();
     try {
       const names = buildRouterTools(hob.runtime, "hob", group.id).map((tool) => tool.name);
       expect(names).toContain("open_topic");
       expect(names).toContain("close_topic");
-      for (const name of ["open_project", "write_requirements", "plan_subtasks", "start_subtasks", "close_project"]) expect(names).not.toContain(name);
+      expect(names).toContain("update_todos");
+      for (const name of ["write_brief", "plan_todos", "start_todos"]) expect(names).not.toContain(name);
 
-      const shown = prompt(hob, "hob", group, []);
+      const shown = prompt(hob, "hob", group);
       expect(shown).toContain(TOPIC_OPEN_LINE);
-      expect(shown).not.toContain(PROJECT_OPEN_LINE);
-      expect(shown).not.toContain("## 这个群的事项");
-      // 成员也没有话题的工具
-      expect(buildRouterTools(hob.runtime, "ops", group.id).map((tool) => tool.name)).not.toContain("open_topic");
+      expect(shown).not.toContain("## 这个群的话题");
+      // 成员没有开话题的工具，但有 update_todos
+      const member = buildRouterTools(hob.runtime, "ops", group.id).map((tool) => tool.name);
+      expect(member).not.toContain("open_topic");
+      expect(member).toContain("update_todos");
     } finally {
       hob.close();
     }
@@ -585,49 +415,104 @@ describe("工具和提示词按工作方式和会话分开", () => {
       expect(overview).toContain(TOPIC_OPEN_LINE);
       expect(overview).toContain("## 这个群的话题");
       expect(overview).toContain(`- 「相册备份出错」（${topic.id}）· 进行中 · `);
-      expect(overview).toContain(PROJECT_OPEN_LINE);
+      expect(overview).toContain(PROJECT_RECALL_LINE);
 
-      const inside = prompt(hob, "hob", topic, hob.runtime.projects.list(topic.id));
+      const inside = prompt(hob, "hob", topic);
       expect(inside).toContain(topicPromptLine(group.name, topic.name));
       expect(inside).toContain(`你在群「${group.name}」里`);
       expect(inside).not.toContain(TOPIC_OPEN_LINE);
       expect(inside).not.toContain("## 这个群的话题");
-      // 群主的工具：话题里没有 open_topic，close_topic 照旧
+      // 群主的工具：话题里有 open_topic，close_topic 照旧
       const names = buildRouterTools(hob.runtime, "hob", topic.id).map((tool) => tool.name);
       expect(names).not.toContain("open_topic");
       expect(names).toContain("close_topic");
 
       // 成员在话题里也有开头那段，没有群主那两段
-      const member = prompt(hob, "ops", topic, hob.runtime.projects.list(topic.id));
+      const member = prompt(hob, "ops", topic);
       expect(member).toContain(topicPromptLine(group.name, topic.name));
       expect(member).not.toContain(TOPIC_OPEN_LINE);
-      expect(member).not.toContain(PROJECT_OPEN_LINE);
     } finally {
       hob.close();
     }
   });
 
-  it("以前直接立在群里的事项照旧出现，PROJECT_RECALL_LINE 只出一次", () => {
+});
+
+describe("交接：来由只从 requestItem 取", () => {
+  const routineOf = (hob: TestHob, group: Group) => hob.runtime.routines.create({
+    assistantId: "hob",
+    groupId: group.id,
+    name: "看 PR",
+    instruction: "看看有没有新 PR",
+    schedules: ["0 9 * * *"],
+  });
+  const fullText = "定时任务「看 PR」到点了，要做的事：看看有没有新 PR";
+
+  it("定时到点的记录带着交给群主的全文，转进话题以后还在", async () => {
     const { hob, group } = setup();
     try {
-      // 以前的群级事项：项目记在群上，不在话题里
-      const legacy = hob.runtime.projects.open({ group, ownerId: "hob", title: "导出加按月筛选" });
-      expect(legacy.groupId).toBe(group.id);
-      const withProject = prompt(hob, "hob", group, hob.runtime.projects.list(group.id));
-      expect(withProject).toContain("## 这个群的事项");
-      expect(withProject).toContain(`- 「导出加按月筛选」· 需求澄清 · `);
-      expect(withProject.split(PROJECT_RECALL_LINE)).toHaveLength(2);
+      const routine = routineOf(hob, group);
+      const delivered: { gid: string; text: string; trigger?: string }[] = [];
+      hob.runtime.groups.deliverEvent = async (gid, _aid, text, trigger) => { delivered.push({ gid, text, trigger }); };
+      expect(await hob.runtime.routines.runNow(routine.id)).toMatchObject({ outcome: "handed" });
 
-      // 有了话题：两节都在，召回那句还是只有一次、放在最后
-      hob.runtime.groups.createTopic(group.id, "相册备份出错", "user");
-      const both = prompt(hob, "hob", group, hob.runtime.projects.list(group.id));
-      expect(both).toContain("## 这个群的话题");
-      expect(both).toContain("## 这个群的事项");
-      expect(both.split(PROJECT_RECALL_LINE)).toHaveLength(2);
-      expect(both.indexOf("## 这个群的话题")).toBeLessThan(both.indexOf("## 这个群的事项"));
-      expect(both.indexOf(PROJECT_RECALL_LINE)).toBeGreaterThan(both.lastIndexOf("## 这个群的事项"));
-    } finally {
-      hob.close();
-    }
+      const note = hob.runtime.store.groupItems(group.id).find((item) => item.kind === "note" && item.icon === "routine")!;
+      expect(note).toMatchObject({ text: "定时任务「看 PR」到点了", request: fullText });
+      expect(delivered[0]).toMatchObject({ gid: group.id, trigger: note.id, text: fullText });
+
+      // 事件回合（时间线上最近一条是定时记录）：取到的是它
+      expect(hob.runtime.groups.requestItem(group.id, "hob")?.id).toBe(note.id);
+
+      // 转进话题：记着从哪来，全文还在
+      hob.faux.setResponses([text("看到了")]);
+      await toolOf(hob, "open_topic", group.id).execute("c", { title: "回 PR" });
+      const topic = hob.runtime.groups.topicsOf(group.id)[0]!;
+      const forwarded = hob.runtime.store.groupItems(topic.id).find((item) => item.kind === "note")!;
+      expect(forwarded).toMatchObject({ request: fullText, forwardedFrom: { groupId: group.id, itemId: note.id } });
+
+      // 话题里这一轮没在跑时，取到的也是它
+      const request = hob.runtime.groups.requestItem(topic.id, "hob")!;
+      expect(request.id).toBe(forwarded.id);
+      expect(requestText(request)).toBe(fullText);
+    } finally { hob.close(); }
   });
+
+  it("定时触发的回合：转进话题的是到点的记录，不是更早的用户消息", async () => {
+    const { hob, group } = setup();
+    try {
+      appendUser(hob, group.id, "昨天的旧消息");
+      const routine = routineOf(hob, group);
+      hob.faux.setResponses([call("open_topic", { title: "回 PR" }), text("接着办")]);
+      await hob.runtime.routines.runNow(routine.id);
+      await waitFor(() => hob.runtime.groups.topicsOf(group.id).length === 1);
+      const topic = hob.runtime.groups.topicsOf(group.id)[0]!;
+      expect(hob.runtime.store.groupItems(topic.id).some((item) => item.kind === "user")).toBe(false);
+      await waitFor(() => userTexts(memberFile(hob, topic.id, "hob")).length > 0);
+      expect(inputBody(memberFile(hob, topic.id, "hob"))).toMatch(/上面是定时任务到点的记录。\n\n定时任务到点的记录（[^）]*，在群「家里机器」里）：\n定时任务「看 PR」到点了，要做的事：看看有没有新 PR/);
+      // 定时来由不带前面几句对话
+      expect(inputBody(memberFile(hob, topic.id, "hob"))).not.toContain("最近的对话");
+      expect(inputBody(memberFile(hob, topic.id, "hob"))).not.toContain("昨天的旧消息");
+    } finally { hob.close(); }
+  });
+
+  it("定时触发的 open_topic：返回说交给了话题，事件带全文", async () => {
+    const { hob, group } = setup();
+    try {
+      const routine = routineOf(hob, group);
+      const delivered: string[] = [];
+      hob.runtime.groups.deliverEvent = async (_gid, _aid, text) => { delivered.push(text); };
+      await hob.runtime.routines.runNow(routine.id);
+      const result = await toolOf(hob, "open_topic", group.id).execute("c", { title: "回 PR", note: "先看标题" });
+      const topic = hob.runtime.groups.topicsOf(group.id)[0]!;
+      expect(textOf(result)).toBe(`话题「回 PR」（${topic.id}）已开，定时任务到点的记录已转过去，话题里的你已经接手，这一件在综合里不用再管。这次定时查到的其他条目，接着按分量办；都安排完了，在综合里说一句这次各是怎么安排的。`);
+      expect(delivered.at(-1)).toMatch(/^这个话题是你从综合开的，上面是定时任务到点的记录。\n\n定时任务到点的记录（[^）]*，在群「家里机器」里）：\n定时任务「看 PR」到点了，要做的事：看看有没有新 PR\n\nHob 的备注：先看标题$/);
+
+      // 转到已有话题：事件第一句换成「上面是…」
+      await hob.runtime.routines.runNow(routine.id);
+      await toolOf(hob, "open_topic", group.id).execute("c2", { topic: topic.id, note: "再看一次" });
+      expect(delivered.at(-1)).toMatch(/^上面是定时任务到点的记录。\n\n定时任务到点的记录（[^）]*，在群「家里机器」里）：\n定时任务「看 PR」到点了，要做的事：看看有没有新 PR\n\nHob 的备注：再看一次$/);
+    } finally { hob.close(); }
+  });
+
+
 });

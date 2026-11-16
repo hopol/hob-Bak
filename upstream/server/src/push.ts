@@ -1,4 +1,5 @@
 // HOB_HOME/system/push.json：VAPID 密钥 + 订阅设备（0600、原子写）。推送走 web-push。
+import { t } from "../../shared/i18n.ts";
 import { plainText } from "../../shared/plain-text.ts";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -114,8 +115,8 @@ function isGone(status: number | undefined, reason: string): boolean {
 }
 
 function describeFailure(error: unknown, status: number | undefined, reason: string): string {
-  if (status) return `推送服务拒绝（${status}${reason ? ` ${reason}` : ""}）`;
-  return `连不上推送服务（${error instanceof Error ? error.message : String(error)}）`;
+  if (status) return t("推送服务拒绝（{status}{reason}）", { status, reason: reason ? ` ${reason}` : "" });
+  return t("连不上推送服务（{reason}）", { reason: error instanceof Error ? error.message : String(error) });
 }
 
 /** 推送服务（可见性只在内存里：进程重启后没有前台客户端）。 */
@@ -282,7 +283,7 @@ export class PushService {
     const devices = this.load().devices;
     const targets = endpoint ? devices.filter((device) => device.endpoint === endpoint) : devices;
     if (!targets.length) return { sent: 0, removed: 0, skipped: "no-devices" };
-    return this.deliver(targets, { title: "Hob", body: "测试通知：收到此消息说明推送功能正常。", url: "/" });
+    return this.deliver(targets, { title: "Hob", body: t("测试通知：收到此消息说明推送功能正常。"), url: "/" });
   }
 }
 
@@ -308,7 +309,7 @@ export function pushApproval(deps: NotifyDeps, approval: Approval): void {
   // 推送失败不能影响审批本身（也不能变成未处理的 rejection 把进程带走）
   // 推送的标题是卡片标题（一张卡可能问几个问题），正文写谁在等、等什么
   void deps.push
-    .send({ title: plainText(approval.title), body: `${assistant.name} · 等待你的回答`, url: openUrl(approval.assistantId, approval.groupId) })
+    .send({ title: plainText(approval.title), body: t("{assistant} · 等待你的回答", { assistant: assistant.name }), url: openUrl(approval.assistantId, approval.groupId) })
     .catch(() => undefined);
 }
 
@@ -317,9 +318,9 @@ export function pushJobEnd(deps: NotifyDeps, job: Job): void {
   if (job.status !== "stuck" && job.status !== "failed") return;
   const assistant = deps.store.assistant(job.assistantId);
   if (!assistant?.notify) return;
-  const what = job.status === "stuck" ? "受阻" : "失败";
-  const reason = job.statusReason ? `：${plainText(job.statusReason)}` : "";
+  const status = job.status === "stuck" ? t("受阻") : t("失败");
+  const reason = job.statusReason ? t("：{reason}", { reason: plainText(job.statusReason) }) : "";
   void deps.push
-    .send({ title: assistant.name, body: `任务「${job.title}」${what}${reason}`, url: openUrl(job.assistantId, job.groupId) })
+    .send({ title: assistant.name, body: t("任务「{title}」{status}{reason}", { title: job.title, status, reason }), url: openUrl(job.assistantId, job.groupId) })
     .catch(() => undefined);
 }

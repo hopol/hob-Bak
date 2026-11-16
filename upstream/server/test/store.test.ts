@@ -95,21 +95,22 @@ describe("store", () => {
     } finally { hob.close(); }
   });
 
-  it("损坏的单个任务和事项跳过并记录路径", () => {
+  it("损坏的单个任务跳过并记录路径；老的待办文件在磁盘上也不报错", () => {
     const hob = makeHob();
     try {
       const group = hob.runtime.groups.create({ name: "群", purpose: "测试", ownerId: "hob", members: ["hob"] });
-      const project = join(hob.home, "groups", group.id, "projects", "bad.json");
+      // 以前的事项文件：不读、不删、不报错
+      const legacy = join(hob.home, "groups", group.id, "projects", "old.json");
       const job = join(hob.home, "assistants", "hob", "jobs", "bad", "job.json");
       mkdirSync(join(hob.home, "groups", group.id, "projects"), { recursive: true });
       mkdirSync(join(hob.home, "assistants", "hob", "jobs", "bad"), { recursive: true });
-      writeFileSync(project, "{坏掉");
+      writeFileSync(legacy, "{坏掉");
       writeFileSync(job, "{坏掉");
       const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-      expect(hob.runtime.store.projects(group.id)).toEqual([]);
       expect(hob.runtime.store.jobs()).toEqual([]);
-      expect(errors.mock.calls.flat().map(String).join("\n")).toContain(project);
       expect(errors.mock.calls.flat().map(String).join("\n")).toContain(job);
+      expect(errors.mock.calls.flat().map(String).join("\n")).not.toContain(legacy);
+      expect(hob.runtime.groups.summary(group).todos).toEqual([]);
       errors.mockRestore();
     } finally { hob.close(); }
   });

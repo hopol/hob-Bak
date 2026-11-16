@@ -5,29 +5,42 @@ import { DelayedText, Empty } from "./Empty.tsx";
 import { Group, PageHead, Seg } from "./SettingsParts.tsx";
 import { loadUsage, saveUsagePrice, useApp } from "../store.ts";
 import { fmtWhen } from "../util.ts";
+import { t, currentLocale } from "../../../shared/i18n.ts";
 
-const USAGE_RANGES = [
-  { key: "today", label: "今天", days: 1 },
-  { key: "week", label: "近 7 天", days: 7 },
-  { key: "month", label: "近 30 天", days: 30 },
-  { key: "all", label: "全部", days: 0 },
-] as const;
-type UsageRange = (typeof USAGE_RANGES)[number]["key"];
+const USAGE_RANGE_KEYS = ["today", "week", "month", "all"] as const;
+type UsageRange = (typeof USAGE_RANGE_KEYS)[number];
 type UsageMetric = "requests" | "tokens" | "cost";
 type PriceFields = Record<keyof TokenPrice, string>;
 
-const USAGE_METRICS: { key: UsageMetric; label: string }[] = [
-  { key: "requests", label: "请求" },
-  { key: "tokens", label: "Token" },
-  { key: "cost", label: "花费" },
-];
-const METRIC_TEXT: Record<UsageMetric, string> = { requests: "按请求次数着色", tokens: "按 Token 数着色", cost: "按花费着色" };
-const PRICE_FIELDS: { key: keyof TokenPrice; label: string }[] = [
-  { key: "input", label: "输入" },
-  { key: "output", label: "输出" },
-  { key: "cacheRead", label: "缓存读" },
-  { key: "cacheWrite", label: "缓存写" },
-];
+function usageRanges() {
+  return [
+    { key: "today" as const, label: t("今天"), days: 1 },
+    { key: "week" as const, label: t("近 7 天"), days: 7 },
+    { key: "month" as const, label: t("近 30 天"), days: 30 },
+    { key: "all" as const, label: t("全部"), days: 0 },
+  ];
+}
+
+function usageMetrics(): { key: UsageMetric; label: string }[] {
+  return [
+    { key: "requests", label: t("请求") },
+    { key: "tokens", label: "Token" },
+    { key: "cost", label: t("花费") },
+  ];
+}
+function metricText(metric: UsageMetric): string {
+  if (metric === "requests") return t("按请求次数着色");
+  if (metric === "tokens") return t("按 Token 数着色");
+  return t("按花费着色");
+}
+function priceFields(): { key: keyof TokenPrice; label: string }[] {
+  return [
+    { key: "input", label: t("输入") },
+    { key: "output", label: t("输出") },
+    { key: "cacheRead", label: t("缓存读") },
+    { key: "cacheWrite", label: t("缓存写") },
+  ];
+}
 
 /** 设置时区下的今天（YYYY-MM-DD）。 */
 function usageToday(timezone: string): string {
@@ -48,8 +61,9 @@ function usageWeekday(day: string): number {
 /** 「11月6日 周五」 */
 function usageDayText(day: string): string {
   const date = new Date(`${day}T00:00:00Z`);
-  const month = new Intl.DateTimeFormat("zh-CN", { timeZone: "UTC", month: "long", day: "numeric" }).format(date);
-  const weekday = new Intl.DateTimeFormat("zh-CN", { timeZone: "UTC", weekday: "short" }).format(date);
+  const locale = currentLocale() === "en" ? "en-US" : "zh-CN";
+  const month = new Intl.DateTimeFormat(locale, { timeZone: "UTC", month: "long", day: "numeric" }).format(date);
+  const weekday = new Intl.DateTimeFormat(locale, { timeZone: "UTC", weekday: "short" }).format(date);
   return `${month} ${weekday}`;
 }
 
@@ -109,10 +123,10 @@ function usageTotals(rows: UsageRow[], prices: UsagePrices): UsageTotals {
 function priceNote(prices: UsagePrices): string | null {
   if (prices.error) {
     return prices.updatedAt
-      ? `价格表更新失败：${prices.error}，用的是 ${fmtWhen(prices.updatedAt)} 的。`
-      : `价格表还没有拉到过：${prices.error}，所有模型都先按未定价算。`;
+      ? t("价格表更新失败：{error}，用的是 {when} 的。", { error: prices.error, when: fmtWhen(prices.updatedAt) })
+      : t("价格表还没有拉到过：{error}，所有模型都先按未定价算。", { error: prices.error });
   }
-  return prices.updatedAt ? null : "还没有拉到价格表，所有模型都先按未定价算。";
+  return prices.updatedAt ? null : t("还没有拉到价格表，所有模型都先按未定价算。");
 }
 
 export function UsageSection() {
@@ -134,18 +148,21 @@ export function UsageSection() {
   if (error) {
     return (
       <>
-        <PageHead title="消耗" desc="对话和任务用掉的 token 和花费，按服务商返回的用量统计；花费按模型价格估算，以服务商账单为准。" />
+        <PageHead title={t("消耗")} desc={t("对话和任务用掉的 token 和花费，按服务商返回的用量统计；花费按模型价格估算，以服务商账单为准。")} />
         <div className="badline" role="status">{error}</div>
       </>
     );
   }
-  if (!view) return <Empty><DelayedText text="正在统计会话用量…" /></Empty>;
+  if (!view) return <Empty><DelayedText text={t("正在统计会话用量…")} /></Empty>;
   return <UsagePage view={view} />;
 }
 
 function UsagePage({ view }: { view: UsageView }) {
   const s = useApp();
   const [prices, setPrices] = useState<UsagePrices>(view.prices);
+  const ranges = usageRanges();
+  const fieldsList = priceFields();
+  const metrics = usageMetrics();
   const [range, setRange] = useState<UsageRange>("month");
   const [metric, setMetric] = useState<UsageMetric>("requests");
   const [hover, setHover] = useState<string | null>(null);
@@ -157,7 +174,7 @@ function UsagePage({ view }: { view: UsageView }) {
 
   const today = usageToday(view.timezone);
   const year = useMemo(() => usageDays(today, 365), [today]);
-  const rangeItem = USAGE_RANGES.find((item) => item.key === range) ?? USAGE_RANGES[2];
+  const rangeItem = ranges.find((item) => item.key === range) ?? ranges[2]!;
   const rangeDays = rangeItem.days;
   const rangeLabel = rangeItem.label;
 
@@ -270,7 +287,7 @@ function UsagePage({ view }: { view: UsageView }) {
       const last = [...week].reverse().find((day): day is string => Boolean(day));
       const month = last ? Number(last.slice(5, 7)) : lastMonth;
       const label = month !== lastMonth && index - lastAt > 2;
-      months.push(label ? `${month}月` : "");
+      months.push(label ? new Intl.DateTimeFormat(currentLocale() === "en" ? "en-US" : "zh-CN", { month: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2020, month - 1, 1))) : "");
       if (label) lastAt = index;
       lastMonth = month;
     });
@@ -329,8 +346,8 @@ function UsagePage({ view }: { view: UsageView }) {
   const save = async (model: string) => {
     if (busy) return;
     const price: TokenPrice = { input: Number(fields.input), output: Number(fields.output), cacheRead: Number(fields.cacheRead), cacheWrite: Number(fields.cacheWrite) };
-    if (PRICE_FIELDS.some((field) => !Number.isFinite(price[field.key]) || price[field.key] < 0)) {
-      setEditError("四项单价都要填大于等于 0 的数字（美元 / 百万 token）。");
+    if (fieldsList.some((field) => !Number.isFinite(price[field.key]) || price[field.key] < 0)) {
+      setEditError(t("四项单价都要填大于等于 0 的数字（美元 / 百万 token）。"));
       return;
     }
     setBusy(true);
@@ -357,50 +374,50 @@ function UsagePage({ view }: { view: UsageView }) {
 
   return (
     <>
-      <PageHead title="消耗" desc="对话和任务用掉的 token 和花费，按服务商返回的用量统计；花费按模型价格估算，以服务商账单为准。" />
+      <PageHead title={t("消耗")} desc={t("对话和任务用掉的 token 和花费，按服务商返回的用量统计；花费按模型价格估算，以服务商账单为准。")} />
 
       <Group>
         <div className="u-seg">
-          <Seg items={USAGE_RANGES.map(({ key, label }) => ({ key, label }))} value={range} onChange={setRange} />
+          <Seg items={ranges.map(({ key, label }) => ({ key, label }))} value={range} onChange={setRange} />
         </div>
         <div className="group-card settings-card u-stats">
           <div className="u-stat">
-            <span className="k">请求</span>
+            <span className="k">{t("请求")}</span>
             <span className="v">{totals.requests.toLocaleString("en-US")}</span>
             {previous ? (
               previous.requests ? (
                 <span className="s">
-                  {range === "today" ? "比昨天" : `比上个 ${rangeDays} 天`} <b>{comparison(totals.requests, previous.requests)}</b>
+                  {range === "today" ? t("比昨天") : t("比上个 {n} 天", { n: rangeDays })} <b>{comparison(totals.requests, previous.requests)}</b>
                 </span>
               ) : (
-                <span className="s">{range === "today" ? "昨天" : "上个时段"}没有请求</span>
+                <span className="s">{range === "today" ? t("昨天") : t("上个时段")}{t("没有请求")}</span>
               )
             ) : null}
           </div>
           <div className="u-stat">
-            <span className="k">输入 token</span>
+            <span className="k">{t("输入 token")}</span>
             <span className="v">{usageCount(totals.input)}</span>
-            {totals.input ? <span className="s">其中缓存命中 {usagePercent(totals.cacheRead / totals.input)}</span> : null}
+            {totals.input ? <span className="s">{t("其中缓存命中 {percent}", { percent: usagePercent(totals.cacheRead / totals.input) })}</span> : null}
           </div>
           <div className="u-stat">
-            <span className="k">输出 token</span>
+            <span className="k">{t("输出 token")}</span>
             <span className="v">{usageCount(totals.output)}</span>
-            <span className="s">日均 {usageCount(totals.output / spanDays)}</span>
+            <span className="s">{t("日均 {value}", { value: usageCount(totals.output / spanDays) })}</span>
           </div>
           <div className="u-stat">
-            <span className="k">花费</span>
+            <span className="k">{t("花费")}</span>
             <span className="v">{usageMoney(totals.cost)}</span>
-            <span className="s">日均 {usageMoney(totals.cost / spanDays)}</span>
+            <span className="s">{t("日均 {value}", { value: usageMoney(totals.cost / spanDays) })}</span>
           </div>
         </div>
         {note ? <div className="note">{note}</div> : null}
-        {totals.unpriced ? <div className="note">有 {totals.unpriced} 个模型没有价格，这些模型的花费没有计入。</div> : null}
+        {totals.unpriced ? <div className="note">{t("有 {n} 个模型没有价格，这些模型的花费没有计入。", { n: totals.unpriced })}</div> : null}
       </Group>
 
       <Group>
-        <div className="lbl">最近一年 · 共 {usageCount(yearSums.requests)} 次请求</div>
+        <div className="lbl">{t("最近一年 · 共 {n} 次请求", { n: usageCount(yearSums.requests) })}</div>
         <div className="u-seg">
-          <Seg items={USAGE_METRICS} value={metric} onChange={setMetric} />
+          <Seg items={metrics} value={metric} onChange={setMetric} />
         </div>
         <div className="u-heatwrap">
           <div className="group-card settings-card u-heat" onMouseLeave={() => setHover(null)} style={{ "--weeks": heat.weeks.length } as CSSProperties}>
@@ -409,7 +426,7 @@ function UsagePage({ view }: { view: UsageView }) {
                 {heat.months.map((label, index) => <span key={index}>{label}</span>)}
               </div>
               <div className="u-grid">
-                <div className="u-wd"><span>一</span><span /><span>三</span><span /><span>五</span><span /><span /></div>
+                <div className="u-wd"><span>{t("一")}</span><span /><span>{t("三")}</span><span /><span>{t("五")}</span><span /><span /></div>
                 <div className="u-cells">
                   {heat.weeks.map((week, index) => (
                     <div className="hw" key={index}>
@@ -418,7 +435,7 @@ function UsagePage({ view }: { view: UsageView }) {
                           key={day}
                           className={`l${heat.level(day)}${day === today ? " today" : ""}`}
                           onMouseEnter={() => setHover(day)}
-                          title={`${usageDayText(day)}：${perDay.get(day)?.requests ?? 0} 次请求 · ${usageCount((perDay.get(day)?.tokens ?? 0))} token · ${usageMoney(perDay.get(day)?.cost ?? 0)}`}
+                          title={t("{day}：{requests} 次请求 · {tokens} token · {cost}", { n: perDay.get(day)?.requests ?? 0, day: usageDayText(day), requests: perDay.get(day)?.requests ?? 0, tokens: usageCount((perDay.get(day)?.tokens ?? 0)), cost: usageMoney(perDay.get(day)?.cost ?? 0) })}
                         />
                       ) : <i key={`empty-${at}`} />)}
                     </div>
@@ -427,32 +444,32 @@ function UsagePage({ view }: { view: UsageView }) {
               </div>
             </div>
             <div className="u-foot">
-              <span>每格一天，{METRIC_TEXT[metric]}</span>
-              <span className="u-legend">少 <i className="l0" /><i className="l1" /><i className="l2" /><i className="l3" /><i className="l4" /> 多</span>
+              <span>{t("每格一天，{metric}", { metric: metricText(metric) })}</span>
+              <span className="u-legend">{t("少")} <i className="l0" /><i className="l1" /><i className="l2" /><i className="l3" /><i className="l4" /> {t("多")}</span>
             </div>
           </div>
           {hover ? (
             <div className="u-tip">
               <b>{usageDayText(hover)}</b>
               <br />
-              {perDay.get(hover)?.requests ?? 0} 次请求 · {usageCount(perDay.get(hover)?.tokens ?? 0)} token · {usageMoney(perDay.get(hover)?.cost ?? 0)}
+              {t("{requests} 次请求 · {tokens} token · {cost}", { n: perDay.get(hover)?.requests ?? 0, requests: perDay.get(hover)?.requests ?? 0, tokens: usageCount(perDay.get(hover)?.tokens ?? 0), cost: usageMoney(perDay.get(hover)?.cost ?? 0) })}
             </div>
           ) : null}
         </div>
       </Group>
 
       <Group>
-        <div className="lbl">按模型 · {rangeLabel}</div>
+        <div className="lbl">{t("按模型 · {range}", { range: rangeLabel })}</div>
         {modelRows.length ? (
           <div className="u-mhead">
-            <span>模型</span>
-            <span>花费占比</span>
-            <span>请求</span>
-            <span>输入</span>
-            <span>输出</span>
-            <span>缓存</span>
-            <span>花费</span>
-            <span>单价</span>
+            <span>{t("模型")}</span>
+            <span>{t("花费占比")}</span>
+            <span>{t("请求")}</span>
+            <span>{t("输入")}</span>
+            <span>{t("输出")}</span>
+            <span>{t("缓存")}</span>
+            <span>{t("花费")}</span>
+            <span>{t("单价")}</span>
           </div>
         ) : null}
         <div className="group-card settings-card u-cards">
@@ -464,22 +481,22 @@ function UsagePage({ view }: { view: UsageView }) {
                 <div className="u-mrow">
                   <div className="u-mname">
                     <b title={row.model}>{row.model}</b>
-                    <span>{providerLabel(row.provider)}{price?.custom ? <em>自定</em> : null}</span>
+                    <span>{providerLabel(row.provider)}{price?.custom ? <em>{t("自定")}</em> : null}</span>
                   </div>
                   <div className="u-bar"><i style={{ width: `${share}%` }} /></div>
-                  <div className="u-num u-req"><span className="u-k">请求</span>{row.requests.toLocaleString("en-US")}</div>
-                  <div className="u-num u-in"><span className="u-k">输入</span>{usageCount(row.input)}</div>
-                  <div className="u-num u-out"><span className="u-k">输出</span>{usageCount(row.output)}</div>
-                  <div className="u-num u-cache"><span className="u-k">缓存命中</span>{row.input ? usagePercent(row.cacheRead / row.input) : "—"}</div>
+                  <div className="u-num u-req"><span className="u-k">{t("请求")}</span>{row.requests.toLocaleString("en-US")}</div>
+                  <div className="u-num u-in"><span className="u-k">{t("输入")}</span>{usageCount(row.input)}</div>
+                  <div className="u-num u-out"><span className="u-k">{t("输出")}</span>{usageCount(row.output)}</div>
+                  <div className="u-num u-cache"><span className="u-k">{t("缓存命中")}</span>{row.input ? usagePercent(row.cacheRead / row.input) : "—"}</div>
                   <div className="u-num strong u-cost">{row.cost === null ? "—" : usageMoney(row.cost)}</div>
-                  <button className={`u-price${price ? "" : " missing"}`} onClick={() => openEditor(row.model)} title="点这里改单价">
-                    {price ? unitText(price.price) : "未定价"}
+                  <button className={`u-price${price ? "" : " missing"}`} onClick={() => openEditor(row.model)} title={t("点这里改单价")}>
+                    {price ? unitText(price.price) : t("未定价")}
                   </button>
                 </div>
                 {editing === row.model ? (
                   <div className="u-edit">
                     <div className="u-edit-fields">
-                      {PRICE_FIELDS.map((field) => (
+                      {fieldsList.map((field) => (
                         <label key={field.key}>
                           <span>{field.label}</span>
                           <input
@@ -492,36 +509,36 @@ function UsagePage({ view }: { view: UsageView }) {
                       ))}
                     </div>
                     <div className="u-edit-actions">
-                      <button className="hob-btn" onClick={() => void save(row.model)} disabled={busy}>保存</button>
-                      <button className="hob-btn" onClick={() => setEditing(null)} disabled={busy}>取消</button>
-                      {price?.custom ? <button className="hob-btn" onClick={() => void restore(row.model)} disabled={busy}>恢复默认</button> : null}
+                      <button className="hob-btn" onClick={() => void save(row.model)} disabled={busy}>{t("保存")}</button>
+                      <button className="hob-btn" onClick={() => setEditing(null)} disabled={busy}>{t("取消")}</button>
+                      {price?.custom ? <button className="hob-btn" onClick={() => void restore(row.model)} disabled={busy}>{t("恢复默认")}</button> : null}
                       {editError ? <span className="badline">{editError}</span> : null}
                     </div>
-                    <div className="note">美元 / 百万 token。缓存读是命中缓存的输入，缓存写是写进缓存的输入；花费按这里算，以服务商账单为准。</div>
+                    <div className="note">{t("美元 / 百万 token。缓存读是命中缓存的输入，缓存写是写进缓存的输入；花费按这里算，以服务商账单为准。")}</div>
                   </div>
                 ) : null}
               </div>
             );
-          }) : <Empty>这段时间没有用量</Empty>}
+          }) : <Empty>{t("这段时间没有用量")}</Empty>}
         </div>
-        <div className="note">点单价可以改成自己的价格；改过的标「自定」，可以恢复默认。</div>
+        <div className="note">{t("点单价可以改成自己的价格；改过的标「自定」，可以恢复默认。")}</div>
       </Group>
 
       <Group>
-        <div className="lbl">按助手 · {rangeLabel}</div>
+        <div className="lbl">{t("按助手 · {range}", { range: rangeLabel })}</div>
         <div className="group-card settings-card u-cards">
           {whoRows.length ? whoRows.map((row) => {
             const total = row.chat + row.job;
             const share = maxWhoCost > 0 ? (row.cost / maxWhoCost) * 100 : 0;
             return (
               <div className="u-wrow" key={row.id}>
-                <b title={row.name}>{row.name}{row.archived ? "（已归档）" : ""}</b>
-                <span>{total ? `对话 ${usagePercent(row.chat / total)} · 任务 ${usagePercent(row.job / total)}` : "对话 — · 任务 —"}</span>
+                <b title={row.name}>{row.name}{row.archived ? `（${t("已归档")}）` : ""}</b>
+                <span>{total ? t("对话 {chat} · 任务 {job}", { chat: usagePercent(row.chat / total), job: usagePercent(row.job / total) }) : t("对话 — · 任务 —")}</span>
                 <div className="u-bar"><i style={{ width: `${share}%` }} /></div>
                 <div className="u-num strong">{usageMoney(row.cost)}</div>
               </div>
             );
-          }) : <Empty>这段时间没有用量</Empty>}
+          }) : <Empty>{t("这段时间没有用量")}</Empty>}
         </div>
       </Group>
     </>
@@ -531,7 +548,7 @@ function UsagePage({ view }: { view: UsageView }) {
 /** 多或少百分之几：正数带 +，负数带 −，一样多写「持平」。 */
 function comparison(current: number, previous: number): string {
   const diff = (current - previous) / previous;
-  if (Math.round(diff * 100) === 0) return "持平";
+  if (Math.round(diff * 100) === 0) return t("持平");
   return `${diff > 0 ? "+" : "−"}${Math.abs(Math.round(diff * 100))}%`;
 }
 

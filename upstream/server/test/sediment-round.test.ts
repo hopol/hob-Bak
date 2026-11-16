@@ -3,8 +3,8 @@ import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Job } from "../../shared/types.ts";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { archiveAssistantSkill, listAssistantSkills, recordAssistantSkillUse, saveAssistantSkill, setAssistantSkillEnabled, usableAssistantSkills } from "../src/assistant-skills.ts";
-import { reconcileSkills, restoreSkills, snapshotSkills } from "../src/sediment.ts";
+import { archiveAssistantSkill, listAssistantSkills, recordAssistantSkillUse, rollbackAssistantSkill, saveAssistantSkill, setAssistantSkillEnabled, usableAssistantSkills } from "../src/assistant-skills.ts";
+import { restoreSkills, snapshotSkills } from "../src/sediment.ts";
 import { call, makeHob, text, waitFor } from "./helpers.ts";
 
 const skill = { name: "alpha-skill", title: "甲技能", description: "甲任务", content: "步骤" };
@@ -55,8 +55,8 @@ describe("沉淀是任务的又一轮", () => {
       expect(notify).not.toHaveBeenCalled();
       expect(events[0]).toBe("running");
       expect(events.at(-1)).toBe("saved");
-      expect(hob.runtime.router.items("hob").items.filter((item) => item.kind === "note" && item.icon === "skill"))
-        .toMatchObject([{ text: "已沉淀技能「文件统计」", path: join(dir, "SKILL.md") }]);
+      // 沉淀的结果写在任务卡上（job.sediment），对话里不另落一行
+      expect(hob.runtime.router.items("hob").items.filter((item) => item.kind === "note" && item.icon === "skill")).toEqual([]);
     } finally { hob.close(); }
   });
 
@@ -80,8 +80,7 @@ describe("沉淀是任务的又一轮", () => {
       expect(readFileSync(join(history, "SKILL.md"), "utf8")).toContain("甲技能");
       expect(readFileSync(join(history, "SKILL.md"), "utf8")).toContain("步骤");
       expect(readFileSync(after.path, "utf8")).toContain("新步骤");
-      expect(hob.runtime.router.items("hob").items.filter((item) => item.kind === "note").map((item) => (item.kind === "note" ? item.text : "")))
-        .toContain("已更新技能「甲技能二」· 第 2 版");
+      expect(hob.runtime.router.items("hob").items.filter((item) => item.kind === "note")).toEqual([]);
     } finally { hob.close(); }
   });
 
@@ -209,7 +208,7 @@ describe("沉淀是任务的又一轮", () => {
     } finally { hob.close(); }
   });
 
-  it("从定时任务来的任务新建技能：定时任务绑上，提示行换成定时那句", async () => {
+  it("从定时任务来的任务新建技能：定时任务绑上，对话里不落行", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
       const routine = hob.runtime.routines.create({ assistantId: "hob", name: "巡检", instruction: "检查", schedules: ["0 9 * * *"] });
@@ -223,7 +222,7 @@ describe("沉淀是任务的又一轮", () => {
       hob.runtime.jobs.startSediment("t-sed");
       await hob.runtime.jobs.waitIdle();
       expect(hob.runtime.store.routine(routine.id)?.skill).toBe("daily-check");
-      expect(hob.runtime.router.items("hob").items.some((item) => item.kind === "note" && item.text === "已沉淀技能「每日巡检」，以后定时执行按它做")).toBe(true);
+      expect(hob.runtime.router.items("hob").items.some((item) => item.kind === "note")).toBe(false);
     } finally { hob.close(); }
   });
 
@@ -433,14 +432,24 @@ describe("沉淀是任务的又一轮", () => {
     } finally { hob.close(); }
   });
 
-  it("沉淀期间别处改的用量和开关、别处加的技能，对账和恢复都不动它们", async () => {
+  it("沉淀进行中：别的入口改不了这个目录，用量和开关照常记", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
       saveAssistantSkill(hob.home, "hob", { ...skill, name: "other-skill", title: "别的技能" });
       hob.runtime.store.saveJob(doneJob());
       const root = join(hob.home, "assistants", "hob", "skills");
+      const errors: string[] = [];
+      // 沉淀这一轮自己在干活的时候，从别的入口去改：全都报错，用量和开关不拦
       hob.faux.setResponses([
         () => {
+          for (const change of [
+            () => saveAssistantSkill(hob.home, "hob", { ...skill, name: "imported-skill", title: "导入的" }),
+            () => saveAssistantSkill(hob.home, "hob", { ...skill, content: "改正文" }),
+            () => archiveAssistantSkill(hob.home, "hob", "other-skill"),
+            () => rollbackAssistantSkill(hob.home, "hob", "other-skill"),
+          ]) {
+            try { change(); } catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
+          }
           recordAssistantSkillUse(hob.home, "hob", "other-skill");
           setAssistantSkillEnabled(hob.home, "hob", "other-skill", false);
           return call("write", { path: join(root, "new-skill", "SKILL.md"), content: head("new-skill", "新技能", "新的一类事") });
@@ -450,32 +459,88 @@ describe("沉淀是任务的又一轮", () => {
       ]);
       hob.runtime.jobs.startSediment("t-sed");
       await hob.runtime.jobs.waitIdle();
+      expect(errors).toEqual([
+        "「Hob」正在沉淀技能，等这一轮结束再改。",
+        "「Hob」正在沉淀技能，等这一轮结束再改。",
+        "「Hob」正在沉淀技能，等这一轮结束再改。",
+        "「Hob」正在沉淀技能，等这一轮结束再改。",
+      ]);
       const all = listAssistantSkills(hob.home, "hob");
+      expect(all.map((item) => item.name).sort()).toEqual(["new-skill", "other-skill"]);
+      // 用量计数和开关照常记下
       expect(all.find((item) => item.name === "other-skill")).toMatchObject({ uses: 1, enabled: false, version: 1 });
       expect(all.find((item) => item.name === "new-skill")).toMatchObject({ version: 1, fromJobId: "t-sed" });
+      // 沉淀完了就放开：之后再改照常
+      expect(saveAssistantSkill(hob.home, "hob", { ...skill, name: "later-skill", title: "后来的" })).toMatchObject({ name: "later-skill", version: 1 });
+    } finally { hob.close(); }
+  });
 
-      // 恢复：模型改坏的换回底稿、新建没登记的删掉；别处导入的、删掉的、记的用量照现在的
+  it("恢复：这一轮建的目录删掉、登记也没了，底稿里的照原样；别处记的用量留着", async () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
+      const saved = saveAssistantSkill(hob.home, "hob", skill);
+      const root = join(hob.home, "assistants", "hob", "skills");
       const base = join(hob.home, "base");
       snapshotSkills(root, base);
-      saveAssistantSkill(hob.home, "hob", { ...skill, name: "imported-skill", title: "导入的" });
-      recordAssistantSkillUse(hob.home, "hob", "new-skill");
-      archiveAssistantSkill(hob.home, "hob", "other-skill");
-      writeFileSync(join(root, "new-skill", "SKILL.md"), "改坏了");
+      // 这一轮：建了一个新技能、把老技能改坏，模型还自己往 skills.json 里写了东西
       mkdirSync(join(root, "half-done"));
       writeFileSync(join(root, "half-done", "SKILL.md"), head("half-done", "半成品", "没写完"));
+      writeFileSync(saved.path, "改坏了");
+      writeFileSync(join(root, "skills.json"), JSON.stringify({ "half-done": { title: "半成品", version: 3, fromJobId: "t-sed", enabled: true }, "alpha-skill": { title: "乱写的", version: 9, uses: 0, enabled: true } }));
+      // 用量和开关是别处一直在改的，沉淀进行中也能改
+      recordAssistantSkillUse(hob.home, "hob", "alpha-skill");
+      setAssistantSkillEnabled(hob.home, "hob", "alpha-skill", false);
       restoreSkills(root, base);
-      expect(readFileSync(join(root, "new-skill", "SKILL.md"), "utf8")).toContain("新的一类事");
       expect(existsSync(join(root, "half-done"))).toBe(false);
-      expect(existsSync(join(root, "other-skill"))).toBe(false);
+      expect(readFileSync(saved.path, "utf8")).toContain("步骤");
       const after = listAssistantSkills(hob.home, "hob");
-      expect(after.map((item) => item.name).sort()).toEqual(["imported-skill", "new-skill"]);
-      expect(after.find((item) => item.name === "new-skill")?.uses).toBe(1);
+      expect(after.map((item) => item.name)).toEqual(["alpha-skill"]);
+      expect(after[0]).toMatchObject({ version: 1, title: "甲技能", uses: 1, enabled: false });
+    } finally { hob.close(); }
+  });
 
-      // 对账也一样：设置里删掉的不放回去
-      snapshotSkills(root, base);
-      archiveAssistantSkill(hob.home, "hob", "imported-skill");
-      expect(reconcileSkills(root, base, "t-sed")).toEqual({ ok: true, saved: [] });
-      expect(existsSync(join(root, "imported-skill"))).toBe(false);
+  it("对账：模型自己往 skills.json 里写的登记以底稿和这一轮的结果为准重写", async () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
+      hob.runtime.store.saveJob(doneJob());
+      const root = join(hob.home, "assistants", "hob", "skills");
+      hob.faux.setResponses([
+        () => {
+          mkdirSync(join(root, "new-skill"), { recursive: true });
+          writeFileSync(join(root, "new-skill", "SKILL.md"), head("new-skill", "新技能", "新的一类事"));
+          // 模型顺手自己登记了一个不存在的技能，还把这个写歪了
+          writeFileSync(join(root, "skills.json"), JSON.stringify({ "new-skill": { title: "乱写的", version: 7, fromJobId: "t-sed", enabled: true }, ghost: { title: "没有这个目录", version: 2, enabled: true } }));
+          return call("report", { outcome: "done", result: "建了" });
+        },
+        text("好"),
+      ]);
+      hob.runtime.jobs.startSediment("t-sed");
+      await hob.runtime.jobs.waitIdle();
+      expect(hob.runtime.store.job("t-sed")?.sediment).toMatchObject({ status: "saved", name: "new-skill", version: 1 });
+      expect(listAssistantSkills(hob.home, "hob")).toMatchObject([{ name: "new-skill", title: "新技能", version: 1, fromJobId: "t-sed" }]);
+      const index = JSON.parse(readFileSync(join(root, "skills.json"), "utf8")) as Record<string, unknown>;
+      expect(Object.keys(index)).toEqual(["new-skill"]);
+    } finally { hob.close(); }
+  });
+
+  it("模型自己在 skills.json 里登记了这一轮新建的技能：照样算这一轮沉淀出来的", async () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
+      hob.runtime.store.saveJob(doneJob());
+      const root = join(hob.home, "assistants", "hob", "skills");
+      hob.faux.setResponses([
+        () => {
+          mkdirSync(join(root, "self-registered"), { recursive: true });
+          writeFileSync(join(root, "skills.json"), JSON.stringify({ "self-registered": { title: "自己登记的", version: 1, fromJobId: "t-sed", enabled: true } }));
+          return call("write", { path: join(root, "self-registered", "SKILL.md"), content: head("self-registered", "自己登记的", "模型顺手写了登记") });
+        },
+        call("report", { outcome: "done", result: "建好了" }),
+        text("好"),
+      ]);
+      hob.runtime.jobs.startSediment("t-sed");
+      await hob.runtime.jobs.waitIdle();
+      expect(hob.runtime.store.job("t-sed")?.sediment).toMatchObject({ status: "saved", name: "self-registered", version: 1 });
+      expect(listAssistantSkills(hob.home, "hob").find((item) => item.name === "self-registered")).toMatchObject({ version: 1, fromJobId: "t-sed", uses: 0 });
     } finally { hob.close(); }
   });
 

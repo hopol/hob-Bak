@@ -18,7 +18,7 @@ describe("技能删除", () => {
       const run = (replaced_by?: string) => tool.execute("x", { name: skill.name, replaced_by }, undefined, undefined, {} as never);
       expect((await run()).content[0].text).toContain("被定时任务「例行」用着");
       expect((await run(skill.name)).isError).toBe(true);
-      hob.runtime.store.saveJob({ id: "t-running", assistantId: "hob", title: "任务", instruction: "检查", status: "queued", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [], skills: [skill.name] });
+      hob.runtime.store.saveJob({ id: "t-running", assistantId: "hob", title: "任务", instruction: "检查", status: "queued", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [], skillsUsed: [skill.name] });
       expect((await run(other.name)).content[0].text).toContain("正在被任务 t-running 用");
       hob.runtime.store.saveJob({ id: "t-running", assistantId: "hob", title: "任务", instruction: "检查", status: "done", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [] });
       expect((await run(other.name)).content[0].text).toBe("技能「甲技能」已并入「乙技能」，原技能移到了归档。");

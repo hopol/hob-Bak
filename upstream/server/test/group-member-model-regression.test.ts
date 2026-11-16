@@ -34,21 +34,6 @@ describe("群成员模型回归", () => {
     } finally { hob.close(); }
   }, 20_000);
 
-  it("事项子任务按所属群的任务默认模型自动创建", async () => {
-    const { hob, group } = setup();
-    try {
-      vi.spyOn(hob.runtime.jobs, "pump").mockImplementation(() => {});
-      await hob.runtime.groups.updateMemberModels(group.id, "hob", { work: pick("smart") });
-      const project = hob.runtime.projects.open({ group, ownerId: "hob", title: "测试事项" });
-      hob.runtime.projects.writeRequirements(group.id, project.id, { content: "实现", acceptance: ["通过"] });
-      hob.runtime.projects.plan(group.id, project.id, [{ title: "执行", assignee: "hob", brief: "做" }]);
-      hob.runtime.projects.start(group.id, project.id);
-      await waitFor(() => Boolean(hob.runtime.store.jobs().find((entry) => entry.project?.id === project.id)));
-      const job = hob.runtime.store.jobs().find((entry) => entry.project?.id === project.id)!;
-      expect(job).toMatchObject({ assistantId: "hob", groupId: group.id, project: { id: project.id, n: 1 }, model: "hob-faux/smart" });
-    } finally { hob.close(); }
-  });
-
   it("排队、运行和续做保留开任务时的模型", async () => {
     const { hob, group } = setup(80);
     try {

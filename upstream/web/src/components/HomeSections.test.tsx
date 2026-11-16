@@ -10,7 +10,7 @@ const state = vi.hoisted(() => ({
   approvals: {} as Record<string, { assistantId: string; status: string }>,
   delegations: {} as Record<string, { from: string; to: string; status: string; endedAt?: string }>,
 }));
-vi.mock("../store.ts", () => ({ useApp: () => state }));
+vi.mock("../store.ts", () => ({ useApp: () => state, useAppSelect: (pick: (s: unknown) => unknown) => pick(state), shallow: () => false }));
 vi.mock("./AssistantMenu.tsx", () => ({ useAssistantMenu: () => ({ handlers: {}, takeHeld: () => false }) }));
 vi.mock("./Panel.tsx", () => ({ activityParts: () => [] }));
 

@@ -1,5 +1,7 @@
+import { t } from "../../shared/i18n.ts";
 import type { Approval, Job, JobStatus, JobStep } from "../../shared/types.ts";
-import type { AssistantSkill } from "../../shared/skills.ts";
+
+export interface JobSkillTitle { name: string; title?: string; version?: number }
 
 const statusText: Record<JobStatus, string> = { queued: "排队中", running: "进行中", waiting: "等你回复", done: "已完成", stuck: "受阻", failed: "失败", stopped: "已停止" };
 
@@ -8,6 +10,16 @@ export function duration(ms: number): string {
   if (seconds < 60) return `${seconds} 秒`;
   const minutes = Math.floor(seconds / 60);
   return minutes < 60 ? `${minutes} 分钟` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
+}
+
+/**
+ * 工具那一步写成一行。bash 用原命令：这里是给模型看的，它要知道命令是在哪个目录、哪台机器上跑的。
+ * 界面列表用的 commandSummary 会删掉开头的 cd、timeout，把 ssh 改写成「主机: 命令」，不能拿来给模型看。
+ */
+function toolLine(step: JobStep): string {
+  const command = step.name === "bash" ? step.args?.command : undefined;
+  if (typeof command === "string" && command.trim()) return `${t("运行")} \`${command.replace(/\s+/g, " ").trim()}\``;
+  return step.title ?? step.name ?? "工具";
 }
 
 /** 任务过程按时间倒序，供任务查看和超时通知共用。 */
@@ -19,7 +31,7 @@ export function jobProcessLines(steps: JobStep[], timezone: string, now = new Da
     const time = format.format(new Date(step.at));
     const clock = time.slice(0, 10) === today ? time.slice(11) : time.slice(5);
     const detail = step.kind === "tool"
-      ? `${step.title ?? step.name ?? "工具"}${step.running ? ` · 还在跑，${Math.max(0, Math.floor((now.getTime() - Date.parse(step.at)) / 60000))} 分钟` : ""}${step.isError ? " · 出错" : ""}`
+      ? `${toolLine(step)}${step.running ? ` · 还在跑，${Math.max(0, Math.floor((now.getTime() - Date.parse(step.at)) / 60000))} 分钟` : ""}${step.isError ? " · 出错" : ""}`
       : `${step.from === "user" ? "收到" : "说"}：${step.text ?? ""}`;
     const line = `${clock} ${detail}`.replace(/\s+/g, " ").trim();
     const chars = [...line];
@@ -27,16 +39,18 @@ export function jobProcessLines(steps: JobStep[], timezone: string, now = new Da
   });
 }
 
-export function jobView(job: Job, steps: JobStep[], approvals: Approval[], skills: AssistantSkill[], timezone: string, now = new Date()): string {
+export function jobView(job: Job, steps: JobStep[], approvals: Approval[], skills: JobSkillTitle[], timezone: string, now = new Date(), origin?: string): string {
   const ended = !["queued", "running", "waiting"].includes(job.status);
   const elapsed = Math.max(0, now.getTime() - Date.parse(job.startedAt ?? job.createdAt));
   const state = job.status === "queued" ? "排队中" : ended
     ? `${statusText[job.status]}，用时 ${duration(job.durationMs ?? (job.endedAt ? Date.parse(job.endedAt) - Date.parse(job.startedAt ?? job.createdAt) : 0))}`
     : `${statusText[job.status]}，已运行 ${elapsed < 60000 ? "不到 1 分钟" : `${Math.floor(elapsed / 60000)} 分钟`}`;
   const lines = [`任务「${job.title}」（${job.id}）：${state}${job.rounds?.length ? `（第 ${job.rounds.length + 1} 轮）` : ""}`];
+  // 不是现在这个会话开的：说清它在哪，结果回到那边
+  if (origin) lines.push(`这个任务是${origin}开的，结果回到那边。`);
   if (job.statusReason) lines.push(`原因：${job.statusReason}`);
   for (const approval of approvals.filter((item) => item.jobId === job.id && item.status === "pending")) lines.push(`在等你回复：${approval.title}`);
-  if (job.skillsUsed?.length) lines.push(`用到的技能：${job.skillsUsed.map((name) => { const skill = skills.find((item) => item.name === name); return skill ? `${skill.title}（第 ${skill.version} 版）` : name; }).join("、")}`);
+  if (job.skillsUsed?.length) lines.push(`用到的技能：${job.skillsUsed.map((name) => { const skill = skills.find((item) => item.name === name); if (!skill) return name; return `${skill.title ?? skill.name}${skill.version ? `（第 ${skill.version} 版）` : ""}`; }).join("、")}`);
   if (ended) {
     if (job.summary) {
       const chars = [...job.summary];

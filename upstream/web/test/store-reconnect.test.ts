@@ -10,7 +10,7 @@ vi.mock("../src/api.ts", async (importOriginal) => {
     realApi: {
       ...original.realApi,
       me: async () => ({}),
-      bootstrap: async () => ({ assistants: [{ id: "a", name: "甲", primary: true }], jobs: [], routines: [], approvals: [], settings: { settings: { general: { theme: "light" } } } }),
+      bootstrap: async () => ({ assistants: [{ id: "a", name: "甲", primary: true }], jobs: [], routines: [], approvals: [], settings: { settings: { general: { theme: "light", locale: "zh-CN" } } } }),
       groups: async () => { if (groups.fail-- > 0) throw new Error("Load failed"); return [group]; },
       groupItems: async () => ({ items: [], hasMore: false, jobs: [], approvals: [] }),
       projects: async () => [],
@@ -21,7 +21,7 @@ vi.mock("../src/api.ts", async (importOriginal) => {
     },
   };
 });
-vi.mock("../src/theme.ts", () => ({ resolveTheme: () => ({ dark: false }), updateStatusColor: () => undefined }));
+vi.mock("../src/theme.ts", () => ({ resolveTheme: () => ({ dark: false }), updateStatusColor: () => undefined, updateManifest: () => undefined, isNarrow: () => window.innerWidth < 768 }));
 
 let store: typeof import("../src/store.ts");
 beforeAll(async () => {
