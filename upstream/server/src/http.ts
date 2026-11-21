@@ -191,16 +191,7 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
       return c.json(runtime.desktop.view());
     } catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
   });
-  app.put("/api/desktop/public", async (c) => {
-    const body = await c.req.json().catch(() => ({})) as { revision?: unknown; assistants?: unknown };
-    if (typeof body.revision !== "number" || !Array.isArray(body.assistants) || !body.assistants.every((id) => typeof id === "string" && !!runtime.store.assistant(id))) return c.json({ error: "助手列表无效。" }, 400);
-    const current = runtime.settings.settings.desktop ?? { url: "", enabled: false };
-    const saved = runtime.settings.setDesktop(body.revision, { ...current, publicAssistants: [...new Set(body.assistants)] });
-    if (!saved) return c.json({ error: "设置已在别处修改，已刷新" }, 409);
-    router.releaseSessions();
-    return c.json(runtime.desktop.view());
-  });
-  const validScreen = (id: string) => id === "public" || runtime.store.assistants().some((assistant) => desktopProfile(assistant.id) === id);
+  const validScreen = (id: string) => runtime.store.assistants().some((assistant) => desktopProfile(assistant.id) === id);
   app.get("/api/desktop/screens", (c) => c.json({ screens: runtime.desktopEvents.screens, profiles: Object.fromEntries(runtime.store.assistants().map((assistant) => [assistant.id, desktopProfile(assistant.id)])) }));
   app.post("/api/desktop/screens/:id/start", async (c) => {
     const id = c.req.param("id");
@@ -217,11 +208,13 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
   app.post("/api/desktop/control", async (c) => {
     const body = await c.req.json().catch(() => ({})) as { client?: string; action?: string; screen?: string };
     const screen = typeof body.screen === "string" ? body.screen : "hob";
-    if (!validScreen(screen)) return c.json({ error: "屏幕不存在。" }, 404);
     try {
-      if (body.action === "take") runtime.desktopControl.take(body.client ?? "", screen);
-      else if (body.action === "release") runtime.desktopControl.release(body.client ?? "", screen);
-      else throw new Error("操作无效。");
+      if (body.action === "take") {
+        runtime.desktopControl.take(body.client ?? "", screen);
+      } else if (body.action === "release") {
+        runtime.desktopControl.release(body.client ?? "", screen);
+        await runtime.desktop.request(`/api/screens/${screen}/browser/sync`, { method: "POST" });
+      } else throw new Error("操作无效。");
       return c.json(runtime.desktopControl.state(body.client ?? "", screen));
     } catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
   });
@@ -234,7 +227,7 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
       return c.json({ ok: true });
     } catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 502); }
   });
-  // 接管后要自己登录网站：在云桌面里打开某个助手的浏览器（每个助手的登录状态分开）
+  // 用户接管时打开同一 profile 的 CDP 浏览器，浏览器和页面在接管期间保持不变。
   app.post("/api/desktop/browser", async (c) => {
     const body = await c.req.json().catch(() => ({})) as { assistantId?: unknown };
     const id = typeof body.assistantId === "string" ? body.assistantId : "";
@@ -286,7 +279,7 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
       return c.json(skill);
     } catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
   });
-  // 一个助手看得到哪些技能：定时任务的技能下拉用它（本群、自己、通用、只读）
+  // 一个助手看得到哪些技能：本群、自己、通用和只读技能。
   app.get("/api/skills/visible", (c) => {
     const assistantId = c.req.query("assistantId") ?? "hob";
     if (!store.assistant(assistantId)) return c.json({ error: "助手不存在" }, 404);
@@ -1074,7 +1067,7 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
     if (!record) return c.json({ error: "委派不存在" }, 404);
     if (record.status !== "interrupted") return c.json({ error: "只有已中断的委派可以重新转交" }, 400);
     try {
-      return c.json({ delegation: await runtime.delegations.start(record.to, record.text) });
+      return c.json({ delegation: await runtime.delegations.start(record.from, record.to, record.text) });
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
@@ -1106,7 +1099,6 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
     const body = (await c.req.json().catch(() => ({}))) as {
       assistantId?: string;
       groupId?: string;
-      skill?: string;
       active?: boolean;
       name?: string;
       instruction?: string;
@@ -1127,7 +1119,6 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
         instructionBy: "user",
         schedules: body.schedules,
         ...(body.active !== undefined ? { active: body.active } : {}),
-        ...(body.skill !== undefined ? { skill: body.skill } : {}),
         ...(body.check ? { check: body.check } : {}),
         ...(body.once ? { once: true } : {}),
       });
@@ -1145,7 +1136,6 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
       instruction?: string;
       schedules?: string[];
       active?: boolean;
-      skill?: string | null;
       check?: RoutineCheck | null;
       once?: boolean;
     };
@@ -1154,10 +1144,10 @@ export function createApp(runtime: HobRuntime, options: { webDir?: string; home:
       const found = store.routine(id);
       // 界面常常整张表单一起提交：内容没变的不算用户改了它
       const changed = typeof body.instruction === "string" && body.instruction !== found?.instruction;
-      const { instructionBy: _ignoredBy, userWords: _ignoredWords, ...patch } = body as typeof body & { instructionBy?: unknown; userWords?: unknown };
+      const { instructionBy: _ignoredBy, userWords: _ignoredWords, skill: _ignoredSkill, ...patch } = body as typeof body & { instructionBy?: unknown; userWords?: unknown; skill?: unknown };
       const routine = routines.update(id, {
         ...patch,
-        ...(changed ? { instructionBy: "user", userWords: null } : {}),
+        ...(changed ? { instructionBy: "user" } : {}),
       });
       return c.json({ routine });
     } catch (error) {

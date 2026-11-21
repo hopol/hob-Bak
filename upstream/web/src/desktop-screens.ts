@@ -15,7 +15,13 @@ export function useDesktopScreens(): Snapshot {
       if (desktopMockScene() === "ready" || desktopMockScene() === "deployed") {
         setSnapshot({ screens: [{ id: "hob", running: true, browserRunning: true, viewers: 0, lastActiveAt: null }], profiles: { hob: "hob" } });
       }
-      return;
+      // 演示和验收用：页面里发 hob-mock-desktop 事件（detail 是在不在运行），模拟云桌面被唤醒、被回收
+      const onMock = (event: Event) => {
+        const running = Boolean((event as CustomEvent).detail);
+        setSnapshot({ screens: [{ id: "hob", running, browserRunning: running, viewers: 0, lastActiveAt: null }], profiles: { hob: "hob" } });
+      };
+      window.addEventListener("hob-mock-desktop", onMock);
+      return () => window.removeEventListener("hob-mock-desktop", onMock);
     }
     let alive = true;
     let version = 0;

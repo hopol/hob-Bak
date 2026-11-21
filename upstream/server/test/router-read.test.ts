@@ -43,7 +43,7 @@ describe("Router read", () => {
       const offset = Number(first.content[0].text.match(/offset=(\d+)/)?.[1]);
       expect(offset).toBeGreaterThan(1);
       expect((await read.execute("x", { path: "long.txt", offset })).content[0].text).toContain(lines[offset - 1]);
-      expect(activityLabel("read", { path: "/tmp/report.md" })).toBe("正在读：report.md");
+      expect(activityLabel("read", { path: "/tmp/report.md" })).toBe("正在读取：report.md");
     } finally { hob.close(); rmSync(work, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); }
   });
 
@@ -74,7 +74,7 @@ describe("Router read", () => {
       writeFileSync(path, readFileSync(join(process.cwd(), "docs/design/v2/s1.png")));
       const read = buildRouterTools(hob.runtime, "hob").find((tool) => tool.name === "read")!;
       const noVision = await read.execute("x", { path }, undefined, undefined, { model: { input: ["text"] } } as any);
-      expect(noVision).toMatchObject({ isError: true, content: [{ text: "当前对话模型看不了图片" }] });
+      expect(noVision).toMatchObject({ isError: true, content: [{ text: "当前对话模型无法查看图片" }] });
       const vision = await read.execute("x", { path }, undefined, undefined, { model: { input: ["text", "image"] } } as any);
       expect(vision.content.some((block: { type: string }) => block.type === "image")).toBe(true);
     } finally { hob.close(); }

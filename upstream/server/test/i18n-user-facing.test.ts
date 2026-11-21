@@ -81,11 +81,11 @@ describe("server user-facing translations", () => {
   it("translates the note left for a tool call that did not go through", async () => {
     const hob = makeHob({}, { settings: { general: { locale: "en" } }, memory: "off" });
     try {
-      hob.faux.setResponses([call("start_job", { title: "Check disk", note: "字".repeat(401) }), text("Let me fix that.")]);
+      hob.faux.setResponses([call("start_job", { title: "Check disk", note: "" }), text("Let me fix that.")]);
       await hob.runtime.router.send("hob", { text: "Check the disk" });
       await hob.runtime.router.waitIdle("hob");
-      const note = hob.runtime.router.items("hob").items.find((item) => item.kind === "note" && item.text.includes("did not succeed"));
-      expect(note).toMatchObject({ kind: "note", text: "“创建任务” did not succeed" });
+      const note = hob.runtime.router.items("hob").items.find((item) => item.kind === "note" && item.text.includes("failed"));
+      expect(note).toMatchObject({ kind: "note", text: "“创建任务” failed" });
     } finally { hob.close(); }
   });
 

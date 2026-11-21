@@ -14,7 +14,7 @@ const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 
 function addAssistant(hob: TestHob, id: string, name: string, duty: string): Assistant {
   const base = hob.runtime.store.assistant("hob")!;
-  const assistant: Assistant = { ...base, id, name, duty, primary: false, pinned: false, sprite: "page", instructions: "" };
+  const assistant: Assistant = { ...base, id, name, duty, primary: false, pinned: false, sprite: "page" };
   hob.runtime.store.saveAssistant(assistant);
   return assistant;
 }
@@ -97,7 +97,7 @@ describe("群规则", () => {
       hob.runtime.store.saveRules("ops", [{ id: "own-ask", text: "个人先问", mode: "ask", changedAt: new Date().toISOString() }, { id: "own-allow", text: "个人直接做", mode: "allow", changedAt: new Date().toISOString() }]);
       const prompt = buildSystemPrompt(hob.runtime.store, "ops", { ...options, group: second });
       expect(prompt).toContain("本群的规则：\n- 执行前确认：发布前确认\n你自己的规则：");
-      expect(prompt).toContain("本群的规则和你自己的规则说法不一样时，在这个群里按本群的办。");
+      expect(prompt).toContain("本群的规则和你自己的规则说法不一样时，在这个群里按本群规则执行。");
       hob.runtime.store.saveJob({ id: "t-rules", assistantId: "ops", title: "规则测试", instruction: "测试", groupId: second.id, status: "done", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [] });
       const worker = buildWorkerPrompt(hob.runtime.store, "t-rules", options);
       expect(worker).toContain("发布前确认");
@@ -123,7 +123,8 @@ describe("群里的卡片和结果回流", () => {
     const { hob, group } = setup();
     try {
       hob.faux.setResponses([
-        call("start_job", { title: "数文件" }),
+        call("start_job", { title: "数文件", note: "查一下 /tmp/x 里有几个文件" }),
+        text("已安排。"),
         call("report", { outcome: "done", result: "/tmp/x 里有 3 个文件" }),
         text("好"),
         text("查完了：3 个文件。@Hob 你看要不要留"),
@@ -138,12 +139,13 @@ describe("群里的卡片和结果回流", () => {
       const job = hob.runtime.store.job((card as { jobId: string }).jobId)!;
       expect(job.groupId).toBe(group.id);
       // 用户原话取自群的时间线
-      expect(job.instruction).toContain("查一下 /tmp/x 里有几个文件");
+      expect(job.instruction).toBe("查一下 /tmp/x 里有几个文件");
 
       // 结果进了它的群会话，它说的话写在时间线上；回复里 @ 了 Hob，接着轮到 Hob
       expect(userTexts(hob.runtime.store.groupMemberFile(group.id, "ops")).at(-1)).toContain("[hob-event] 「服务器」的任务「数文件」");
-      expect(assistantItems(hob, group.id).map((item) => item.speaker)).toEqual(["ops", "hob"]);
-      expect(assistantItems(hob, group.id)[0]!.text).toContain("查完了：3 个文件。");
+      expect(assistantItems(hob, group.id).map((item) => item.speaker)).toEqual(["ops", "ops", "hob"]);
+      expect(assistantItems(hob, group.id)[0]!.text).toBe("已安排。");
+      expect(assistantItems(hob, group.id)[1]!.text).toContain("查完了：3 个文件。");
 
       // 单聊里没有这张卡，也没有这次的结果
       expect(hob.runtime.router.items("ops").items.some((item) => item.kind === "job")).toBe(false);
@@ -184,7 +186,7 @@ describe("群里的卡片和结果回流", () => {
       state.currentDelegationId = "dg-test";
       const tools = buildRouterTools(hob.runtime, "ops", group.id);
       hob.faux.setResponses([call("report", { outcome: "done", result: "完成" }), text("好")]);
-      await tools.find((tool) => tool.name === "start_job")!.execute("call", { title: "测试任务" });
+      await tools.find((tool) => tool.name === "start_job")!.execute("call", { title: "测试任务", note: "测试任务交接说明" });
       const job = hob.runtime.store.jobs().find((item) => item.title === "测试任务")!;
       expect(job.delegationId).toBeUndefined();
       const addApproval = vi.spyOn(hob.runtime.delegations, "addApproval");
@@ -308,11 +310,24 @@ describe("群里的卡片和结果回流", () => {
       expect(names).toContain("start_job");
       expect(names).toContain("ask_user");
       expect(names).toContain("save_job_as_skill");
+      expect(names).toContain("update_todos");
       expect(names).not.toContain("show_page");
       expect(names).toContain("set_rule");
       expect(names).toContain("create_routine");
-      // 自己的补充说明自己改（群里也拿得到）；主助手另有 update_*，群里也不发给它
-      expect(names).toContain("edit_notes");
+    } finally {
+      hob.close();
+    }
+  });
+
+  it("正在说话的成员现在在做什么带在群摘要里，说完就没有", async () => {
+    const { hob, group } = setup();
+    try {
+      const owner = group.ownerId;
+      hob.faux.setResponses([call("bash", { command: "sleep 0.5" }), text("好了")]);
+      await hob.runtime.groups.send(group.id, { text: "跑一下" });
+      await waitFor(() => Boolean(hob.runtime.groups.summary(group.id).activity?.[owner]));
+      await hob.runtime.router.waitIdle(owner, 15_000, group.id);
+      await waitFor(() => hob.runtime.groups.summary(group.id).activity === undefined);
     } finally {
       hob.close();
     }

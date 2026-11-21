@@ -5,13 +5,16 @@ import { chromium, type Browser, type Page } from "playwright-core";
 let server: ViteDevServer;
 let browser: Browser;
 let page: Page;
+const BROWSER_TEST_TIMEOUT = 90_000;
 
 beforeAll(async () => {
   server = await createServer({ server: { port: 0, host: "127.0.0.1" } });
   await server.listen();
   browser = await chromium.launch({ executablePath: "/usr/bin/google-chrome", args: ["--no-sandbox"] });
   page = await browser.newPage({ viewport: { width: 1440, height: 900 }, locale: "zh-CN" });
-  page.setDefaultTimeout(4000);
+  // 全仓库并行时浏览器和约 155 个 Vitest worker 竞争 CPU，模块渲染可能超过 15 秒。
+  page.setDefaultTimeout(60_000);
+  page.setDefaultNavigationTimeout(60_000);
 });
 afterAll(async () => { await browser?.close(); await server?.close(); });
 
@@ -33,7 +36,7 @@ describe("Select", () => {
     expect(await page.locator("output").textContent()).toBe("c");
     expect(await trigger.getAttribute("aria-expanded")).toBe("false");
     expect(await trigger.evaluate((element) => document.activeElement === element)).toBe(true);
-  });
+  }, BROWSER_TEST_TIMEOUT);
   it("建群弹层里的选项可见且只列已有群", async () => {
     const address = server.httpServer!.address();
     if (!address || typeof address === "string") throw new Error("测试服务器没有端口");
@@ -47,8 +50,8 @@ describe("Select", () => {
     expect(await menu.getByRole("option", { name: /Hob 开发/ }).isVisible()).toBe(true);
     expect(await menu.getByRole("option", { name: /登录页加/ }).count()).toBe(0);
     await menu.getByRole("option", { name: /Hob 开发/ }).click();
-    expect(await page.locator('.gcreate .select-trigger').textContent()).toContain('照着「Hob 开发」建');
-  });
+    expect(await page.locator('.gcreate .select-trigger').textContent()).toContain('沿用「Hob 开发」创建');
+  }, BROWSER_TEST_TIMEOUT);
   it("点击外部或按 Escape 关闭", async () => {
     await fixture();
     const trigger = page.getByRole("button", { name: "测试选择" });
@@ -59,5 +62,5 @@ describe("Select", () => {
     await trigger.press("Escape");
     expect(await trigger.getAttribute("aria-expanded")).toBe("false");
     expect(await page.locator("output").textContent()).toBe("a");
-  });
+  }, BROWSER_TEST_TIMEOUT);
 });

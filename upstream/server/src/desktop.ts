@@ -22,7 +22,7 @@ export class DesktopService {
   }
 
   private configuration() {
-    const saved = this.settings.settings.desktop ?? { url: "", enabled: false, publicAssistants: [] };
+    const saved = this.settings.settings.desktop ?? { url: "", enabled: false };
     const deploymentToken = this.env.HOB_DESKTOP_URL ? this.deploymentToken() : "";
     const deployed = !!deploymentToken;
     const token = deployed ? deploymentToken : readSecrets(this.home)["desktop:token"] ?? "";
@@ -32,7 +32,6 @@ export class DesktopService {
       enabled: deployed ? true : saved.enabled,
       deployed,
       tokenConfigured: !!token,
-      publicAssistants: saved.publicAssistants ?? [],
       token,
     };
   }
@@ -52,7 +51,7 @@ export class DesktopService {
     const { url, token } = this.connection();
     const response = await fetch(new URL(path, url), {
       ...init,
-      headers: { ...init.headers, Authorization: `Bearer ${token}` },
+      headers: { "x-hob-timezone": this.settings.settings.general.timezone, ...init.headers, Authorization: `Bearer ${token}` },
       signal: init.signal ?? AbortSignal.timeout(10_000),
       redirect: "error",
     });

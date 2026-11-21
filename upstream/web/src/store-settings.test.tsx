@@ -3,10 +3,10 @@ import { conversations, pinList } from "./home.ts";
 
 const storage = new Map<string, string>();
 
-const { putSettings, patchAssistant, jobs } = vi.hoisted(() => ({ putSettings: vi.fn(), patchAssistant: vi.fn(), jobs: vi.fn() }));
+const { putSettings, patchAssistant, patchGroup, jobs } = vi.hoisted(() => ({ putSettings: vi.fn(), patchAssistant: vi.fn(), patchGroup: vi.fn(), jobs: vi.fn() }));
 vi.mock("./api.ts", async (importOriginal) => {
   const original = await importOriginal<typeof import("./api.ts")>();
-  return { ...original, realApi: { ...original.realApi, putSettings, patchAssistant, jobs } };
+  return { ...original, realApi: { ...original.realApi, putSettings, patchAssistant, patchGroup, jobs } };
 });
 vi.mock("./theme.ts", () => ({ resolveTheme: () => ({ dark: false }), updateStatusColor: () => undefined, updateManifest: () => undefined, isNarrow: () => window.innerWidth < 768 }));
 
@@ -37,6 +37,16 @@ describe("设置乐观保存", () => {
   });
 });
 
+describe("首页偏好", () => {
+  it("筛选和排序模式写入本机存储", () => {
+    store.setHomeFilter("jobs");
+    store.setHomeOrder("custom");
+    expect(storage.get("hob.home.filter")).toBe("jobs");
+    expect(storage.get("hob.home.order")).toBe("custom");
+    expect(store.getState().homeFilter).toBe("jobs");
+    expect(store.getState().homeOrder).toBe("custom");
+  });
+});
 describe("混排置顶", () => {
   it("保存后以持久化的助手和群顺序重新计算置顶列表", async () => {
     const state = store.getState();
@@ -65,6 +75,21 @@ describe("混排置顶", () => {
   });
 });
 
+describe("助手固定顺序", () => {
+  it("助手和群一起保存 listOrder", async () => {
+    const state = store.getState();
+    state.groups = [{ id: "g", name: "群", purpose: "", ownerId: "a", members: ["a"], busy: [], unread: 0, createdAt: "2026-01-01" }];
+    state.assistants = [{ id: "a" }, { id: "b" }] as typeof state.assistants;
+    patchAssistant.mockResolvedValue({});
+    patchGroup.mockResolvedValue({});
+    expect(await store.saveListOrder(["g", "b", "a"])).toBeNull();
+    expect(patchGroup).toHaveBeenCalledWith("g", { listOrder: 0 });
+    expect(patchAssistant).toHaveBeenCalledWith("b", { listOrder: 1 });
+    expect(patchAssistant).toHaveBeenCalledWith("a", { listOrder: 2 });
+    expect(store.getState().groups[0]?.listOrder).toBe(0);
+    expect(store.getState().assistants.find((item) => item.id === "b")?.listOrder).toBe(1);
+  });
+});
 describe("任务记录筛选", () => {
   it("A→B→A 时拒绝旧请求失败及旧分页结果", async () => {
     let rejectOld!: (error: Error) => void;

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { answerApproval } from "../src/actions.ts";
 import { buildRouterTools } from "../src/router-tools.ts";
-import { registerAskTool, registerReportTool } from "../src/worker-tools.ts";
+import { registerAskLoginTool, registerAskTool, registerReportTool } from "../src/worker-tools.ts";
 import loreEntry from "../src/lore-entry.ts";
 import { makeHob } from "./helpers.ts";
 
@@ -12,7 +13,7 @@ describe("工具说明和确认选项", () => {
       const ask = vi.spyOn(hob.runtime.jobs, "askQuestion").mockResolvedValue("选了");
       const worker = registerAskTool(hob.runtime, "t-test");
       const input = { title: "清理吗", options: [{ label: "清理" }, { label: "不清理" }], remember: "清理临时目录" };
-      const expected = { ruleText: "清理临时目录", options: [{ key: "A", label: "清理" }, { key: "B", label: "不清理" }, { key: "C", label: "以后「清理临时目录」直接做", always: true }] };
+      const expected = { ruleText: "清理临时目录", options: [{ key: "A", label: "清理" }, { key: "B", label: "不清理" }, { key: "C", label: "以后「清理临时目录」直接执行", always: true }] };
       await router.execute("r", input);
       expect(hob.runtime.store.approvals()[0]).toMatchObject(expected);
       await worker.execute("w", input);
@@ -27,19 +28,49 @@ describe("工具说明和确认选项", () => {
     } finally { hob.close(); }
   });
 
-  it("facts 非空才能建，事实进入助手补充说明", async () => {
+  it("ask_login 出登录卡，Worker 先把登录请求交给助手", async () => {
+    const hob = makeHob();
+    try {
+      const router = buildRouterTools(hob.runtime, "hob").find((tool) => tool.name === "ask_login")!;
+      const ask = vi.spyOn(hob.runtime.jobs, "askQuestion").mockResolvedValue("用户已完成登录");
+      const worker = registerAskLoginTool(hob.runtime, "t-login");
+      const params = { site: "测试站", reason: "需要用户完成两步验证" };
+      await router.execute("r", params);
+      const approval = hob.runtime.store.approvals()[0];
+      expect(approval).toMatchObject({ login: params, source: "router", options: [{ key: "A", label: "已登录" }] });
+      expect(hob.runtime.router.items("hob").items).toContainEqual(expect.objectContaining({ kind: "question", approvalId: approval.id }));
+      await worker.execute("w", params);
+      expect(ask).toHaveBeenCalledWith("t-login", { title: "需要登录：测试站", detail: params.reason, options: [{ key: "A", label: "已登录" }], recommended: "A", login: params });
+    } finally { hob.close(); }
+  });
+
+  it("ask_login 的完成答案和用户另发消息都会结束登录卡", async () => {
+    const hob = makeHob();
+    try {
+      vi.spyOn(hob.runtime.router, "answerEvent").mockResolvedValue();
+      const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "ask_login")!;
+      await tool.execute("login", { site: "测试站", reason: "需要完成验证" });
+      const first = hob.runtime.store.approvals()[0];
+      expect((await answerApproval(hob.runtime, first.id, { key: "A" })).status).toBe(200);
+      expect(hob.runtime.store.approval(first.id)).toMatchObject({ status: "answered", chosen: "A" });
+      await tool.execute("login-2", { site: "另一个站", reason: "需要登录" });
+      const second = hob.runtime.store.approvals().find((item) => item.status === "pending")!;
+      await hob.runtime.router.send("hob", { text: "我先问另一件事" });
+      await hob.runtime.router.waitIdle("hob");
+      expect(hob.runtime.store.approval(second.id)).toMatchObject({ status: "expired" });
+    } finally { hob.close(); }
+  });
+
+  it("新建助手不再接收 facts，职责由 dutyLong 提供", async () => {
     const hob = makeHob();
     try {
       const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "create_assistant")!;
-      const input = { name: "天气", duty: "天气", dutyLong: "查天气", sprite: "page" };
-      for (const facts of [undefined, [], [" ", ""]]) {
-        expect(await tool.execute("p", { ...input, facts })).toMatchObject({ isError: true, content: [{ text: "facts 至少写一条：这个助手管什么、不管什么。" }] });
-      }
-      expect(hob.runtime.store.drafts()).toHaveLength(0);
-      await tool.execute("p", { ...input, facts: ["  负责天气  "] });
-      expect(hob.runtime.store.drafts()[0].instructions).toEqual(["负责天气"]);
+      const result = await tool.execute("p", { name: "天气", duty: "天气", dutyLong: "查天气", sprite: "page" });
+      expect(result.isError).not.toBe(true);
+      const draft = hob.runtime.store.drafts()[0];
+      expect(draft).not.toHaveProperty("instructions");
       const created = hob.runtime.store.assistants().find((item) => item.name === "天气");
-      expect(created?.instructions).toBe("负责天气");
+      expect(created?.dutyLong).toBe("查天气");
     } finally { hob.close(); }
   });
 
@@ -47,7 +78,7 @@ describe("工具说明和确认选项", () => {
     const hob = makeHob();
     try {
       const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "create_assistant")!;
-      const result = await tool.execute("p", { name: "助手", duty: "工作", dutyLong: "做事", sprite: "hob", facts: ["做事"] });
+      const result = await tool.execute("p", { name: "助手", duty: "工作", dutyLong: "做事", sprite: "hob" });
       expect(result).toMatchObject({ isError: true, content: [{ text: "hob 火苗是主助手专用的。" }] });
       expect(hob.runtime.store.drafts()).toHaveLength(0);
     } finally { hob.close(); }

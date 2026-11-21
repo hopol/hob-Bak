@@ -16,7 +16,7 @@ export type PanelPage =
   | { kind: "member"; id: string }
   | { kind: "routines" | "skills" | "knowledge" | "rules"; groupId?: string }
   | { kind: "jobs" }
-  | { kind: "job"; id: string; round?: number; full?: boolean; instant?: boolean }
+  | { kind: "job"; id: string; round?: number; full?: boolean; instant?: boolean; jumpApprovalId?: string }
   | ({ kind: "file" } & FilePreviewState);
 
 function samePage(a: PanelPage, b: PanelPage): boolean {

@@ -2,7 +2,7 @@ import { archiveSkill, listSkills } from "./assistant-skills.ts";
 import type { HobRuntime } from "./runtime.ts";
 import { notEditable, skillDirOf, visibleSkills } from "./skills.ts";
 
-/** 归档技能前检查任务和定时绑定；助手工具与设置接口共用。只读的两类不归 Hob 管，不能删。 */
+/** 归档技能前检查正在使用的任务；助手工具与设置接口共用。只读的两类不归 Hob 管，不能删。 */
 export function deleteSkill(runtime: HobRuntime, assistantId: string, name: string, replacedBy?: string, groupId?: string, explicitGroup = false): string {
   const group = groupId ? runtime.store.group(groupId) : undefined;
   const all = visibleSkills(runtime, assistantId, group);
@@ -22,10 +22,7 @@ export function deleteSkill(runtime: HobRuntime, assistantId: string, name: stri
   };
   const job = runtime.store.jobs().find((item) => usesSkill(item.assistantId, item.groupId) && ["queued", "running", "waiting"].includes(item.status) && item.skillsUsed?.includes(name));
   if (job) throw new Error(`「${skill.title ?? skill.name}」正在被任务 ${job.id} 用，等它做完再删。`);
-  const routines = runtime.store.routines().filter((item) => item.skill === name && usesSkill(item.assistantId, item.groupId));
-  if (routines.length && !replacement) throw new Error(`「${skill.title ?? skill.name}」被定时任务「${routines[0].name}」用着：填 replaced_by 指定接替的技能，或者先用 update_routine 改掉。`);
   archiveSkill(dir, name);
-  if (replacement) for (const routine of routines) runtime.routines.update(routine.id, { skill: replacement.name });
   runtime.bus.emit({ type: "skills", assistantId });
   const title = skill.title ?? skill.name;
   return replacement ? `技能「${title}」已并入「${replacement.title}」，原技能移到了归档。` : `已删除技能「${title}」，移到了归档。`;

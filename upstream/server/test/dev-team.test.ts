@@ -34,7 +34,6 @@ function legacyAssistant(id: string, name: string): Assistant {
     pinned: true,
     hidden: false,
     notify: true,
-    instructions: "",
     createdAt: new Date().toISOString(),
   };
 }
@@ -65,7 +64,7 @@ describe("自带的敏捷团队", () => {
         members: DEV_TEAM_ROLES.map((role) => role.id),
       });
       // 建群那条系统 note 照常写
-      expect(hob.runtime.groups.items(group.id).items[0]).toMatchObject({ kind: "note", text: "建了群「敏捷团队」" });
+      expect(hob.runtime.groups.items(group.id).items[0]).toMatchObject({ kind: "note", text: "已创建群「敏捷团队」" });
       // 标记写在系统目录：只建一次
       expect(JSON.parse(readFileSync(join(hob.home, "system", "seeded.json"), "utf8"))).toMatchObject({ devTeam: true });
     } finally {

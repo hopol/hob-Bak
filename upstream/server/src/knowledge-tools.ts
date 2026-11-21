@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { knowledgeGroup, knowledgeLink, type KnowledgeCollection, type KnowledgeChunk, type KnowledgeEntry } from "../../shared/knowledge.ts";
 import type { HobRuntime } from "./runtime.ts";

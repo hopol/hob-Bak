@@ -4,7 +4,7 @@ import { plainText } from "../../shared/plain-text.ts";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import type { Approval, Job, PushDevice, PushSubscriptionJson, PushView } from "../../shared/types.ts";
+import type { Approval, PushDevice, PushSubscriptionJson, PushView } from "../../shared/types.ts";
 import { systemDir } from "./config.ts";
 import type { Store } from "./store.ts";
 
@@ -116,7 +116,7 @@ function isGone(status: number | undefined, reason: string): boolean {
 
 function describeFailure(error: unknown, status: number | undefined, reason: string): string {
   if (status) return t("推送服务拒绝（{status}{reason}）", { status, reason: reason ? ` ${reason}` : "" });
-  return t("连不上推送服务（{reason}）", { reason: error instanceof Error ? error.message : String(error) });
+  return t("无法连接推送服务（{reason}）", { reason: error instanceof Error ? error.message : String(error) });
 }
 
 /** 推送服务（可见性只在内存里：进程重启后没有前台客户端）。 */
@@ -297,12 +297,34 @@ export interface NotifyDeps {
   store: Store;
 }
 
+/** 一轮结束后通知助手：完成通知和失败通知共用这一条入口。 */
+export interface AssistantTurnEnd {
+  assistantId: string;
+  groupId?: string;
+  text?: string;
+  error?: string;
+}
+
 /** 点开推送去哪：群里提的问题、群里开的任务去群聊页，其余去这个助手的单聊。 */
 function openUrl(assistantId: string, groupId?: string): string {
   return groupId ? `/#/group/${encodeURIComponent(groupId)}` : `/?a=${encodeURIComponent(assistantId)}`;
 }
 
-/** 出审批：这个助手开了「需要确认时通知我」才推送。 */
+/** 一轮结束后推送；是否已经从有活变成没活由 Router 按 todosBusy 判断。 */
+export function pushAssistantTurnEnd(deps: NotifyDeps, turn: AssistantTurnEnd): void {
+  const assistant = deps.store.assistant(turn.assistantId);
+  if (!assistant?.notify) return;
+  const group = turn.groupId ? deps.store.group(turn.groupId) : undefined;
+  const title = group?.name ?? assistant.name;
+  const body = turn.error
+    ? t("执行失败：{reason}", { reason: plainText(turn.error) })
+    : turn.text?.trim()
+      ? plainText(turn.text).replace(/\s+/g, " ").slice(0, 160)
+      : t("已完成");
+  void deps.push.send({ title, body, url: openUrl(turn.assistantId, turn.groupId) }).catch(() => undefined);
+}
+
+/** 出审批：这个助手开了「需要我回答或做完时通知我」才推送。 */
 export function pushApproval(deps: NotifyDeps, approval: Approval): void {
   const assistant = deps.store.assistant(approval.assistantId);
   if (!assistant?.notify) return;
@@ -310,17 +332,5 @@ export function pushApproval(deps: NotifyDeps, approval: Approval): void {
   // 推送的标题是卡片标题（一张卡可能问几个问题），正文写谁在等、等什么
   void deps.push
     .send({ title: plainText(approval.title), body: t("{assistant} · 等待你的回答", { assistant: assistant.name }), url: openUrl(approval.assistantId, approval.groupId) })
-    .catch(() => undefined);
-}
-
-/** 任务受阻或失败：所属助手开了通知才推送。 */
-export function pushJobEnd(deps: NotifyDeps, job: Job): void {
-  if (job.status !== "stuck" && job.status !== "failed") return;
-  const assistant = deps.store.assistant(job.assistantId);
-  if (!assistant?.notify) return;
-  const status = job.status === "stuck" ? t("受阻") : t("失败");
-  const reason = job.statusReason ? t("：{reason}", { reason: plainText(job.statusReason) }) : "";
-  void deps.push
-    .send({ title: assistant.name, body: t("任务「{title}」{status}{reason}", { title: job.title, status, reason }), url: openUrl(job.assistantId, job.groupId) })
     .catch(() => undefined);
 }

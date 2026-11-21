@@ -60,7 +60,7 @@ describe("群技能", () => {
       hob.faux.setResponses([call("report", { outcome: "done", result: "完成" }), text("完成")]);
       const start = buildRouterTools(hob.runtime, "hob", topic.id).find((tool) => tool.name === "start_job")!;
       // 旧对话里的 skills 不再校验、不起作用，任务照常开
-      expect((await start.execute("start", { title: "测试", skills: ["missing", info.name, second.name] })).isError).not.toBe(true);
+      expect((await start.execute("start", { title: "测试", note: "按群里的资料完成测试", skills: ["missing", info.name, second.name] })).isError).not.toBe(true);
       await hob.runtime.jobs.waitIdle();
       const job = hob.runtime.store.jobs().find((item) => item.groupId === topic.id)!;
       const loaded = open.mock.calls.find(([options]) => options.file === hob.runtime.store.workerFile(job.id))?.[0].skills ?? [];
@@ -71,11 +71,10 @@ describe("群技能", () => {
       expect((await edit.execute("edit", { name: info.name, edits: [{ old: "群步骤", new: "新群步骤" }] })).isError).not.toBe(true);
       expect(readFileSync(own.path, "utf8")).toContain("个人步骤");
       expect(readFileSync(listSkills(dir)[0]!.path, "utf8")).toContain("新群步骤");
-      const routine = hob.runtime.routines.create({ assistantId: "hob", groupId: topic.id, name: "检查", instruction: "做事", schedules: ["0 9 * * *"], skill: info.name });
+      const routine = hob.runtime.routines.create({ assistantId: "hob", groupId: topic.id, name: "检查", instruction: "做事", schedules: ["0 9 * * *"] });
       const remove = tools.find((tool) => tool.name === "delete_skill")!;
-      expect((await remove.execute("delete", { name: info.name })).isError).toBe(true);
-      hob.runtime.routines.remove(routine.id);
       expect((await remove.execute("delete", { name: info.name })).isError).not.toBe(true);
+      hob.runtime.routines.remove(routine.id);
       expect(listSkills(dir)).toHaveLength(0);
       expect(existsSync(own.path)).toBe(true);
     } finally { hob.close(); }

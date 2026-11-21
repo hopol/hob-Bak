@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
-import type { Item } from "../../shared/types.ts";
+import type { Item, Job } from "../../shared/types.ts";
 import { answerApproval } from "../src/actions.ts";
 import { createRuntime } from "../src/runtime.ts";
 import { createApp } from "../src/http.ts";
@@ -26,6 +26,91 @@ function systemText(context: {
 }
 
 describe("Router", () => {
+  it("任务结果接着答完时只推一条完成通知，转交目标回合不推", async () => {
+    const hob = makeHob();
+    try {
+      const push = vi.spyOn(hob.runtime.push, "send").mockResolvedValue({ sent: 1, removed: 0 });
+      hob.faux.setResponses([text("已完成，报告已经放好。")]);
+      await hob.runtime.router.event("hob", "任务已完成", { workDone: true });
+      await hob.runtime.router.waitIdle("hob");
+      expect(push).toHaveBeenCalledTimes(1);
+      expect(push.mock.calls[0]?.[0]).toMatchObject({ title: "Hob", body: "已完成，报告已经放好。", url: "/?a=hob" });
+
+      hob.faux.setResponses([text("转交中的回复")]);
+      await hob.runtime.router.event("hob", "目标助手正在处理", { delegationId: "dg-test", workDone: true });
+      await hob.runtime.router.waitIdle("hob");
+      expect(push).toHaveBeenCalledTimes(1);
+    } finally { hob.close(); }
+  });
+
+  it("事件那一轮以 NO_REPLY 收尾：不推完成通知，推送里也不会出现 NO_REPLY", async () => {
+    const hob = makeHob();
+    try {
+      const push = vi.spyOn(hob.runtime.push, "send").mockResolvedValue({ sent: 1, removed: 0 });
+      hob.faux.setResponses([text("NO_REPLY")]);
+      await hob.runtime.router.event("hob", "任务已完成", { workDone: true });
+      await hob.runtime.router.waitIdle("hob");
+      hob.faux.setResponses([text("没什么要说的。NO_REPLY")]);
+      await hob.runtime.router.event("hob", "又一个任务已完成", { workDone: true });
+      await hob.runtime.router.waitIdle("hob");
+      expect(push).not.toHaveBeenCalled();
+    } finally { hob.close(); }
+  });
+
+  it("用户发来的话答完、手上没别的活就推一条完成通知", async () => {
+    const hob = makeHob();
+    try {
+      const push = vi.spyOn(hob.runtime.push, "send").mockResolvedValue({ sent: 1, removed: 0 });
+      hob.faux.setResponses([text("路线排好了。")]);
+      await hob.runtime.router.send("hob", { text: "帮我排一下周末的路线" });
+      await hob.runtime.router.waitIdle("hob");
+      expect(push).toHaveBeenCalledTimes(1);
+      expect(push.mock.calls[0]?.[0]).toMatchObject({ title: "Hob", body: "路线排好了。" });
+    } finally { hob.close(); }
+  });
+
+  it("任务或提问仍在时不把回合当成做完", async () => {
+    const hob = makeHob();
+    try {
+      const push = vi.spyOn(hob.runtime.push, "send").mockResolvedValue({ sent: 1, removed: 0 });
+      hob.faux.setResponses([text("普通回复。")]);
+      await hob.runtime.router.event("hob", "普通事件");
+      await hob.runtime.router.waitIdle("hob");
+      expect(push).not.toHaveBeenCalled();
+
+      const activeJob: Job = {
+        id: "t-notify-busy",
+        assistantId: "hob",
+        title: "还在查",
+        instruction: "查一下",
+        status: "running",
+        createdAt: new Date().toISOString(),
+        stats: { reads: 0, commands: 0, edits: 0 },
+        activity: [],
+      };
+      hob.runtime.store.saveJob(activeJob);
+      hob.faux.setResponses([text("任务还在进行。")]);
+      await hob.runtime.router.event("hob", "任务结果已送到", { workDone: true });
+      await hob.runtime.router.waitIdle("hob");
+      expect(push).not.toHaveBeenCalled();
+
+      hob.runtime.store.saveJob({ ...activeJob, status: "done", endedAt: new Date().toISOString() });
+      hob.runtime.store.saveApproval({
+        id: "q-notify-busy",
+        assistantId: "hob",
+        title: "还要继续吗？",
+        options: [{ key: "A", label: "继续" }, { key: "B", label: "停止" }],
+        status: "pending",
+        source: "router",
+        createdAt: new Date().toISOString(),
+      });
+      hob.faux.setResponses([text("问题还在等回答。")]);
+      await hob.runtime.router.event("hob", "任务结果已送到", { workDone: true });
+      await hob.runtime.router.waitIdle("hob");
+      expect(push).not.toHaveBeenCalled();
+    } finally { hob.close(); }
+  });
+
   it("现在块只进模型消息，不进用户气泡或事件展示", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
@@ -55,6 +140,83 @@ describe("Router", () => {
       expect(JSON.stringify(page)).not.toContain("【现在】");
     } finally { hob.close(); }
   });
+  it("任务结果事件等会话空闲后再按当前轮次投递", async () => {
+    const hob = makeHob();
+    let release = () => {};
+    try {
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const job: Job = {
+        id: "t-lazy-result",
+        assistantId: "hob",
+        title: "查资料",
+        instruction: "查资料",
+        status: "stuck",
+        summary: "第一轮受阻",
+        createdAt: new Date().toISOString(),
+        stats: { reads: 0, commands: 0, edits: 0 },
+        activity: [],
+      };
+      hob.runtime.store.saveJob(job);
+      hob.faux.setResponses([
+        async () => { await gate; return text("先处理用户这句"); },
+        text("知道了最新结果"),
+      ]);
+      await hob.runtime.router.send("hob", { text: "先处理用户这句" });
+      await waitFor(() => hob.faux.state.callCount > 0);
+      await hob.runtime.router.event("hob", "任务「查资料」（t-lazy-result）第一轮受阻", { job: { id: job.id, round: 0, kind: "result" }, workDone: true });
+      hob.runtime.store.saveJob({ ...job, status: "running", summary: undefined, rounds: [{ status: "stuck", summary: "第一轮受阻" }] });
+      release();
+      await hob.runtime.router.waitIdle("hob");
+      const entries = (await hob.runtime.router.ensure("hob")).manager!.getEntries();
+      const event = entries.find((entry) => entry.type === "custom_message" && entry.customType === "hob.event" && (entry.details as { job?: { id?: string } } | undefined)?.job?.id === job.id);
+      expect(event?.content).toContain("第 1 轮的结果已经被第 2 轮取代，第 2 轮现在：进行中");
+      expect(event?.content).not.toContain("第一轮受阻");
+    } finally {
+      release();
+      hob.close();
+    }
+  });
+
+  it("同一任务排队多条结果事件只投递最新的一条", async () => {
+    const hob = makeHob();
+    let release = () => {};
+    try {
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const job: Job = {
+        id: "t-coalesced-result",
+        assistantId: "hob",
+        title: "连续检查",
+        instruction: "连续检查",
+        status: "done",
+        summary: "第一轮结果",
+        createdAt: new Date().toISOString(),
+        stats: { reads: 0, commands: 0, edits: 0 },
+        activity: [],
+      };
+      hob.runtime.store.saveJob(job);
+      hob.faux.setResponses([
+        async () => { await gate; return text("先处理用户这句"); },
+        text("收到第二轮结果"),
+      ]);
+      await hob.runtime.router.send("hob", { text: "先处理用户这句" });
+      await waitFor(() => hob.faux.state.callCount > 0);
+      await hob.runtime.router.event("hob", "第一轮结果", { job: { id: job.id, round: 0, kind: "result" }, workDone: true });
+      await waitFor(() => Boolean((hob.runtime.router as never as { routers: Map<string, { pendingEvents?: unknown[] }> }).routers.get("hob")?.pendingEvents?.length));
+      hob.runtime.store.saveJob({ ...job, status: "done", summary: "第二轮结果", rounds: [{ status: "done", summary: "第一轮结果" }] });
+      await hob.runtime.router.event("hob", "第二轮结果", { job: { id: job.id, round: 1, kind: "result" }, workDone: true });
+      release();
+      await hob.runtime.router.waitIdle("hob");
+      const entries = (await hob.runtime.router.ensure("hob")).manager!.getEntries();
+      const events = entries.filter((entry) => entry.type === "custom_message" && entry.customType === "hob.event" && (entry.details as { job?: { id?: string } } | undefined)?.job?.id === job.id);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.content).toContain("第二轮结果");
+      expect(events[0]?.content).not.toContain("第一轮结果");
+    } finally {
+      release();
+      hob.close();
+    }
+  });
+
   it("记忆插件写成功不在对话里出提示行：记下了什么只给模型", async () => {
     const hob = makeHob();
     try {
@@ -251,7 +413,6 @@ describe("Router", () => {
           sprite: "page",
           routines: [{ name: "周报", instruction: "写本周周报", schedule: "0 17 * * 5" }],
           askFirst: ["发公众号"],
-          facts: ["标题不超过 20 字"],
         }),
         text("建好了。"),
       ]);
@@ -265,11 +426,10 @@ describe("Router", () => {
         duty: "周报和文章",
         sprite: "page",
         routinesText: "周报 · 每周五 17:00",
-        instructions: ["标题不超过 20 字"],
       });
       expect(draft).not.toHaveProperty("carry");
       expect(hob.runtime.store.assistant(draft.createdAssistantId!)?.splitFrom).not.toHaveProperty("conversations");
-      expect(hob.runtime.store.assistant(draft.createdAssistantId!)).toMatchObject({ name: "写作", instructions: "标题不超过 20 字" });
+      expect(hob.runtime.store.assistant(draft.createdAssistantId!)).toMatchObject({ name: "写作", dutyLong: "每周写周报，写公众号文章。" });
       expect(hob.runtime.router.items("hob").items.some((item) => item.kind === "draft" && item.draftId === draft.id)).toBe(true);
       // 不结束这一轮：建好之后模型还能接着说话
       expect(hob.runtime.router.items("hob").items.some((item) => item.kind === "assistant" && item.text === "建好了。")).toBe(true);
@@ -374,6 +534,51 @@ describe("Router", () => {
     }
   });
 
+  it("叫停后请求还挂着停不下来：丢掉这份会话，下一条消息照样有回复", async () => {
+    const hob = makeHob();
+    hob.runtime.router.stallOverrideMs = 60;
+    hob.runtime.router.stallReleaseMs = 50;
+    try {
+      hob.faux.setResponses([text("在。")]);
+      await hob.runtime.router.send("hob", { text: "早" });
+      await hob.runtime.router.waitIdle("hob");
+      // 中断收不了尾：abort 一直不返回，模型那次请求也一直挂着
+      const session = (hob.runtime.router as unknown as { routers: Map<string, { session?: { abort: () => Promise<void> } }> }).routers.get("hob")!.session!;
+      vi.spyOn(session, "abort").mockImplementation(() => new Promise<void>(() => undefined));
+      hob.faux.setResponses([() => new Promise<never>(() => undefined)]);
+      void hob.runtime.router.send("hob", { text: "在吗" });
+      await waitFor(() => hob.runtime.router.items("hob").items.some((item) => item.kind === "note" && item.icon === "info"));
+      await waitFor(() => !hob.runtime.router.isBusy("hob"));
+      hob.faux.setResponses([text("在，刚才卡住了。")]);
+      void hob.runtime.router.send("hob", { text: "人呢" });
+      await waitFor(() => hob.runtime.router.items("hob").items.some((item) => item.kind === "assistant" && item.text === "在，刚才卡住了。"));
+    } finally {
+      hob.close();
+    }
+  });
+
+  it("点停止时请求挂死停不下来：丢掉这份会话，下一条消息照样有回复", async () => {
+    const hob = makeHob();
+    hob.runtime.router.stallReleaseMs = 50;
+    try {
+      hob.faux.setResponses([text("在。")]);
+      await hob.runtime.router.send("hob", { text: "早" });
+      await hob.runtime.router.waitIdle("hob");
+      const session = (hob.runtime.router as unknown as { routers: Map<string, { session?: { abort: () => Promise<void> } }> }).routers.get("hob")!.session!;
+      vi.spyOn(session, "abort").mockImplementation(() => new Promise<void>(() => undefined));
+      hob.faux.setResponses([() => new Promise<never>(() => undefined)]);
+      void hob.runtime.router.send("hob", { text: "在吗" });
+      await waitFor(() => hob.runtime.router.isBusy("hob"));
+      await hob.runtime.router.stop("hob");
+      expect(hob.runtime.router.isBusy("hob")).toBe(false);
+      hob.faux.setResponses([text("在。")]);
+      void hob.runtime.router.send("hob", { text: "人呢" });
+      await waitFor(() => hob.runtime.router.items("hob").items.filter((item) => item.kind === "assistant" && item.text === "在。").length === 2);
+    } finally {
+      hob.close();
+    }
+  });
+
   it("新建助手：先写“由 Hob 创建”，再来一条它自己的开场白", async () => {
     const hob = makeHob();
     try {
@@ -384,7 +589,7 @@ describe("Router", () => {
           dutyLong: "每周写周报。",
           sprite: "page",
           routines: [{ name: "周报", instruction: "写周报", schedule: "0 17 * * 5" }],
-          facts: ["负责周报"],
+
         }),
         text("建好了。"),
       ]);
@@ -409,20 +614,20 @@ describe("Router", () => {
     const hob = makeHob();
     try {
       const tools = buildRouterTools(hob.runtime, "hob");
-      const run = async (name: string, args: Record<string, unknown>): Promise<string> => {
+      const run = async (name: string, args: Record<string, unknown>, terminates = true): Promise<string> => {
         const tool = tools.find((item) => item.name === name)!;
         const result = (await tool.execute("tool-call", args)) as {
           content: { type: string; text: string }[];
           terminate?: boolean;
         };
-        // 三个卡片工具都带 terminate：出了卡就不再请求模型
-        expect(result.terminate).toBe(true);
+        // ask_user 等卡片工具带 terminate；start_job 不结束本轮
+        expect(result.terminate).toBe(terminates ? true : undefined);
         return result.content[0].text;
       };
       hob.faux.setResponses([call("report", { outcome: "done", result: "好了" }), text("好")]);
       hob.faux.appendResponses([text("好")]);
 
-      expect(await run("start_job", { title: "查磁盘", instruction: "看看磁盘" })).toMatch(/^任务「查磁盘」.*已开始，预计 10 分钟（默认）。$/);
+      expect(await run("start_job", { title: "查磁盘", note: "看看磁盘" }, false)).toMatch(/^任务「查磁盘」.*已开始，预计 10 分钟（默认）。$/);
       expect(await run("ask_user", { title: "发吗", options: [{ label: "发" }, { label: "别发" }] })).toContain(
         "问题卡已显示给用户。",
       );
@@ -441,13 +646,12 @@ describe("Router", () => {
         duty: "盯着模型发布和 agent 产品的最新动态",
         dutyLong: "盯模型发布、agent 产品和开源项目，每天挑 6 条。",
         sprite: "bird",
-        facts: ["负责模型动态"],
       })) as { terminate?: boolean };
       // 不结束这一轮：建好以后还能接着说话
       expect(created.terminate).toBeUndefined();
       expect(hob.runtime.store.drafts()[0]?.duty).toBe("盯着模型发布和");
       // 模型给的头像只认内置的，不能指到生成的头像文件上
-      await tool.execute("tool-call", { name: "旁门", duty: "试试", dutyLong: "试试。", sprite: "img:img-abc123.png", facts: ["负责测试"] });
+      await tool.execute("tool-call", { name: "旁门", duty: "试试", dutyLong: "试试。", sprite: "img:img-abc123.png" });
       expect(hob.runtime.store.drafts().find((draft) => draft.name === "旁门")?.sprite).toBe("page");
     } finally {
       hob.close();
@@ -488,16 +692,14 @@ describe("Router", () => {
         },
         text("好的。"),
       ]);
-      const assistant = hob.runtime.store.assistant("hob")!;
-      hob.runtime.store.saveAssistant({ ...assistant, instructions: "标题不超过 20 字" });
       await hob.runtime.router.send("hob", { text: "发公众号之前要问我" });
       await hob.runtime.router.waitIdle("hob");
       await hob.runtime.router.send("hob", { text: "在吗" });
       await hob.runtime.router.waitIdle("hob");
 
       expect(seen).toHaveLength(1);
-      expect(seen[0]).toContain("## 补充说明");
-      expect(seen[0]).toContain("标题不超过 20 字");
+      expect(seen[0]).not.toContain("## 补充说明");
+      expect(seen[0]).not.toContain("标题不超过 20 字");
       expect(seen[0]).toContain("执行前确认：发公众号");
     } finally {
       hob.close();
@@ -514,7 +716,6 @@ describe("Router", () => {
           dutyLong: "每周写周报。",
           sprite: "page",
           routines: [],
-          facts: ["负责周报"],
         }),
         text("建好了。"),
       ]);
@@ -629,9 +830,10 @@ describe("Router", () => {
     }
   });
 
-  it("模型出错（限流等）不再悄无声息：对话里补一行没能回复", async () => {
+  it("模型出错（限流等）不再悄无声息：对话里补一行未能回复", async () => {
     const hob = makeHob();
     try {
+      const push = vi.spyOn(hob.runtime.push, "send").mockResolvedValue({ sent: 1, removed: 0 });
       const session = (await hob.runtime.router.ensure("hob")).session!;
       session.setAutoRetryEnabled(false);
       hob.faux.setResponses([
@@ -643,7 +845,9 @@ describe("Router", () => {
       await hob.runtime.router.event("hob", "任务「查资料」已完成：结果在这里");
       await hob.runtime.router.waitIdle("hob");
       const notes = hob.runtime.router.items("hob").items.filter((item) => item.kind === "note");
-      expect(notes.at(-1)).toMatchObject({ kind: "note", text: expect.stringMatching(/^没能回复：调用模型失败（模型服务返回 400：request exceeds client API key limits）。可以再发一次。$/) });
+      expect(notes.at(-1)).toMatchObject({ kind: "note", text: expect.stringMatching(/^未能回复：模型调用失败（模型服务返回 400：request exceeds client API key limits）。可重新发送。$/) });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(push).toHaveBeenCalledWith(expect.objectContaining({ title: "Hob", body: expect.stringContaining("执行失败") }));
     } finally {
       hob.close();
     }
@@ -659,13 +863,13 @@ describe("Router", () => {
       await hob.runtime.router.waitIdle("hob");
       off();
       const items = hob.runtime.router.items("hob").items;
-      expect(items.some((item) => item.kind === "note" && item.text.includes("没能回复"))).toBe(true);
+      expect(items.some((item) => item.kind === "note" && item.text.includes("未能回复"))).toBe(true);
       expect(items.some((item) => item.kind === "assistant" && item.text.includes("ECONNRESET"))).toBe(false);
       expect(mergeItems([], events).some((item) => item.kind === "assistant" && item.text.includes("ECONNRESET"))).toBe(false);
     } finally { hob.close(); }
   });
 
-  it("断流前已经写出来的正文照常留着，下面补一行没能回复", async () => {
+  it("断流前已经写出来的正文照常留着，下面补一行未能回复", async () => {
     const hob = makeHob();
     try {
       hob.faux.setResponses([fauxAssistantMessage([fauxText("我先查一下订阅列表")], { stopReason: "aborted", errorMessage: "stream ended before a terminal response event" })]);
@@ -673,7 +877,7 @@ describe("Router", () => {
       await hob.runtime.router.waitIdle("hob");
       const items = hob.runtime.router.items("hob").items;
       expect(items.some((item) => item.kind === "assistant" && item.text === "我先查一下订阅列表")).toBe(true);
-      expect(items.some((item) => item.kind === "note" && item.text.includes("没能回复"))).toBe(true);
+      expect(items.some((item) => item.kind === "note" && item.text.includes("未能回复"))).toBe(true);
     } finally { hob.close(); }
   });
 

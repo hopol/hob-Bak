@@ -1,9 +1,10 @@
 // 技能按「谁能用」分三档：本群、助手自己、通用。通用里 Lore 和本机 ~/.agents/skills 不归 Hob 管，只读。
-// 一个助手看得到哪些技能、每份能不能改，只在这里算；提示词、任务、改删、定时绑定都用这一份。
+// 一个助手看得到哪些技能、每份能不能改，只在这里算；提示词、任务、改删都用这一份。
 import { loadSkillsFromDir, type Skill } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AssistantSkill, SkillImportResult, SkillImportSource, SkillImportView, SkillSource, SkillView, VisibleSkill } from "../../shared/skills.ts";
 import { assertSkillsDirFree, assistantSkillsDir, groupSkillsDir, isSkillName, skillHead, skillIndex, listSkills, saveAssistantSkillsIndex } from "./assistant-skills.ts";
 import type { HobRuntime } from "./runtime.ts";
@@ -66,6 +67,24 @@ function tierSkills(dir: string): AssistantSkill[] {
   catch (error) { console.error("读取技能失败：", error); return []; }
 }
 
+export function bundledPlaywrightSkillDir(): string {
+  return fileURLToPath(new URL("../../node_modules/playwright-core/lib/tools/skills/playwright-cli", import.meta.url));
+}
+
+function builtinSkills(): VisibleSkill[] {
+  const dir = bundledPlaywrightSkillDir();
+  if (!existsSync(dir)) return [];
+  return loadSkillsFromDir({ dir, source: "common" }).skills.map((skill) => ({
+    name: skill.name,
+    description: skill.description,
+    path: skill.filePath,
+    dir: skill.baseDir,
+    scope: "general" as const,
+    editable: false,
+    source: "builtin" as const,
+  }));
+}
+
 /** 只读的一档：Lore 的工作副本、本机 ~/.agents/skills。Hob 管不了，只能照着用。 */
 function readOnly(root: string, source: "lore" | "local"): VisibleSkill[] {
   if (!existsSync(root)) return [];
@@ -111,6 +130,8 @@ export function visibleSkills(runtime: HobRuntime, assistantId: string, group?: 
     for (const skill of ownItems) if ((skill.enabled !== false) === pass) add(skill);
     if (pass) for (const skill of generalItems) add(skill);
   }
+  const desktop = runtime.desktop?.view();
+  if (desktop?.enabled && desktop.url && desktop.tokenConfigured) for (const skill of builtinSkills()) add(skill);
   for (const root of loreRoots(runtime)) for (const skill of readOnly(root, "lore")) if (!disabled.includes(`lore:${skill.name}`)) add(skill);
   for (const skill of readOnly(join(userHome, ".agents", "skills"), "local")) if (!disabled.includes(`common:${skill.name}`)) add(skill);
   return all;
@@ -120,6 +141,7 @@ export function visibleSkills(runtime: HobRuntime, assistantId: string, group?: 
 export function loadedVisibleSkills(skills: VisibleSkill[]): Skill[] {
   return skills.filter((skill) => skill.enabled !== false).flatMap((skill) => {
     if (skill.source === "lore") return [];
+    if (skill.source === "builtin") return loadSkillsFromDir({ dir: skill.dir, source: "common" }).skills.filter((item) => item.filePath === skill.path);
     const source = skill.source === "local" ? "common" : skill.scope === "general" ? "hob" : "assistant";
     return loadSkillsFromDir({ dir: skill.dir, source }).skills.filter((item) => item.filePath === skill.path);
   });
@@ -136,6 +158,7 @@ export function notEditable(name: string, skills: VisibleSkill[]): string {
   const skill = skills.find((item) => item.name === name);
   if (skill?.source === "lore") return `${name} 来自 Lore，只能照着用，Hob 里改不了；要改，到 Lore 里改，或者让任务另存一份 Hob 的技能。`;
   if (skill?.source === "local") return `${name} 在本机 ~/.agents/skills 里，只能照着用，Hob 里改不了；要改得在那个目录里改，或者让任务另存一份 Hob 的技能。`;
+  if (skill?.source === "builtin") return `${name} 是 Hob 自带的只读技能；要改可以让任务另存一份 Hob 的技能。`;
   return `没有这个技能：${name}`;
 }
 

@@ -323,77 +323,53 @@ describe("提示词的「记忆」一节", () => {
     expect(memoryPromptLines("off")).toEqual([]);
   });
 
-  it("关闭时提示词里不出这一节；补充说明单独一节", () => {
+  it("关闭时提示词里不出记忆和补充说明小节", () => {
     const hob = makeHob();
     try {
       const { timezone, aboutYou } = hob.runtime.settings.settings.general;
-      const assistant = hob.runtime.store.assistant("hob")!;
-      hob.runtime.store.saveAssistant({ ...assistant, instructions: "标题不超过 20 字\n少用感叹号" });
       const promptOf = (memory: MemoryProvider) =>
         buildSystemPrompt(hob.runtime.store, "hob", { timezone, aboutYou, memory });
       expect(promptOf("local")).toContain("## 记忆");
       expect(promptOf("off")).not.toContain("## 记忆");
-      expect(promptOf("off")).toContain("## 补充说明");
-      expect(promptOf("off")).toContain("标题不超过 20 字");
+      expect(promptOf("off")).not.toContain("## 补充说明");
     } finally {
       hob.close();
     }
   });
 });
 
-describe("memories.json 迁移", () => {
-  it("启动时把每条记忆追加成补充说明的一行，然后删掉文件", async () => {
+describe("补充说明迁移", () => {
+  it("启动时把非空助手和群说明写进档案并从资料移除，空说明不建档案", async () => {
     const { createRuntime } = await import("../src/runtime.ts");
     const home = mkdtempSync(join(tmpdir(), "hob-migrate-"));
-    const dir = join(home, "assistants", "hob");
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, "profile.json"),
-      JSON.stringify({
-        id: "hob",
-        name: "Hob",
-        duty: "主助手",
-        sprite: "hob",
-        primary: true,
-        pinned: true,
-        hidden: false,
-        notify: true,
-        createdAt: new Date().toISOString(),
-      }),
-    );
-    writeFileSync(
-      join(dir, "memories.json"),
-      JSON.stringify([
-        { id: "m-1", text: "标题不超过 20 字", createdAt: new Date().toISOString() },
-        { id: "m-2", text: "不看融资新闻", createdAt: new Date().toISOString() },
-      ]),
-    );
-    // 老草稿：memories 字段（前端按 instructions 渲染，不迁移会白屏）
-    mkdirSync(join(home, "assistants", "hob"), { recursive: true });
-    writeFileSync(
-      join(home, "assistants", "hob", "drafts.json"),
-      JSON.stringify([
-        { id: "d-1", name: "写作", askFirst: [], memories: ["口语、短句"], carry: { conversations: 3, memories: 1 } },
-      ]),
-    );
+    const assistantDir = join(home, "assistants", "hob");
+    const emptyAssistantDir = join(home, "assistants", "ops");
+    const groupDir = join(home, "groups", "g-test");
+    mkdirSync(assistantDir, { recursive: true });
+    mkdirSync(emptyAssistantDir, { recursive: true });
+    mkdirSync(groupDir, { recursive: true });
+    const profile = (id: string, instructions: string) => ({ id, name: id === "hob" ? "Hob" : "运维", duty: "主助手", sprite: id === "hob" ? "hob" : "server", primary: id === "hob", pinned: id === "hob", hidden: false, notify: true, instructions, createdAt: new Date().toISOString() });
+    writeFileSync(join(assistantDir, "profile.json"), JSON.stringify(profile("hob", "标题不超过 20 字\n少用感叹号")));
+    writeFileSync(join(emptyAssistantDir, "profile.json"), JSON.stringify(profile("ops", "   ")));
+    writeFileSync(join(groupDir, "group.json"), JSON.stringify({ id: "g-test", name: "测试群", purpose: "测试", ownerId: "hob", members: ["hob"], instructions: "群里的约定", createdAt: new Date().toISOString() }));
+    writeFileSync(join(assistantDir, "drafts.json"), JSON.stringify([{ id: "d-1", name: "写作", instructions: ["旧草稿说明"], askFirst: [], carry: { conversations: 3 } }]));
     const pi = new PiHost({ engineDir: join(home, "system", "engine"), modelsPath: null, nativeProviders: [] });
     const runtime = createRuntime({
       home,
-      config: {
-        passwordHash: "x",
-        cookieSecret: "y",
-        host: "127.0.0.1",
-        port: 0,
-      },
+      config: { passwordHash: "x", cookieSecret: "y", host: "127.0.0.1", port: 0 },
       pi,
     });
     try {
-      expect(runtime.store.assistant("hob")?.instructions).toBe("标题不超过 20 字\n不看融资新闻");
-      expect(() => statSync(join(dir, "memories.json"))).toThrow();
+      expect(runtime.store.assistant("hob")).not.toHaveProperty("instructions");
+      expect(runtime.store.assistant("ops")).not.toHaveProperty("instructions");
+      expect(JSON.parse(readFileSync(join(assistantDir, "profile.json"), "utf8"))).not.toHaveProperty("instructions");
+      expect(readFileSync(join(assistantDir, "instructions.archived.md"), "utf8")).toBe("标题不超过 20 字\n少用感叹号");
+      expect(JSON.parse(readFileSync(join(emptyAssistantDir, "profile.json"), "utf8"))).not.toHaveProperty("instructions");
+      expect(() => statSync(join(emptyAssistantDir, "instructions.archived.md"))).toThrow();
+      expect(runtime.store.group("g-test")).not.toHaveProperty("instructions");
+      expect(readFileSync(join(groupDir, "instructions.archived.md"), "utf8")).toBe("群里的约定");
       const draft = runtime.store.draft("d-1") as unknown as Record<string, unknown>;
-      expect(draft.instructions).toEqual(["口语、短句"]);
-      expect(draft.memories).toBeUndefined();
-      expect(draft.carry).toEqual({ conversations: 3 });
+      expect(draft).not.toHaveProperty("instructions");
     } finally {
       runtime.router.disposeAll();
     }

@@ -20,12 +20,12 @@ describe("知识库二期", () => {
   });
   it("未绑定显示引导，索引计数来自库", () => {
     const html = renderToStaticMarkup(<CollectionStatus collection={{ id: "kc-1", name: "资料", createdAt: "", count: 5, indexed: 3, failed: 1 }} collections={[]} assistants={[]} embedding={false} />);
-    expect(html).toContain("还没有助手用这个库");
+    expect(html).toContain("尚未有助手使用此知识库");
     expect(html).toContain("选择助手");
     expect(html).toContain("已建索引 3/5");
     expect(html).toContain("1 个失败");
     expect(html).toContain("重试");
-    expect(html).toContain("只按关键词查");
+    expect(html).toContain("仅按关键词搜索");
   });
   it("索引计数不包含不支持的文件，零失败不显示失败和重试", () => {
     const html = renderToStaticMarkup(<CollectionStatus collection={{ id: "kc-1", name: "资料", createdAt: "", count: 4, indexed: 3, failed: 0, unsupported: 1 }} collections={[]} assistants={[]} embedding={true} />);

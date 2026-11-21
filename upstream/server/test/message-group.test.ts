@@ -9,7 +9,7 @@ const ISO = "2026-11-08T02:00:00.000Z";
 
 function addAssistant(hob: TestHob, id: string, name: string, duty: string): Assistant {
   const base = hob.runtime.store.assistant("hob")!;
-  const assistant: Assistant = { ...base, id, name, duty, primary: false, pinned: false, sprite: "page", instructions: "" };
+  const assistant: Assistant = { ...base, id, name, duty, primary: false, pinned: false, sprite: "page" };
   hob.runtime.store.saveAssistant(assistant);
   return assistant;
 }
@@ -100,6 +100,17 @@ async function seedChat(hob: TestHob, lines: string[]): Promise<void> {
 }
 
 describe("message_group", () => {
+  it("非主助手交接时，综合提示使用交接方的名字", () => {
+    const { hob, group } = setup();
+    try {
+      const { topic } = hob.runtime.groups.handOver(group.id, "打印机连不上", "ops", { text: "请检查打印机", files: [] });
+      expect(topic.handover).toMatchObject({ by: "ops" });
+      expect(hob.runtime.store.groupItems(group.id).find((item) => item.kind === "note" && item.text === "服务器 已将「打印机连不上」交由这个群处理")).toMatchObject({ speaker: "ops" });
+    } finally {
+      hob.close();
+    }
+  });
+
   it("把原话和前面几句交给群：开话题、转来的条目、群主那一轮、话题卡、综合那一行", async () => {
     const { hob, group } = setup();
     try {
@@ -108,7 +119,7 @@ describe("message_group", () => {
       const result = await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "相册备份出错", note: "备份目录在 /vol/photo" });
       expect(isError(result)).toBe(false);
       const topic = hob.runtime.groups.topicsOf(group.id)[0]!;
-      expect(textOf(result)).toBe(`已交给群「家里机器」：开了话题「相册备份出错」（${topic.id}），群主「服务器」接手。有了结论会回到这里。`);
+      expect(textOf(result)).toBe(`已交给群「家里机器」：创建了话题「相册备份出错」（${topic.id}），群主「服务器」接手。有了结论会回到这里。`);
       expect(result).toMatchObject({ terminate: true });
 
       // 话题（群记录）上记着是主助手交来的
@@ -117,24 +128,18 @@ describe("message_group", () => {
 
       // 第一条是转来的原话：用户原话 + 前面几句 + 备注，附件跟着带上
       const forwarded = hob.runtime.store.groupItems(topic.id).find((item) => item.kind === "user")!;
-      const lastUser = hob.runtime.router.items("hob").items.findLast((item) => item.kind === "user")!;
-      expect(forwarded).toMatchObject({ speaker: "user", forwardedFrom: { assistantId: "hob", itemId: lastUser.id } });
-      expect(forwarded.kind === "user" ? forwarded.text : "").toContain("用户原话（");
-      expect(forwarded.kind === "user" ? forwarded.text : "").toContain("再看下这张图");
-      expect(forwarded.kind === "user" ? forwarded.text : "").toContain("最近的对话：");
-      expect(forwarded.kind === "user" ? forwarded.text : "").toContain("先看下日报");
-      expect(forwarded.kind === "user" ? forwarded.text : "").toContain("Hob 的备注：备份目录在 /vol/photo");
+      expect(forwarded).toMatchObject({ speaker: "user", forwardedFrom: { assistantId: "hob" } });
+      expect(forwarded.kind === "user" ? forwarded.text : "").toBe("备份目录在 /vol/photo");
 
       // 群主在话题里开了一轮，先看到转来的原话，再看到这条系统消息
       await waitFor(() => inputBody(hob, topic.id, "ops").includes("[hob-event]"));
       const body = inputBody(hob, topic.id, "ops");
-      expect(body).toContain("用户：");
-      expect(body).toContain("再看下这张图");
-      expect(body).toContain("[hob-event] 这个话题是 Hob 交给这个群的，上面是转来的原话。办完用 close_topic 写结论，结论会转给 Hob，由它告诉用户。");
+      expect(body).toContain("备份目录在 /vol/photo");
+      expect(body).toContain("[hob-event] 这个话题是 Hob 交给这个群的，上面是 Hob 写的交接说明。完成后用 close_topic 写结论，结论会转给 Hob，由它告诉用户。");
 
       // 主助手的对话里有话题卡；群的综合里有那一行
       expect(hob.runtime.router.items("hob").items.find((item) => item.kind === "topic" && item.topicId === topic.id)).toBeTruthy();
-      expect(hob.runtime.store.groupItems(group.id).find((item) => item.kind === "note" && item.text === "Hob 把「相册备份出错」交给了这个群")).toMatchObject({ speaker: "hob" });
+      expect(hob.runtime.store.groupItems(group.id).find((item) => item.kind === "note" && item.text === "Hob 已将「相册备份出错」交由这个群处理")).toMatchObject({ speaker: "hob" });
     } finally {
       hob.close();
     }
@@ -148,7 +153,7 @@ describe("message_group", () => {
       await hob.runtime.router.waitIdle("hob");
       await hob.runtime.router.send("hob", { text: "列表页错位，见截图", files: ["/tmp/截图.png"] });
       await hob.runtime.router.waitIdle("hob");
-      const result = await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "列表错位" });
+      const result = await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "列表错位", note: "请检查列表页错位。", files: ["/tmp/截图.png"] });
       expect(isError(result)).toBe(false);
       const topic = hob.runtime.groups.topicsOf(group.id)[0]!;
       const forwarded = hob.runtime.store.groupItems(topic.id).find((item) => item.kind === "user")!;
@@ -169,7 +174,7 @@ describe("message_group", () => {
 
       const asTopic = await toolOf(hob, "message_group").execute("c", { groupId: topic.id, title: "做事" });
       expect(isError(asTopic)).toBe(true);
-      expect(textOf(asTopic)).toBe(`${topic.id} 是话题，不是群：groupId 填群 id，会在群里开一个新话题。`);
+      expect(textOf(asTopic)).toBe(`${topic.id} 是话题，不是群：groupId 填群 id，会在群里创建一个新话题。`);
 
       const here = await toolOf(hob, "message_group", group.id).execute("c", { groupId: group.id, title: "做事" });
       expect(isError(here)).toBe(true);
@@ -184,11 +189,14 @@ describe("message_group", () => {
       expect(textOf(long)).toBe("title 最多 40 字，现在 41 字：写成一句话，如「相册备份出错」。");
 
       const note = await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "做事", note: "字".repeat(401) });
-      expect(isError(note)).toBe(true);
-      expect(textOf(note)).toBe("备注 401 字，最多 400 字。用户原话和最近的对话会自动带上，备注只写从原话里看不出的背景，改短后再调用一次。");
+      expect(isError(note)).toBe(false);
+      expect(textOf(note)).toContain("已交给群");
+      const emptyNote = await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "做事", note: "  " });
+      expect(isError(emptyNote)).toBe(true);
+      expect(textOf(emptyNote)).toBe("note 不能为空：写清交接说明后再调用一次。");
 
       // 报错之后什么都没开
-      expect(hob.runtime.groups.topicsOf(group.id)).toHaveLength(1);
+      expect(hob.runtime.groups.topicsOf(group.id)).toHaveLength(2);
     } finally {
       hob.close();
     }
@@ -209,17 +217,14 @@ describe("message_group", () => {
 
       await hob.runtime.router.send("hob", { text: "把这两张票据整理成一张表" });
       await hob.runtime.router.waitIdle("hob");
-      const result = await toolOf(hob, "message_group").execute("c", { groupId: target.id, title: "整理票据" });
+      const result = await toolOf(hob, "message_group").execute("c", { groupId: target.id, title: "整理票据", note: "把两张票据整理成一张表。" });
       expect(isError(result)).toBe(false);
       const topic = hob.runtime.groups.topicsOf(target.id)[0]!;
 
       // 转进话题的是单聊里的原话和前面几句，不是综合里那几条
       const forwarded = hob.runtime.store.groupItems(topic.id).find((item) => item.kind === "user")!;
       const forwardedText = forwarded.kind === "user" ? forwarded.text : "";
-      expect(forwardedText).toContain("把这两张票据整理成一张表");
-      expect(forwardedText).toContain("两个人的活");
-      expect(forwardedText).not.toContain("打印机换墨盒");
-      expect(forwardedText).not.toContain("周五下午不在");
+      expect(forwardedText).toBe("把两张票据整理成一张表。");
 
       // 群主会话是主助手：话题里能关话题
       const tools = buildRouterTools(hob.runtime, "hob", topic.id).map((item) => item.name);
@@ -245,7 +250,7 @@ describe("话题的结论回到主助手", () => {
     try {
       await seedChat(hob, ["整理一下票据"]);
       hob.faux.setResponses([text("接手了"), text("收到结论")]);
-      await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "整理票据" });
+      await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "整理票据", note: "请整理票据并回报结论。" });
       const topic = hob.runtime.groups.topicsOf(group.id)[0]!;
       await waitFor(() => inputBody(hob, topic.id, "ops").includes("[hob-event]"));
 
@@ -274,7 +279,7 @@ describe("话题的结论回到主助手", () => {
     try {
       await seedChat(hob, ["整理一下票据"]);
       hob.faux.setResponses([text("接手了"), text("收到结论")]);
-      await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "整理票据" });
+      await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "整理票据", note: "请整理票据并回报结论。" });
       const topic = hob.runtime.groups.topicsOf(group.id)[0]!;
       await waitFor(() => inputBody(hob, topic.id, "ops").includes("[hob-event]"));
 
@@ -292,7 +297,7 @@ describe("话题的结论回到主助手", () => {
     try {
       await seedChat(hob, ["整理一下票据"]);
       hob.faux.setResponses([text("接手了"), text("收到结论")]);
-      await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "整理票据" });
+      await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "整理票据", note: "请整理票据并回报结论。" });
       const topic = hob.runtime.groups.topicsOf(group.id)[0]!;
       await waitFor(() => inputBody(hob, topic.id, "ops").includes("[hob-event]"));
       hob.runtime.groups.closeByUser(topic.id, "我自己弄好了");
@@ -309,7 +314,7 @@ describe("话题的结论回到主助手", () => {
     try {
       await seedChat(hob, ["整理一下票据"]);
       hob.faux.setResponses([text("接手了"), text("收到结论")]);
-      await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "整理票据" });
+      await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "整理票据", note: "请整理票据并回报结论。" });
       const topic = hob.runtime.groups.topicsOf(group.id)[0]!;
       await waitFor(() => inputBody(hob, topic.id, "ops").includes("[hob-event]"));
 
@@ -344,7 +349,7 @@ describe("话题的结论回到主助手", () => {
     try {
       await seedChat(hob, ["整理一下票据"]);
       hob.faux.setResponses([text("接手了")]);
-      await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "整理票据" });
+      await toolOf(hob, "message_group").execute("c", { groupId: group.id, title: "整理票据", note: "请整理票据并回报结论。" });
       const topic = hob.runtime.groups.topicsOf(group.id)[0]!;
       await waitFor(() => inputBody(hob, topic.id, "ops").includes("[hob-event]"));
       const close = buildRouterTools(hob.runtime, "ops", topic.id).find((item) => item.name === "close_topic")!;
@@ -376,16 +381,12 @@ describe("message_assistant", () => {
       }
       await hob.runtime.router.send("hob", { text: "把周报发出去" });
       await hob.runtime.router.waitIdle("hob");
-      const result = await toolOf(hob, "message_assistant").execute("c", { assistantId: "write" });
+      const result = await toolOf(hob, "message_assistant").execute("c", { assistantId: "write", note: "把周报发出去，并按客户分开标题。" });
       await waitFor(() => hob.runtime.store.delegations().length > 0);
       await hob.runtime.router.waitIdle("write");
       expect(isError(result)).toBe(false);
       const delegation = hob.runtime.store.delegations()[0]!;
-      expect(delegation.text).toContain("用户原话（");
-      expect(delegation.text).toContain("把周报发出去");
-      expect(delegation.text).toContain("最近的对话：");
-      expect(delegation.text).toContain("先把材料放到桌面");
-      expect(delegation.text).toContain("标题按客户分开");
+      expect(delegation.text).toBe("把周报发出去，并按客户分开标题。");
     } finally {
       hob.close();
     }
@@ -400,8 +401,8 @@ describe("主助手的提示词", () => {
     try {
       const prompt = buildSystemPrompt(hob.runtime.store, "hob", settings);
       const group = hob.runtime.store.groups().find((item) => item.name === "家里机器")!;
-      expect(prompt).toContain(`- 家里机器（${group.id}）：负责机器上的事；群主 服务器；成员 Hob、服务器、写作`);
-      expect(prompt).toContain("一件事要几个助手接力，又有管这类事的群，用 message_group 交给那个群：群里会开一个话题，群主接手，按群里的分工安排成员，有了结论会回到你这里，这期间同一件事你这边不再另派。群里记着分工、本群的技能和补充说明，成员在同一个话题里交接，彼此看得到做到哪儿；一个个转给成员，这些都用不上。");
+      expect(prompt).toContain(`- 家里机器（${group.id}）：职责：机器上的事；群主 服务器；成员 Hob、服务器、写作`);
+      expect(prompt).toContain("一件事要几个助手接力，又有管这类事的群，用 message_group 交给那个群：群里会创建一个话题，群主接手，按群里的分工安排成员，有了结论会回到你这里，这期间同一件事你这边不再另行分派。群里记着分工和本群的技能，成员在同一个话题里交接，彼此可以查看做到哪儿；一个个转给成员，这些都用不上。");
     } finally {
       hob.close();
     }
@@ -411,11 +412,11 @@ describe("主助手的提示词", () => {
     const { hob } = setup();
     try {
       const prompt = buildSystemPrompt(hob.runtime.store, "hob", settings);
-      expect(prompt).toContain("建群时挑最能统筹的当群主：群主接没点名的消息和群里的定时，安排成员，最后给用户结论，要知道这件事要办成什么、看得懂各个成员的活。成员里有职责就是统筹这类事的，让它当；成员各管一摊、没有谁看得到全局的，你自己进群当群主。");
+      expect(prompt).toContain("创建群时选择最能统筹的当群主：群主接没点名的消息和群里的定时任务，安排成员，最后给用户结论，要知道这件事要完成什么、能够理解各个成员的任务。成员里有职责就是统筹这类事的，让它担任群主；成员各管一摊、没有谁能看到全局的，你自己进群当群主。");
       // 接在 ADMIN_LINE 后面
-      const admin = "助手、群和话题，你都能直接建和改，和用户在界面上操作一样。用户要你改的，直接改，改完说一句改了什么。你自己觉得该改的，比如同类的事反复出现又没有合适的助手管、某个群缺了该在的成员，先跟用户说你的想法，用户同意了再改。归档助手和群由用户在界面上操作。";
+      const admin = "助手、群和话题，你都能直接创建和修改，和用户在界面上操作一样。用户要你修改的，直接修改，完成后说一句修改了什么。你自己觉得该修改的，比如同类的事反复出现又没有合适的助手管、某个群缺了该在的成员，先跟用户说你的想法，用户同意了再修改。归档助手和群、助手能用的能力（运行命令、修改文件、生成图片），由用户在界面上操作。";
       expect(prompt.indexOf(admin)).toBeGreaterThan(-1);
-      expect(prompt.indexOf("建群时挑最能统筹的当群主")).toBe(prompt.indexOf(admin) + admin.length + 1);
+      expect(prompt.indexOf("创建群时选择最能统筹的当群主")).toBe(prompt.indexOf(admin) + admin.length + 1);
     } finally {
       hob.close();
     }

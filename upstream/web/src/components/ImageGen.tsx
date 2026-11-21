@@ -202,7 +202,7 @@ export function ImageGenCard({ status, prompt, size, path, error, startedAt, fre
       </div>
       {status === "failed" && phase === "live" ? (
         <div className="igen-cap" role="status" title={prompt}>
-          <span>{t("没有生成出来")}</span>
+          <span>{t("生成失败")}</span>
           <span className="igen-note">{error || t("图片生成失败。")}</span>
         </div>
       ) : null}

@@ -173,7 +173,7 @@ describe("overview", () => {
         notify: true,
         createdAt: new Date().toISOString(),
       });
-      expect(buildRouterTools(hob.runtime, "write").map((item) => item.name)).not.toContain("overview");
+      expect(buildRouterTools(hob.runtime, "write").map((item) => item.name)).toContain("overview");
 
       // 主助手的 Worker 提示词里也写了早报怎么做
       const job = await hob.runtime.jobs.start("hob", { title: "早上汇总", instruction: "写今天的早报" });

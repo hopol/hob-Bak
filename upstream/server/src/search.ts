@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createSearchProvider } from "@juicesharp/rpiv-web-tools/providers/factory.ts";
 import { fetchViaGenericHtml } from "@juicesharp/rpiv-web-tools/providers/fetch-helpers.ts";

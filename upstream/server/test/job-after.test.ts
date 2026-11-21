@@ -57,7 +57,7 @@ describe("任务依赖（after）", () => {
     }
   });
 
-  it("A 没做成：B 结束为受阻、原因写对、助手收到事件；A → B → C 时 C 也受阻", async () => {
+  it("A 未完成：B 结束为受阻、原因写对、助手收到事件；A → B → C 时 C 也受阻", async () => {
     const hob = makeHob({}, { settings: { work: { maxJobs: 1 } } });
     try {
       const event = vi.spyOn(hob.runtime.router, "event").mockResolvedValue();
@@ -68,14 +68,14 @@ describe("任务依赖（after）", () => {
       await hob.runtime.jobs.waitIdle();
 
       expect(hob.runtime.store.job(a.id)?.status).toBe("stuck");
-      expect(hob.runtime.store.job(b.id)).toMatchObject({ status: "stuck", statusReason: "前置任务「先查目录」没做成" });
-      expect(hob.runtime.store.job(c.id)).toMatchObject({ status: "stuck", statusReason: "前置任务「再写总结」没做成" });
+      expect(hob.runtime.store.job(b.id)).toMatchObject({ status: "stuck", statusReason: "前置任务「先查目录」未完成" });
+      expect(hob.runtime.store.job(c.id)).toMatchObject({ status: "stuck", statusReason: "前置任务「再写总结」未完成" });
       // B、C 都没真的跑起来：没有动手的步骤
       expect(hob.runtime.jobs.transcript(b.id).filter((step) => step.kind === "tool")).toHaveLength(0);
       expect(hob.runtime.jobs.transcript(c.id).filter((step) => step.kind === "tool")).toHaveLength(0);
       const sent = event.mock.calls.map((args) => String(args[1]));
-      expect(sent.filter((line) => line.startsWith("「Hob」的任务「再写总结」") && line.includes("前置任务「先查目录」没做成"))).toHaveLength(1);
-      expect(sent.filter((line) => line.startsWith("「Hob」的任务「发布总结」") && line.includes("前置任务「再写总结」没做成"))).toHaveLength(1);
+      expect(sent.filter((line) => line.startsWith("「Hob」的任务「再写总结」") && line.includes("前置任务「先查目录」未完成"))).toHaveLength(1);
+      expect(sent.filter((line) => line.startsWith("「Hob」的任务「发布总结」") && line.includes("前置任务「再写总结」未完成"))).toHaveLength(1);
     } finally {
       hob.close();
     }
@@ -129,15 +129,15 @@ describe("任务依赖（after）", () => {
       expect(hob.runtime.store.jobs().find((job) => job.title === "再写总结")?.after).toEqual([a.id]);
       await hob.runtime.jobs.waitIdle();
 
-      const missing = await tool.execute("call", { title: "写总结", after: ["t-nope"] }) as { content: { text: string }[]; isError?: boolean };
+      const missing = await tool.execute("call", { title: "写总结", note: "检查前置任务", after: ["t-nope"] }) as { content: { text: string }[]; isError?: boolean };
       expect(missing.isError).toBe(true);
       expect(missing.content[0].text).toBe("没有这个任务：t-nope");
 
       const failed: Job = { id: "t-old", assistantId: "hob", title: "老任务", instruction: "老活", status: "failed", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [] };
       hob.runtime.store.saveJob(failed);
-      const bad = await tool.execute("call", { title: "写总结", after: ["t-old"] }) as { content: { text: string }[]; isError?: boolean };
+      const bad = await tool.execute("call", { title: "写总结", note: "等待老任务", after: ["t-old"] }) as { content: { text: string }[]; isError?: boolean };
       expect(bad.isError).toBe(true);
-      expect(bad.content[0].text).toBe("前置任务「老任务」（t-old）失败，等不到它做完了。");
+      expect(bad.content[0].text).toBe("前置任务「老任务」（t-old）失败，无法等待它完成。");
       expect(hob.runtime.store.jobs().filter((job) => job.title === "写总结")).toHaveLength(0);
     } finally {
       hob.close();

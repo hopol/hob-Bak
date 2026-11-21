@@ -32,7 +32,7 @@ export function PhotoStack({ photos, onOpen }: { photos: string[]; onOpen: (path
     <div
       className={`album-stack${dx ? " dragging" : ""}`}
       role="group"
-      aria-label={t("{n} 张图片，左右滑动切换，点一下查看", { n })}
+      aria-label={t("{n} 张图片，左右滑动切换，点击查看", { n })}
       onPointerDown={(event) => {
         drag.current = { id: event.pointerId, x: event.clientX, moved: false };
         event.currentTarget.setPointerCapture(event.pointerId);

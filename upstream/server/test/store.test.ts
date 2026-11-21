@@ -43,16 +43,12 @@ describe("store", () => {
     }
   });
 
-  it("坏规则和旧记忆报出路径并保留原文件", () => {
+  it("坏规则报出路径并保留原文件", () => {
     const hob = makeHob();
     try {
       const rules = join(hob.home, "assistants", "hob", "rules.json");
-      const memories = join(hob.home, "assistants", "hob", "memories.json");
       writeFileSync(rules, "{坏掉的");
       expect(() => hob.runtime.store.rules("hob")).toThrow(rules);
-      writeFileSync(memories, "{坏掉的");
-      expect(() => hob.runtime.store.migrateMemories()).toThrow(memories);
-      expect(readFileSync(memories, "utf8")).toBe("{坏掉的");
     } finally {
       hob.close();
     }

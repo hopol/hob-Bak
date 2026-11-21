@@ -132,7 +132,8 @@ export function text(value: string) {
 }
 
 export function call(name: string, args: Record<string, unknown>) {
-  return fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: "toolUse" });
+  const handoff = ["start_job", "message_assistant", "message_group", "open_topic"].includes(name) && !("note" in args) ? { ...args, note: "测试交接说明" } : args;
+  return fauxAssistantMessage([fauxToolCall(name, handoff)], { stopReason: "toolUse" });
 }
 
 export async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {

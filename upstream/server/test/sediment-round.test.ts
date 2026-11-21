@@ -60,6 +60,21 @@ describe("沉淀是任务的又一轮", () => {
     } finally { hob.close(); }
   });
 
+  it("受阻的任务也能沉淀，还在跑的不行", async () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
+      hob.runtime.store.saveJob(doneJob({ status: "running" }));
+      expect(() => hob.runtime.jobs.startSediment("t-sed")).toThrow("任务还没结束");
+      hob.runtime.store.saveJob(doneJob({ status: "stuck", endedAt: new Date().toISOString() }));
+      vi.spyOn(hob.runtime.router, "event").mockResolvedValue();
+      hob.faux.setResponses([call("report", { outcome: "done", result: "没有要补的" }), text("好")]);
+      hob.runtime.jobs.startSediment("t-sed");
+      await hob.runtime.jobs.waitIdle();
+      expect(hob.runtime.store.job("t-sed")!.sediment?.status).toBe("empty");
+      expect(hob.runtime.store.job("t-sed")!.status).toBe("stuck");
+    } finally { hob.close(); }
+  });
+
   it("在已有技能上改：版本加一，旧版进历史，标题和说明跟着 SKILL.md", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
@@ -123,7 +138,7 @@ describe("沉淀是任务的又一轮", () => {
       expect(existsSync(dir)).toBe(false);
       expect(hob.runtime.store.job("t-sed")?.sediment).toEqual({ status: "failed", reason: "技能没改好，已恢复原样：「bad-skill」的 SKILL.md 开头缺 metadata.title" });
       expect(notify).toHaveBeenCalledWith("hob", `任务「巡检」（t-sed）沉淀完了：沉淀失败，技能没改好，已恢复原样：「bad-skill」的 SKILL.md 开头缺 metadata.title。`);
-      expect(readFileSync(hob.runtime.store.workerFile("t-sed"), "utf8").split("这一轮结束了，还没有交结果")).toHaveLength(2);
+      expect(readFileSync(hob.runtime.store.workerFile("t-sed"), "utf8").split("这一轮结束了，还没有提交结果")).toHaveLength(2);
     } finally { hob.close(); }
   });
 
@@ -208,7 +223,7 @@ describe("沉淀是任务的又一轮", () => {
     } finally { hob.close(); }
   });
 
-  it("从定时任务来的任务新建技能：定时任务绑上，对话里不落行", async () => {
+  it("从定时任务来的任务沉淀技能时不修改定时任务", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
       const routine = hob.runtime.routines.create({ assistantId: "hob", name: "巡检", instruction: "检查", schedules: ["0 9 * * *"] });
@@ -221,7 +236,8 @@ describe("沉淀是任务的又一轮", () => {
       ]);
       hob.runtime.jobs.startSediment("t-sed");
       await hob.runtime.jobs.waitIdle();
-      expect(hob.runtime.store.routine(routine.id)?.skill).toBe("daily-check");
+      expect(hob.runtime.store.routine(routine.id)).not.toHaveProperty("skill");
+      expect(listAssistantSkills(hob.home, "hob").map((item) => item.name)).toEqual(["daily-check"]);
       expect(hob.runtime.router.items("hob").items.some((item) => item.kind === "note")).toBe(false);
     } finally { hob.close(); }
   });
@@ -324,7 +340,7 @@ describe("沉淀是任务的又一轮", () => {
       expect(message).toContain("技能写这一类事怎么做，不写这一次的经过和数据");
       expect(message).toContain(`这次在技能「${skill.title}」（${skill.name}，第 1 版）的基础上改：它在 ${dirname(saved.path)}，先读它现在的内容，再直接改这个目录里的文件。`);
       expect(message).toContain("「Hob」交代：用户的反馈");
-      expect(message).toContain("写好以后调用 report，result 里写这次新建或改了哪些地方。");
+      expect(message).toContain("写好以后调用 report，result 里写这次新建或修改了哪些地方。");
       const dir = join(hob.home, "assistants", "hob", "skills");
       hob.faux.setResponses([(context: any) => {
         const user = [...context.messages].reverse().find((item: any) => item.role === "user");
@@ -353,7 +369,7 @@ describe("沉淀是任务的又一轮", () => {
       hob.runtime.jobs.startSediment("t-sed");
       await hob.runtime.jobs.waitIdle();
       const ask = hob.runtime.jobs.transcript("t-sed").find((step) => step.name === "ask_user");
-      expect(ask?.output).toBe("沉淀时不用问：拿不准的地方，在技能里写成执行前要确认的一步。");
+      expect(ask?.output).toBe("沉淀时无需询问：拿不准的地方，在技能里写成执行前要确认的一步。");
       expect(hob.runtime.store.approvals()).toEqual([]);
       expect(events.every((status) => status === "done")).toBe(true);
     } finally { hob.close(); }
@@ -617,7 +633,8 @@ describe("沉淀是任务的又一轮", () => {
       hob.faux.setResponses([call("report", { outcome: "done", result: "没改" }), text("好")]);
       hob.runtime.jobs.startSediment("t-sed");
       await hob.runtime.jobs.waitIdle();
-      expect(hob.runtime.store.job("t-sed")?.usage?.input).toBeGreaterThan(10);
+      const usage = hob.runtime.store.job("t-sed")?.usage;
+      expect((usage?.input ?? 0) + (usage?.output ?? 0)).toBeGreaterThan(15);
     } finally { hob.close(); }
   });
 });

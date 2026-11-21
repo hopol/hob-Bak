@@ -68,11 +68,11 @@ function LivePreview({ page }: { page: PageLive }) {
   }, [page.path]);
   const writing = page.state !== "done";
   return <>
-    <Head name={page.title || t("正在写页面…")} meta={meta} path={page.path || "page.html"} liveStatus={page.state === "writing" ? t("正在生成…") : page.state === "failed" ? t("生成失败：{error}", { error: page.error ?? "" }) : undefined} disabled={writing} />
+    <Head name={page.title || t("正在生成页面…")} meta={meta} path={page.path || "page.html"} liveStatus={page.state === "writing" ? t("正在生成…") : page.state === "failed" ? t("生成失败：{error}", { error: page.error ?? "" }) : undefined} disabled={writing} />
     <div className="fp-body">
       {page.state === "done" && /<\s*script\b/i.test(page.html) && meta ? <HtmlBody meta={meta} /> : <>
         <div className="fp-note">{t("网页在隔离环境中显示，不能访问 Hob 的数据。")}</div>
-        <iframe ref={frame} className="fp-frame" sandbox="allow-scripts" srcDoc={shell} onLoad={send} title={page.title || t("正在写页面")} />
+        <iframe ref={frame} className="fp-frame" sandbox="allow-scripts" srcDoc={shell} onLoad={send} title={page.title || t("正在生成页面")} />
       </>}
     </div>
   </>;
@@ -211,7 +211,7 @@ function Body({ meta, find, page }: { meta: FileMeta; find?: string; page?: numb
         <div className="fp-center">
           <div className="fp-nofile">
             <Icon name="doc" size={22} />
-            <div>{t("这种文件不在浏览器里预览，可以下载后打开。")}</div>
+            <div>{t("此类文件不在浏览器中预览，请下载后打开。")}</div>
             <a className="hob-btn hob-btn-primary" href={fileUrl(meta.path)} download={meta.name}>
               {t("下载")}
             </a>
@@ -288,7 +288,7 @@ function TextBody({ meta, find }: { meta: FileMeta; find?: string }) {
 
   const notice =
     meta.size > MAX_TEXT ? (
-      <div className="fp-note">{t("文件有 {size}，只显示前 1 MB，完整内容请下载。", { size: fmtBytes(meta.size) })}</div>
+      <div className="fp-note">{t("文件大小为 {size}，仅显示前 1 MB，完整内容请下载。", { size: fmtBytes(meta.size) })}</div>
     ) : null;
 
   if (meta.kind === "markdown") {

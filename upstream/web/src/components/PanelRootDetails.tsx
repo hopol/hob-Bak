@@ -8,7 +8,7 @@ import { Icon } from "../icons.tsx";
 import { jobStatusIcon } from "./status-meta.tsx";
 import { DetailRow } from "./DetailRow.tsx";
 import { groupSidebarFiles, routineSummary, sidebarInfoValues } from "../sidebar-data.ts";
-import { loadAssistantSkills, loadGroupProfile, loadSidebarCollections, loadSidebarFiles, loadSidebarJobs, openAssistantPanel, openGroupSettings, openFilePreview, openJob, openSidebarPage, useApp } from "../store.ts";
+import { loadAssistantSkills, loadGroupProfile, loadSidebarCollections, loadSidebarFiles, loadSidebarJobs, openFilePreview, openJob, openSidebarPage, useApp } from "../store.ts";
 import { fmtBytes, fmtDuration, fmtElapsed, fmtWhen } from "../util.ts";
 
 function LoadingRow() { return <div className="sidebar-loading" role="status"><DelayedText text={t("正在读取…")} /></div>; }
@@ -16,7 +16,6 @@ function LoadingRow() { return <div className="sidebar-loading" role="status"><D
 export function PanelRootDetails({ groupId, part }: { groupId?: string; part?: "info" | "tabs" } = {}) {
   const s = useApp();
   const aid = groupId ?? panelAssistant(s.panelStack, s.sel);
-  const group = groupId ? s.groups.find((item) => item.id === groupId) : undefined;
   const groupProfile = groupId ? s.groupProfiles[groupId] : undefined;
   const profile = s.profiles[aid];
   const a = profile?.assistant ?? s.assistants.find((item) => item.id === aid);
@@ -52,7 +51,6 @@ export function PanelRootDetails({ groupId, part }: { groupId?: string; part?: "
   const groups = groupSidebarFiles(files);
   return <>
     {part !== "tabs" ? <div className="group-card sidebar-info">
-      <button className="sidebar-instructions" onClick={() => groupId ? openGroupSettings(groupId) : openAssistantPanel()}><small>{t("补充说明")}</small><span className={(groupId ? group?.instructions : a?.instructions) ? "" : "muted"}>{(groupId ? group?.instructions : a?.instructions) || (groupId ? t("记下这个群要知道的事实") : t("记下这个助手要知道的事实"))}</span><b>›</b></button>
       <button onClick={() => openSidebarPage("routines", groupId)}><Icon name="clock" size={15} /><span>{t("定时任务")}</span><small>{routineSummary(routines, s.settings.settings.general.timezone)}</small><b>›</b></button>
       <button onClick={() => openSidebarPage("skills", groupId)}><Icon name="mem" size={15} /><span>{t("技能")}</span><small>{skills?.error ? t("加载失败") : !skills?.loaded ? <DelayedText key={aid} text={t("正在加载…")} /> : values.skills}</small><b>›</b></button>
       {!groupId ? <button onClick={() => openSidebarPage("knowledge")}><Icon name="archive" size={15} /><span>{t("知识库")}</span><small>{collectionsError ? t("加载失败") : collectionsLoading ? <DelayedText text={t("正在加载…")} /> : values.knowledge}</small><b>›</b></button> : null}

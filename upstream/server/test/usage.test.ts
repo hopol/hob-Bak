@@ -41,7 +41,6 @@ function addAssistant(hob: TestHob, id: string, name: string): Assistant {
     pinned: false,
     hidden: false,
     notify: true,
-    instructions: "",
     createdAt: "2026-10-01T00:00:00.000Z",
   };
   hob.runtime.store.saveAssistant(assistant);

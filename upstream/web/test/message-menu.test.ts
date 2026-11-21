@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { menuPosition, messageMenu, moveSwipe, swipeReply, type SwipeState } from "../src/message-menu.ts";
+import { actionsFor, menuPosition, messageMenu, moveSwipe, swipeReply, type SwipeState } from "../src/message-menu.ts";
 
 describe("消息长按菜单", () => {
   it("打开、切换和关闭", () => {
@@ -17,8 +17,18 @@ describe("消息长按菜单", () => {
 describe("长按菜单定位", () => {
   const area = { top: 50, bottom: 750, left: 0, right: 390 };
   it("优先贴在气泡下方，空间不足时放上方", () => {
-    expect(menuPosition({ top: 200, bottom: 240, right: 250 }, area)).toEqual({ top: 248, left: 90 });
-    expect(menuPosition({ top: 700, bottom: 740, right: 390 }, area)).toEqual({ top: 600, left: 222 });
+    expect(menuPosition({ top: 200, bottom: 240, left: 30, right: 250 }, area, false, 3)).toEqual({ top: 248, left: 30, bubbleTop: 200, maxHeight: undefined });
+    expect(menuPosition({ top: 700, bottom: 740, left: 190, right: 380 }, area, true, 2)).toEqual({ top: 596, left: 140, bubbleTop: 700, maxHeight: undefined });
+  });
+  it("长消息裁剪后留出菜单空间", () => {
+    expect(menuPosition({ top: 50, bottom: 900, left: 20, right: 300 }, area, false, 3)).toEqual({ top: 590, left: 20, bubbleTop: 58, maxHeight: 524 });
+  });
+  it("按条目类型提供动作", () => {
+    expect(actionsFor("user")).toEqual(["reply", "copy", "select"]);
+    expect(actionsFor("assistant")).toEqual(["reply", "copy", "select"]);
+    expect(actionsFor("job")).toEqual(["reply", "job"]);
+    for (const kind of ["question", "image", "file"]) expect(actionsFor(kind)).toEqual(["reply"]);
+    expect(actionsFor("note")).toEqual([]);
   });
 });
 

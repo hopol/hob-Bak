@@ -5,7 +5,6 @@ import { DesktopService } from "./desktop.ts";
 import { KnowledgeStore } from "./knowledge.ts";
 import { DesktopControl } from "./desktop-control.ts";
 import { DesktopEvents } from "./desktop-events.ts";
-import { DesktopPublicLock } from "./desktop-public.ts";
 import { DelegationManager } from "./delegations.ts";
 import type { GroupManager } from "./groups.ts";
 import type { HobConfig } from "./config.ts";
@@ -23,7 +22,6 @@ import type { PushSender, PushService } from "./push.ts";
 import type { UsageService } from "./usage.ts";
 import { Bus as BusImpl } from "./bus.ts";
 import { seedDevTeam, migrateProductOwnerDuty } from "./dev-team.ts";
-import { pruneStaleTodos } from "./todos.ts";
 import { GroupManager as GroupManagerImpl } from "./groups.ts";
 import { JobManager as JobManagerImpl } from "./jobs.ts";
 import { PushService as PushServiceImpl } from "./push.ts";
@@ -51,7 +49,6 @@ export interface HobRuntime {
   desktop: DesktopService;
   desktopControl: DesktopControl;
   desktopEvents: DesktopEvents;
-  desktopPublic: DesktopPublicLock;
   /** 服务商：设置里存不敏感的，Key 存 secrets.json，变动套进引擎 */
   providers: ProviderService;
   /** 引擎注册表里现在能用的模型（设置页、派任务时看） */
@@ -82,15 +79,6 @@ export interface CreateRuntimeOptions {
   fetchImpl?: typeof fetch;
 }
 
-/**
- * 启动时把没人管的待办收起：超过一天没更新、这个会话里也没有在跑的任务。
- * 打不开的会话（比如还没配模型）留着，下一轮开始前再收。
- */
-async function pruneTodosAtStartup(runtime: HobRuntime): Promise<void> {
-  for (const assistant of runtime.store.assistants()) await pruneStaleTodos(runtime, assistant.id);
-  for (const group of runtime.store.groups()) await pruneStaleTodos(runtime, group.ownerId, group.id);
-}
-
 /** 建出全部服务（不包含 HTTP 和定时器启动），测试和 startHob 共用。 */
 export function createRuntime(options: CreateRuntimeOptions): HobRuntime {
   // 本地记忆插件在模块加载时就把记忆目录定下来：直接覆盖（启动入口已经指过一次，测试单独建运行时也要对）
@@ -99,7 +87,7 @@ export function createRuntime(options: CreateRuntimeOptions): HobRuntime {
   store.init();
   store.validate();
   store.ensurePrimary();
-  store.migrateMemories();
+  store.migrateInstructions();
   store.migrateAssistantDuties();
   migrateProductOwnerDuty(store);
   const bus = new BusImpl();
@@ -131,10 +119,8 @@ export function createRuntime(options: CreateRuntimeOptions): HobRuntime {
   } as HobRuntime;
   runtime.desktopControl = new DesktopControl(runtime);
   runtime.desktopEvents = new DesktopEvents(runtime);
-  runtime.desktopPublic = new DesktopPublicLock();
   runtime.router = new RouterManagerImpl(runtime);
   runtime.groups = new GroupManagerImpl(runtime);
-  void pruneTodosAtStartup(runtime).catch((error) => console.error("启动时收起待办失败：", error));
   runtime.initializeLocale = (locale) => {
     runtime.store.initializeDefaults(locale);
     seedDevTeam(runtime.store, (input) => runtime.groups.create(input), locale);

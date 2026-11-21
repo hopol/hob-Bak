@@ -392,7 +392,7 @@ describe("Worker 生图", () => {
       await hob.runtime.jobs.start("hob", { title: "没配", instruction: "随便", cwd: dir });
       await hob.runtime.jobs.waitIdle();
       expect(workers()[0].tools).not.toContain("generate_image");
-      expect(workers()[0].prompt).toContain("不能做：生图");
+      expect(workers()[0].prompt).toContain("不能做：生成图片（generate_image）");
 
       // 2. 配了生图：注册，提示词里写进能做
       const { revision } = hob.runtime.settings.get();
@@ -418,7 +418,7 @@ describe("Worker 生图", () => {
       await hob.runtime.jobs.start("hob", { title: "助手关了", instruction: "画画", cwd: dir });
       await hob.runtime.jobs.waitIdle();
       expect(workers()[2].tools).not.toContain("generate_image");
-      expect(workers()[2].prompt).toContain("不能做：生图");
+      expect(workers()[2].prompt).toContain("不能做：生成图片（generate_image）");
     } finally {
       hob.close();
       rmSync(dir, { recursive: true, force: true });
@@ -535,10 +535,10 @@ describe("图片进对话", () => {
       };
       expect(
         buildWorkerPrompt(hob.runtime.store, job.id, { ...base, abilities: { exec: true, write: true, image: true } }),
-      ).not.toContain("生图（generate_image）");
+      ).not.toContain("生成图片（generate_image）");
       expect(
         buildWorkerPrompt(hob.runtime.store, job.id, { ...base, abilities: { exec: true, write: true, image: false } }),
-      ).toContain("不能做：生图");
+      ).toContain("不能做：生成图片（generate_image）");
     } finally {
       hob.close();
     }

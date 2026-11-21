@@ -41,6 +41,7 @@ const I = {
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   send: '<path d="M12 20V5M5.5 11.5 12 5l6.5 6.5"/>',
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
+  textSelect: '<path d="M9 4h6M9 20h6M12 4v16"/><path d="M4 9v6M20 9v6"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M15 6.5V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h1.5"/>',
   split: '<path d="M4 5h4l8 14h4M4 19h4l8-14h4"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',

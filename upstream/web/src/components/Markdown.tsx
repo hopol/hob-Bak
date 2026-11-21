@@ -33,6 +33,15 @@ export function Markdown({ text, className, streaming, mentions, onMathRendered 
       void openKnowledgeCitation(citation.entryId, citation.chunk);
       return;
     }
+    const file = (event.target as Element).closest<HTMLAnchorElement>("a.file-link");
+    if (file) {
+      event.preventDefault(); event.stopPropagation();
+      const href = file.getAttribute("href") ?? "";
+      let path = href;
+      try { path = decodeURIComponent(href); } catch { /* 地址里有落单的 %：照原样当路径 */ }
+      openFilePreview(path, path.split("/").pop() || path);
+      return;
+    }
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>(".code-copy");
     if (!button) return;
     event.stopPropagation();

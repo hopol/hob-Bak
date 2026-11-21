@@ -123,10 +123,10 @@ function usageTotals(rows: UsageRow[], prices: UsagePrices): UsageTotals {
 function priceNote(prices: UsagePrices): string | null {
   if (prices.error) {
     return prices.updatedAt
-      ? t("价格表更新失败：{error}，用的是 {when} 的。", { error: prices.error, when: fmtWhen(prices.updatedAt) })
-      : t("价格表还没有拉到过：{error}，所有模型都先按未定价算。", { error: prices.error });
+      ? t("价格表更新失败：{error}，当前使用 {when} 的价格表。", { error: prices.error, when: fmtWhen(prices.updatedAt) })
+      : t("尚未获取过价格表：{error}，所有模型暂按未定价计算。", { error: prices.error });
   }
-  return prices.updatedAt ? null : t("还没有拉到价格表，所有模型都先按未定价算。");
+  return prices.updatedAt ? null : t("尚未获取价格表，所有模型暂按未定价计算。");
 }
 
 export function UsageSection() {
@@ -148,7 +148,7 @@ export function UsageSection() {
   if (error) {
     return (
       <>
-        <PageHead title={t("消耗")} desc={t("对话和任务用掉的 token 和花费，按服务商返回的用量统计；花费按模型价格估算，以服务商账单为准。")} />
+        <PageHead title={t("消耗")} desc={t("对话和任务消耗的 token 与花费，按服务商返回的用量统计；花费按模型价格估算，以服务商账单为准。")} />
         <div className="badline" role="status">{error}</div>
       </>
     );
@@ -347,7 +347,7 @@ function UsagePage({ view }: { view: UsageView }) {
     if (busy) return;
     const price: TokenPrice = { input: Number(fields.input), output: Number(fields.output), cacheRead: Number(fields.cacheRead), cacheWrite: Number(fields.cacheWrite) };
     if (fieldsList.some((field) => !Number.isFinite(price[field.key]) || price[field.key] < 0)) {
-      setEditError(t("四项单价都要填大于等于 0 的数字（美元 / 百万 token）。"));
+      setEditError(t("四项单价均须填写不小于 0 的数字（美元 / 百万 token）。"));
       return;
     }
     setBusy(true);
@@ -374,7 +374,7 @@ function UsagePage({ view }: { view: UsageView }) {
 
   return (
     <>
-      <PageHead title={t("消耗")} desc={t("对话和任务用掉的 token 和花费，按服务商返回的用量统计；花费按模型价格估算，以服务商账单为准。")} />
+      <PageHead title={t("消耗")} desc={t("对话和任务消耗的 token 与花费，按服务商返回的用量统计；花费按模型价格估算，以服务商账单为准。")} />
 
       <Group>
         <div className="u-seg">
@@ -489,7 +489,7 @@ function UsagePage({ view }: { view: UsageView }) {
                   <div className="u-num u-out"><span className="u-k">{t("输出")}</span>{usageCount(row.output)}</div>
                   <div className="u-num u-cache"><span className="u-k">{t("缓存命中")}</span>{row.input ? usagePercent(row.cacheRead / row.input) : "—"}</div>
                   <div className="u-num strong u-cost">{row.cost === null ? "—" : usageMoney(row.cost)}</div>
-                  <button className={`u-price${price ? "" : " missing"}`} onClick={() => openEditor(row.model)} title={t("点这里改单价")}>
+                  <button className={`u-price${price ? "" : " missing"}`} onClick={() => openEditor(row.model)} title={t("点击修改单价")}>
                     {price ? unitText(price.price) : t("未定价")}
                   </button>
                 </div>
@@ -514,14 +514,14 @@ function UsagePage({ view }: { view: UsageView }) {
                       {price?.custom ? <button className="hob-btn" onClick={() => void restore(row.model)} disabled={busy}>{t("恢复默认")}</button> : null}
                       {editError ? <span className="badline">{editError}</span> : null}
                     </div>
-                    <div className="note">{t("美元 / 百万 token。缓存读是命中缓存的输入，缓存写是写进缓存的输入；花费按这里算，以服务商账单为准。")}</div>
+                    <div className="note">{t("美元 / 百万 token。缓存读是命中缓存的输入，缓存写是写入缓存的输入；花费按此处计算，以服务商账单为准。")}</div>
                   </div>
                 ) : null}
               </div>
             );
           }) : <Empty>{t("这段时间没有用量")}</Empty>}
         </div>
-        <div className="note">{t("点单价可以改成自己的价格；改过的标「自定」，可以恢复默认。")}</div>
+        <div className="note">{t("点击单价可改为自定义价格；修改过的标记为「自定」，可恢复默认。")}</div>
       </Group>
 
       <Group>

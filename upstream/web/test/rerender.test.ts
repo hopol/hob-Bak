@@ -12,13 +12,16 @@ interface Probe {
 let server: ViteDevServer;
 let browser: Browser;
 let page: Page;
+const BROWSER_TEST_TIMEOUT = 90_000;
 
 beforeAll(async () => {
   server = await createServer({ server: { port: 0, host: "127.0.0.1" } });
   await server.listen();
   browser = await chromium.launch({ executablePath: "/usr/bin/google-chrome", args: ["--no-sandbox"] });
   page = await browser.newPage({ viewport: { width: 390, height: 844 }, locale: "zh-CN" });
-  page.setDefaultTimeout(4000);
+  // 全仓库并行时浏览器和约 155 个 Vitest worker 竞争 CPU，模块渲染可能超过 15 秒。
+  page.setDefaultTimeout(60_000);
+  page.setDefaultNavigationTimeout(60_000);
 });
 afterAll(async () => { await browser?.close(); await server?.close(); });
 
@@ -44,7 +47,7 @@ describe("首页只订阅自己用的那几项", () => {
     await go("search", "写");
     await page.waitForTimeout(100);
     expect((await renders()).picked).toBe(2);
-  });
+  }, BROWSER_TEST_TIMEOUT);
 
   it("手机上从群返回列表：首页不重画", async () => {
     await fixture();
@@ -57,5 +60,5 @@ describe("首页只订阅自己用的那几项", () => {
     // 对照：搜索词变了，首页这一片真的重画，说明上面的计数不是死的
     await go("search", "写");
     await page.waitForFunction(() => (window as unknown as Probe).__renders.home === 2);
-  });
+  }, BROWSER_TEST_TIMEOUT);
 });

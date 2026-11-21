@@ -1,4 +1,4 @@
-// 首页各组：待确认、进行中、日常、收起的助手、最近任务、定时任务。
+// 首页各组：等你处理、助手、任务、定时任务。
 // 手机首页（Mobile）和桌面左栏（Sidebar）共用这一份，筛选规则在 ../home.ts，
 // 两边的头部（我的 / 搜索框 / 新建）各自保留。
 import { memo, useState, type ReactNode } from "react";
@@ -6,11 +6,12 @@ import { createPortal } from "react-dom";
 import { t } from "../../../shared/i18n.ts";
 import type { AssistantSummary, GroupSummary, Job } from "../../../shared/types.ts";
 import { plainText } from "../../../shared/plain-text.ts";
-import { homeGroups } from "../home.ts";
+import { homeGroups, type ConversationEntry } from "../home.ts";
 import { assistantStatus } from "../sidebar-data.ts";
 import { Icon } from "../icons.tsx";
 import { Avatar, type AvatarMark } from "../sprites.tsx";
-import { closePanelPages, getState, openJob, openJobs, openRoutine, select, selectGroup, shallow, useAppSelect, type State } from "../store.ts";
+import { useRows } from "../motion.ts";
+import { closePanelPages, getState, openAssistant, openJob, openJobs, openRoutine, select, selectGroup, setHomeFilter, setHomeOrder, shallow, useAppSelect, type State } from "../store.ts";
 import { cronText, fmtElapsed, fmtList } from "../util.ts";
 import { useAssistantMenu } from "./AssistantMenu.tsx";
 import { useRowToPin, type PinDragTarget } from "./PinDrag.ts";
@@ -30,16 +31,19 @@ const pickStatus = (s: State): StatusSource => ({
 const pickJobs = (s: State) => ({ jobs: s.jobs });
 
 /** 首页那一份：分组要的数据。桌面上才关心当前选中谁（高亮用），手机上不带，切页就不重画。 */
-type HomeSlice = Pick<State, "assistants" | "groups" | "groupPrefs" | "jobs" | "approvals" | "routines" | "query" | "tick" | "sel" | "gsel">;
+type HomeSlice = Pick<State, "assistants" | "groups" | "groupPrefs" | "jobs" | "approvals" | "delegations" | "routines" | "query" | "tick" | "homeFilter" | "homeOrder" | "sel" | "gsel">;
 const homeSlice = (s: State, marks: boolean): HomeSlice => ({
   assistants: s.assistants,
   groups: s.groups,
   groupPrefs: s.groupPrefs,
   jobs: s.jobs,
   approvals: s.approvals,
+  delegations: s.delegations,
   routines: s.routines,
   query: s.query,
   tick: s.tick,
+  homeFilter: s.homeFilter,
+  homeOrder: s.homeOrder,
   sel: marks ? s.sel : null,
   gsel: marks ? s.gsel : null,
 });
@@ -127,7 +131,7 @@ export function Pin({
       onPointerCancel={menu.handlers.onPointerCancel}
       onClick={() => {
         if (drag?.takeMoved() || menu.takeHeld()) return;
-        void select(a.id);
+        void openAssistant(a.id);
       }}
     >
       {drag ? <Icon name="grip" size={14} className="grip" /> : null}
@@ -150,30 +154,34 @@ export function AssistantRow({
   sel,
   size = 42,
   onClick,
+  reorder = false,
+  allowPin = true,
 }: {
   a: AssistantSummary;
   sel?: boolean;
   size?: number;
   onClick?: () => void;
+  reorder?: boolean;
+  allowPin?: boolean;
 }) {
   const menu = useAssistantMenu(a);
   const { busy, slot } = useHomeBusy(a);
   const mark = useMark(a, busy);
   // 没置顶的才能往上拖进置顶区（收起的助手也算日常这一组）
-  const toPin = useRowToPin(a);
+  const toPin = useRowToPin(a, reorder);
   return (
     <button
-      className={`list-row home-row${sel ? " sel" : ""}${a.pinned ? "" : " can-pin"}`}
-      data-row={a.pinned || a.hidden ? undefined : a.id}
+      className={`list-row home-row${sel ? " sel" : ""}${allowPin && !a.pinned ? " can-pin" : ""}${reorder && allowPin && !a.pinned ? " reorderable" : ""}`}
+      data-row={allowPin && !a.pinned ? a.id : undefined}
       {...menu.handlers}
       onPointerDown={(e) => {
         menu.handlers.onPointerDown(e);
-        if (!a.pinned) toPin.onPointerDown(e);
+        if (allowPin && !a.pinned) toPin.onPointerDown(e);
       }}
       onClick={() => {
-        if (toPin.takeMoved() || menu.takeHeld()) return;
+        if ((allowPin && toPin.takeMoved()) || menu.takeHeld()) return;
         if (onClick) onClick();
-        else void select(a.id);
+        else void openAssistant(a.id);
       }}
     >
       <Avatar sprite={a.sprite} prop={a.prop} size={size} motion={busy && !sel ? "peek" : undefined} slot={slot} mark={mark} />
@@ -184,7 +192,7 @@ export function AssistantRow({
         </div>
         <div className="pv">{a.last ? plainText(a.last.text) : a.duty}</div>
       </div>
-      {a.pinned ? null : <Icon name="grip" size={14} className="grip" />}
+      {allowPin && !a.pinned ? <Icon name="grip" size={14} className="grip" /> : null}
       {toPin.ghost ? createPortal(
         <div className={`pin-ghost${toPin.ghost.over ? " over" : ""}`} style={{ left: toPin.ghost.x, top: toPin.ghost.y }}>
           <Avatar sprite={a.sprite} prop={a.prop} size={40} />
@@ -220,7 +228,8 @@ function openJobRow(job: Job, owner: AssistantSummary | undefined, groups: Group
   closePanelPages();
   if (job.groupId && groups.some((g) => g.id === job.groupId)) void selectGroup(job.groupId, true, false, true);
   else if (owner) void select(job.assistantId);
-  openJob(job.id, undefined, switching);
+  const approval = Object.values(before.approvals).find((item) => item.status === "pending" && item.jobId === job.id);
+  openJob(job.id, undefined, switching, approval?.id);
 }
 
 /**
@@ -256,6 +265,39 @@ function JobRow({
   );
 }
 
+function HomeFilters({ filter }: { filter: State["homeFilter"] }) {
+  const options: { value: State["homeFilter"]; label: string }[] = [
+    { value: "all", label: t("全部") },
+    { value: "assistants", label: t("助手") },
+    { value: "jobs", label: t("任务") },
+    { value: "routines", label: t("定时任务") },
+  ];
+  return (
+    <div className="home-filters" role="tablist" aria-label={t("首页筛选")}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          className={`home-filter${filter === option.value ? " on" : ""}`}
+          role="tab"
+          aria-selected={filter === option.value}
+          onClick={() => setHomeFilter(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ConversationRows({ rows, size, assistantId, groupId, reorder, allowPin }: { rows: ConversationEntry[]; size: number; assistantId?: string; groupId?: string; reorder: boolean; allowPin: boolean }) {
+  const animated = useRows(rows, (row) => row.id);
+  return <>{animated.map(({ item: row, key, state }) => <div key={key} className={`home-row-wrap ${state}`}>
+    {row.kind === "assistant"
+      ? <AssistantRow a={row.a} size={size} sel={row.id === assistantId} reorder={reorder} allowPin={allowPin} />
+      : <GroupRow g={row.g} size={size} sel={row.id === groupId} reorder={reorder} allowPin={allowPin} />}
+  </div>)}</>;
+}
+
 function Section({ title, more, children }: { title: string; more?: ReactNode; children: ReactNode }) {
   return (
     <>
@@ -284,75 +326,44 @@ function Slot({ title, text }: { title: string; text: string }) {
 }
 
 /**
- * 置顶下面那一串（收起的助手默认折起来，和手机一样）。
+ * 置顶下面那一串（等你处理、助手、任务、定时任务；收起的助手默认折起来，和手机一样）。
  * 行高（size）按各边的列表来：手机 36，桌面左栏 42。
  * markSel 只在桌面用：高亮当前打开的助手。
  */
 export const HomeSections = memo(function HomeSections({ size = 42, markSel = false }: { size?: number; markSel?: boolean }) {
   const s = useAppSelect(markSel ? pickHomeMarked : pickHome, shallow);
   const [folded, setFolded] = useState(true);
+  // 固定顺序下点「编辑」才出拖动把手：平时手指在列表上是滚动
+  const [editing, setEditing] = useState(false);
   const g = homeGroups(s);
+  const filter = g.searching ? "all" : s.homeFilter ?? "all";
+  const order = s.homeOrder ?? "recent";
   const owner = (id: string) => s.assistants.find((a) => a.id === id);
-  // 收起的助手平时折在日常最后，搜索时直接列出来
   const showHidden = !folded || g.searching;
-  // 收起的助手折着时首页上没有它自己的头像：改由它第一条进行中的任务行替它动（一个助手只动一处）
-  const stand = new Set<string>();
-  const movingJob = (job: Job) => {
-    const who = owner(job.assistantId);
-    if (!who?.hidden || showHidden || (markSel && who.id === s.sel) || stand.has(who.id)) return false;
-    stand.add(who.id);
-    return true;
-  };
 
   return (
     <>
-      {g.asks.length ? (
-        <Section title={t("等你确认")}>
-          {g.asks.map((ap) => (
-            <button
-              className="list-row home-row"
-              key={ap.id}
-              onClick={() => (ap.groupId ? void selectGroup(ap.groupId) : void select(ap.assistantId))}
-            >
-              <Face owner={owner(ap.assistantId)} size={size} />
-              <div className="main">
-                <div className="l1">
-                  <span className="nm">{ap.title}</span>
-                  <span className="tm">{fmtList(ap.createdAt)}</span>
-                </div>
-                <div className="pv">{owner(ap.assistantId)?.name ?? ""} · {t("等待你的回答")}</div>
-              </div>
+      {!g.searching ? <HomeFilters filter={filter} /> : null}
+
+      {(filter === "all" || filter === "assistants") && g.attention.length ? (
+        <Section title={t("等你处理")}>
+          <ConversationRows rows={g.attention} size={size} assistantId={markSel ? s.sel ?? undefined : undefined} groupId={markSel ? s.gsel ?? undefined : undefined} reorder={false} allowPin={false} />
+        </Section>
+      ) : null}
+
+      {(filter === "all" || filter === "assistants") && (g.rows.length || g.hidden.length) ? (
+        <Section
+          title={t("助手")}
+          more={<span className="home-order-bar">
+            {order === "custom" ? (
+              <button className={`more home-edit${editing ? " on" : ""}`} onClick={() => setEditing((v) => !v)}>{editing ? t("完成") : t("编辑")}</button>
+            ) : null}
+            <button className="more home-order" onClick={() => { setEditing(false); setHomeOrder(order === "recent" ? "custom" : "recent"); }}>
+              <Icon name="updown" size={12} />{order === "recent" ? t("最近活跃") : t("固定顺序")}
             </button>
-          ))}
-        </Section>
-      ) : null}
-
-      {g.live.length ? (
-        <Section title={t("进行中")}>
-          {g.live.map((job) => (
-            <JobRow
-              key={job.id}
-              job={job}
-              owner={owner(job.assistantId)}
-              moving={movingJob(job)}
-              time={fmtElapsed(job.startedAt ?? job.createdAt)}
-              text={liveText(job, owner(job.assistantId), s.groups)}
-              size={size}
-              onClick={() => openJobRow(job, owner(job.assistantId), s.groups)}
-            />
-          ))}
-        </Section>
-      ) : null}
-
-      {g.rows.length || g.hidden.length ? (
-        <Section title={t("对话")}>
-          {g.rows.map((row) =>
-            row.kind === "assistant" ? (
-              <AssistantRow key={row.id} a={row.a} size={size} sel={markSel && row.id === s.sel} />
-            ) : (
-              <GroupRow key={row.id} g={row.g} size={size} sel={markSel && row.id === s.gsel} />
-            ),
-          )}
+          </span>}
+        >
+          <ConversationRows rows={g.rows} size={size} assistantId={markSel ? s.sel ?? undefined : undefined} groupId={markSel ? s.gsel ?? undefined : undefined} reorder={order === "custom" && editing} allowPin />
           {g.hidden.length && !g.searching ? (
             <button className="fold" onClick={() => setFolded((v) => !v)}>
               <span>{t("收起的助手")}</span>
@@ -364,36 +375,36 @@ export const HomeSections = memo(function HomeSections({ size = 42, markSel = fa
           ) : null}
           <div className={`expand${showHidden ? " open" : ""}`} inert={!showHidden}>
             <div>
-              {g.hidden.map((a) => <AssistantRow key={a.id} a={a} size={size} sel={markSel && a.id === s.sel} />)}
+              {g.hidden.map((a) => <AssistantRow key={a.id} a={a} size={size} sel={markSel && a.id === s.sel} reorder={order === "custom" && editing} />)}
             </div>
           </div>
         </Section>
       ) : null}
 
-      {g.recent.length ? (
+      {(filter === "all" || filter === "jobs") && g.tasks.length ? (
         <Section
-          title={t("最近任务")}
-          more={
-            <button className="more" onClick={() => openJobs()}>
-              {t("全部")}
-            </button>
-          }
+          title={t("任务")}
+          more={<button className="more" onClick={() => openJobs()}>{t("全部")}</button>}
         >
-          {g.recent.map((job) => (
-            <JobRow
-              key={job.id}
-              job={job}
-              owner={owner(job.assistantId)}
-              time={fmtList(job.endedAt ?? job.createdAt)}
-              text={job.summary || job.statusReason || ""}
-              size={size}
-              onClick={() => openJobRow(job, owner(job.assistantId), s.groups)}
-            />
-          ))}
+          {g.tasks.map((job) => {
+            const live = job.status === "running" || job.status === "queued" || job.status === "waiting";
+            return (
+              <JobRow
+                key={job.id}
+                job={job}
+                owner={owner(job.assistantId)}
+                moving={false}
+                time={fmtList(live ? job.startedAt ?? job.createdAt : job.endedAt ?? job.createdAt)}
+                text={live ? liveText(job, owner(job.assistantId), s.groups) : job.summary || job.statusReason || ""}
+                size={size}
+                onClick={() => openJobRow(job, owner(job.assistantId), s.groups)}
+              />
+            );
+          })}
         </Section>
       ) : null}
 
-      {g.routines.length ? (
+      {(filter === "all" || filter === "routines") && g.routines.length ? (
         <Section title={t("定时任务")}>
           {g.routines.map((r) => {
             const run = r.runs[0];
@@ -425,10 +436,13 @@ export const HomeSections = memo(function HomeSections({ size = 42, markSel = fa
       ) : null}
 
       {g.empty ? (
-        <>
-          <Slot title={t("最近任务")} text={t("分派的任务会显示在这里")} />
-          <Slot title={t("定时任务")} text={t("定时任务会显示在这里")} />
-        </>
+        filter === "assistants" ? <Slot title={t("助手")} text={t("助手会显示在这里")} />
+          : filter === "jobs" ? <Slot title={t("任务")} text={t("分派的任务会显示在这里")} />
+            : filter === "routines" ? <Slot title={t("定时任务")} text={t("定时任务会显示在这里")} />
+              : <>
+                <Slot title={t("任务")} text={t("分派的任务会显示在这里")} />
+                <Slot title={t("定时任务")} text={t("定时任务会显示在这里")} />
+              </>
       ) : null}
     </>
   );

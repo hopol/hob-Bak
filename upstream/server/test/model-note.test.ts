@@ -21,8 +21,8 @@ describe("模型评分", () => {
     expect(guessModelScores({ ...model, reasoning: true })).toEqual({ smart: 70, cost: 50, speed: 50 });
   });
   it("使用最近的阶段档", () => {
-    expect(scoreLabel("smart", 60)).toBe("较聪明");
-    expect(scoreLabel("smart", 75)).toBe("很聪明");
+    expect(scoreLabel("smart", 60)).toBe("较强");
+    expect(scoreLabel("smart", 75)).toBe("强");
     expect(scoreLabel("cost", 0)).toBe("免费");
     expect(scoreLabel("speed", 90)).toBe("很快");
   });
@@ -32,8 +32,8 @@ describe("模型评分", () => {
       await hob.runtime.models.get();
       const info = hob.runtime.models.find("hob-faux/flash")!;
       const text = noteOf({ ref: info.ref, note: "我的说明" }, hob.runtime.models);
-      expect(text).toBe("聪明 60% · 成本 20% · 速度 85% · 能看图 · 上下文 200K · 补充：我的说明");
-      expect(noteOf({ ref: info.ref, note: "", scores: { smart: 1, cost: 2, speed: 3 } }, hob.runtime.models)).toBe("聪明 1% · 成本 2% · 速度 3% · 能看图 · 上下文 200K");
+      expect(text).toBe("智能 60% · 成本 20% · 速度 85% · 可查看图片 · 上下文 200K · 补充：我的说明");
+      expect(noteOf({ ref: info.ref, note: "", scores: { smart: 1, cost: 2, speed: 3 } }, hob.runtime.models)).toBe("智能 1% · 成本 2% · 速度 3% · 可查看图片 · 上下文 200K");
     } finally { hob.close(); }
   });
 });

@@ -239,7 +239,6 @@ describe("换头像", () => {
         routines: [],
         routinesText: "",
         askFirst: [],
-        instructions: [],
         carry: { conversations: 0 },
         createdAt: new Date().toISOString(),
       };
@@ -268,7 +267,6 @@ describe("换头像", () => {
         routines: [],
         routinesText: "",
         askFirst: [],
-        instructions: [],
         carry: { conversations: 0 },
         createdAt: new Date().toISOString(),
       };
@@ -321,7 +319,7 @@ describe("set_avatar 工具", () => {
       expect(result.isError).toBe(false);
       expect(hob.runtime.store.assistant("hob")!.sprite).toBe("wifi:green");
       expect(
-        hob.runtime.router.items("hob").items.some((item) => item.kind === "note" && item.icon === "info" && item.text.startsWith("已换头像")),
+        hob.runtime.router.items("hob").items.some((item) => item.kind === "note" && item.icon === "info" && item.text.startsWith("已更换头像")),
       ).toBe(true);
       expect(sprites).toContain("wifi:green");
       const bad = await run(hob, "hob", "set_avatar", { sprite: "nope" });
@@ -364,7 +362,7 @@ describe("set_avatar 工具", () => {
       expect(hob.runtime.store.assistant("ops")!.sprite).toBe("bird");
       // 提示行出在主助手的对话里，写明换的是谁
       expect(
-        hob.runtime.router.items("hob").items.some((item) => item.kind === "note" && item.text.includes("已换头像 · 运维")),
+        hob.runtime.router.items("hob").items.some((item) => item.kind === "note" && item.text.includes("已更换头像 · 运维")),
       ).toBe(true);
 
       const byOps = await run(hob, "ops", "set_avatar", { sprite: "coin", assistant: "hob" });
@@ -380,7 +378,7 @@ describe("set_avatar 工具", () => {
     const hob = makeHob();
     try {
       hob.faux.setResponses([
-        call("create_assistant", { name: "代理", duty: "代理转发", dutyLong: "负责代理和转发。", sprite: "custom", prop_art: GOOD, facts: ["负责代理"] }),
+        call("create_assistant", { name: "代理", duty: "代理转发", dutyLong: "负责代理和转发。", sprite: "custom", prop_art: GOOD }),
         text("建好了。"),
       ]);
       await hob.runtime.router.send("hob", { text: "代理和转发的事多，分个助手吧" });
@@ -391,7 +389,7 @@ describe("set_avatar 工具", () => {
       expect(hob.runtime.store.assistant(draft.createdAssistantId!)?.prop).toEqual(GOOD);
 
       hob.faux.appendResponses([
-        call("create_assistant", { name: "错了", duty: "试试", dutyLong: "试试。", sprite: "custom", prop_art: { ...GOOD, pal: { h: "yellow" } }, facts: ["试试"] }),
+        call("create_assistant", { name: "错了", duty: "试试", dutyLong: "试试。", sprite: "custom", prop_art: { ...GOOD, pal: { h: "yellow" } } }),
         text("重画了。"),
       ]);
       await hob.runtime.router.send("hob", { text: "再画一个试试" });

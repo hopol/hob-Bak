@@ -39,11 +39,11 @@ describe("任务", () => {
 
   it("任务事件按完整结果长度分段，缺结果说明原因", () => {
     const job = { id: "t-1", assistantId: "hob", assistantName: "Hob", title: "测试", instruction: "", status: "done" as const, createdAt: "", stats: { reads: 0, commands: 0, edits: 0 }, activity: [], reportPath: "/tmp/report.md" };
-    expect(jobResultEvent({ ...job, summary: "短结果" })).toBe("「Hob」的任务「测试」（t-1）已完成。\n过程：动手 0 次，没用技能。\n结果：\n短结果");
+    expect(jobResultEvent({ ...job, summary: "短结果" })).toBe("「Hob」的任务「测试」（t-1）已完成。\n过程：工具操作 0 次，没用技能。\n结果：\n短结果");
     const long = "字".repeat(3001);
-    expect(jobResultEvent({ ...job, summary: long })).toBe(`「Hob」的任务「测试」（t-1）已完成。\n过程：动手 0 次，没用技能。\n结果（共 3001 字，以下是前 3,000 字；全文：/tmp/report.md）：\n${long.slice(0, 3000)}`);
-    expect(jobResultEvent({ ...job, status: "failed", statusReason: "中断" })).toBe("「Hob」的任务「测试」（t-1）失败。\n过程：动手 0 次，没用技能。\n中断");
-    expect(jobResultEvent({ ...job, summary: "短结果" }, "定时任务「每日」")).toBe("定时任务「每日」（t-1）已完成。\n过程：动手 0 次，没用技能。\n结果：\n短结果");
+    expect(jobResultEvent({ ...job, summary: long })).toBe(`「Hob」的任务「测试」（t-1）已完成。\n过程：工具操作 0 次，没用技能。\n结果（共 3001 字，以下是前 3,000 字；全文：/tmp/report.md）：\n${long.slice(0, 3000)}`);
+    expect(jobResultEvent({ ...job, status: "failed", statusReason: "中断" })).toBe("「Hob」的任务「测试」（t-1）失败。\n过程：工具操作 0 次，没用技能。\n中断");
+    expect(jobResultEvent({ ...job, summary: "短结果" }, "定时任务「每日」")).toBe("定时任务「每日」（t-1）已完成。\n过程：工具操作 0 次，没用技能。\n结果：\n短结果");
   });
   it("report 的 outcome 不认识就退回重填，不当成已完成", async () => {
     const hob = makeHob();
@@ -109,6 +109,37 @@ describe("任务", () => {
       expect(items.some((item) => item.kind === "job" && item.jobId === job.id)).toBe(true);
       expect(items.some((item) => item.kind === "assistant" && item.text === "磁盘用了 40%。")).toBe(true);
     } finally {
+      hob.close();
+    }
+  });
+
+  it("任务收尾不等待普通、定时和群结果通知的助手回合", async () => {
+    const hob = makeHob();
+    let release = () => {};
+    try {
+      const routine = hob.runtime.routines.create({
+        assistantId: "hob",
+        name: "每日检查",
+        instruction: "检查",
+        schedules: ["0 9 * * *"],
+      });
+      const group = hob.runtime.groups.create({ name: "检查群", purpose: "检查", ownerId: "hob", members: ["hob"] });
+      const event = vi.spyOn(hob.runtime.router, "event");
+      event.mockImplementation(async () => new Promise<boolean>((resolve) => {
+        release = () => resolve(true);
+      }));
+      for (const extra of [{}, { routineId: routine.id }, { groupId: group.id }]) {
+        let resolve!: (value: boolean) => void;
+        const pending = new Promise<boolean>((done) => { resolve = done; });
+        release = () => resolve(true);
+        event.mockImplementationOnce(async () => pending);
+        hob.faux.setResponses([call("report", { outcome: "done", result: "完成" })]);
+        const job = await hob.runtime.jobs.start("hob", { title: "检查", instruction: "检查", ...extra });
+        await waitFor(() => hob.runtime.store.job(job.id)?.status === "done", 1_000);
+        release();
+      }
+    } finally {
+      release();
       hob.close();
     }
   });
@@ -282,6 +313,78 @@ describe("任务", () => {
     }
   });
 
+  it("任务提问送到助手但这一轮没有接住：结束任务并过期提问", async () => {
+    const hob = makeHob();
+    try {
+      hob.faux.setResponses([
+        call("ask_user", { title: "要不要继续", options: [{ label: "继续" }, { label: "停止" }] }),
+        text("我先看看。"),
+      ]);
+      const job = await hob.runtime.jobs.start("hob", { title: "检查资料", instruction: "检查资料" });
+      await waitFor(() => hob.runtime.store.job(job.id)?.status === "stuck");
+      expect(hob.runtime.store.job(job.id)).toMatchObject({ statusReason: "提问没有得到答复：要不要继续" });
+      expect(hob.runtime.store.approvals()[0]).toMatchObject({ jobId: job.id, status: "expired" });
+    } finally { hob.close(); }
+  });
+
+  it("群里：提问到达时成员正说着话，那一轮结束不算没接住；收到提问的那一轮没接住才结束", async () => {
+    const hob = makeHob();
+    let releaseFirst = () => {};
+    let releaseSecond = () => {};
+    try {
+      const group = hob.runtime.groups.create({ name: "资料群", purpose: "整理资料", ownerId: "hob", members: ["hob"] });
+      const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      const second = new Promise<void>((resolve) => { releaseSecond = resolve; });
+      hob.faux.setResponses([
+        async () => { await first; return text("先回这一句。"); },
+        call("ask_user", { title: "要哪一版", options: [{ label: "新版" }, { label: "旧版" }] }),
+        async () => { await second; return text("我先看看。"); },
+      ]);
+      await hob.runtime.groups.send(group.id, { text: "在吗" });
+      await waitFor(() => hob.faux.state.callCount >= 1);
+      const job = await hob.runtime.jobs.start("hob", { title: "整理资料", instruction: "整理资料", groupId: group.id });
+      await waitFor(() => hob.runtime.store.job(job.id)?.status === "waiting");
+      releaseFirst();
+      await waitFor(() => hob.faux.state.callCount >= 3);
+      expect(hob.runtime.store.job(job.id)?.status).toBe("waiting");
+      releaseSecond();
+      await waitFor(() => hob.runtime.store.job(job.id)?.status === "stuck");
+      expect(hob.runtime.store.job(job.id)?.statusReason).toBe("提问没有得到答复：要哪一版");
+    } finally {
+      releaseFirst();
+      releaseSecond();
+      hob.close();
+    }
+  });
+
+  it("任务提问送不到助手：直接结束为受阻并写清投递失败", async () => {
+    const hob = makeHob();
+    try {
+      vi.spyOn(hob.runtime.router, "event").mockResolvedValue(false);
+      hob.faux.setResponses([call("ask_user", { title: "需要哪份资料", options: [{ label: "甲" }, { label: "乙" }] })]);
+      const job = await hob.runtime.jobs.start("hob", { title: "整理资料", instruction: "整理资料" });
+      await waitFor(() => hob.runtime.store.job(job.id)?.status === "stuck");
+      expect(hob.runtime.store.job(job.id)?.statusReason).toBe("提问没有得到答复：需要哪份资料（没有送到助手）");
+      expect(hob.runtime.store.approvals()[0]).toMatchObject({ jobId: job.id, status: "expired" });
+    } finally { hob.close(); }
+  });
+
+  it("助手转问用户后，用户答卡但助手仍不接任务：下一轮结束任务", async () => {
+    const hob = makeHob();
+    try {
+      hob.faux.setResponses([
+        call("ask_user", { title: "要不要继续", options: [{ label: "继续" }, { label: "停止" }] }),
+        call("ask_user", { title: "请用户决定", options: [{ label: "可以" }, { label: "不可以" }] }),
+        text("知道了。"),
+      ]);
+      const job = await hob.runtime.jobs.start("hob", { title: "检查资料", instruction: "检查资料" });
+      await waitFor(() => hob.runtime.store.job(job.id)?.status === "waiting" && hob.runtime.store.approvals().some((item) => item.source === "router" && item.status === "pending"));
+      const userApproval = hob.runtime.store.approvals().find((item) => item.source === "router" && item.status === "pending")!;
+      expect((await answerApproval(hob.runtime, userApproval.id, { key: "A" })).status).toBe(200);
+      await waitFor(() => hob.runtime.store.job(job.id)?.status === "stuck");
+      expect(hob.runtime.store.job(job.id)?.statusReason).toBe("提问没有得到答复：要不要继续");
+    } finally { hob.close(); }
+  });
   it("ask_user 阻塞等答复，答完继续跑并 report", async () => {
     const hob = makeHob();
     try {
@@ -300,7 +403,7 @@ describe("任务", () => {
       expect(hob.runtime.router.items("hob").items.find((item) => item.kind === "question")).toBeUndefined();
       expect(hob.runtime.router.bootstrap().approvals).toEqual([]);
       expect(push).not.toHaveBeenCalled();
-      expect(event).toHaveBeenCalledWith("hob", `任务「清旧报告」（${job.id}）在等你回复：删掉旧报告吗？选项：A 删、B 别删。`);
+      expect(event).toHaveBeenCalledWith("hob", `任务「清旧报告」（${job.id}）在等你回复：删掉旧报告吗？选项：A 删、B 别删。`, expect.objectContaining({ job: { id: job.id, round: 0, kind: "question" } }));
       // 等用户答多久都不算「无响应」（以前 15 分钟后被看门狗标成受阻，审批卡跟着作废）
       hob.runtime.jobs.checkStalls(Date.now() + 24 * 3600_000);
       expect(hob.runtime.store.job(job.id)?.status).toBe("waiting");
@@ -328,7 +431,7 @@ describe("任务", () => {
       for (const end of ["。", "！", "？", ".", "!", "?", ""]) {
         const answer = hob.runtime.jobs.askQuestion(job.id, { title: `问题${end}`, detail: `说明${end}`, options: [{ key: "A", label: "好" }] });
         const expected = end || "。";
-        expect(event).toHaveBeenLastCalledWith("hob", `任务「测试」（${job.id}）在等你回复：问题${expected}说明${expected}选项：A 好。`);
+        expect(event).toHaveBeenLastCalledWith("hob", `任务「测试」（${job.id}）在等你回复：问题${expected}说明${expected}选项：A 好。`, expect.objectContaining({ job: { id: job.id, round: 0, kind: "question" } }));
         hob.runtime.jobs.resolveAsk(hob.runtime.store.approvals().find((item) => item.status === "pending")!, "好");
         await answer;
       }
@@ -577,7 +680,7 @@ describe("任务做完就提醒沉淀，写明用了哪些技能", () => {
     const hob = makeHob({}, { memory: "off" });
     try {
       const lines = assistantJobResultEvent(hob.home, makeJob(), { toolCount: 3 }).split("\n");
-      expect(lines.slice(0, 4)).toEqual(["「Hob」的任务「整理报告」（t-hint）已完成。", "过程：动手 3 次，没用技能。", hint, "结果："]);
+      expect(lines.slice(0, 4)).toEqual(["「Hob」的任务「整理报告」（t-hint）已完成。", "过程：工具操作 3 次，没用技能。", hint, "结果："]);
     } finally { hob.close(); }
   });
 
@@ -618,27 +721,16 @@ describe("任务做完就提醒沉淀，写明用了哪些技能", () => {
     } finally { hob.close(); }
   });
 
-  it("定时任务：读到了绑定的技能也提醒，并且写出标题", async () => {
+  it("定时任务不绑定技能，先把任务本身交给助手", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
       const event = vi.spyOn(hob.runtime.router, "event").mockResolvedValue();
-      const routine = hob.runtime.routines.create({ assistantId: "hob", name: "每日简报", instruction: "整理简报", schedules: ["0 9 * * *"] });
-      const skill = saveAssistantSkill(hob.home, "hob", { name: "daily-brief", title: "每日简报", description: "整理简报", content: "步骤" });
-      hob.runtime.routines.update(routine.id, { skill: "daily-brief" });
-      // 没读技能：提醒里没用到技能
-      hob.faux.setResponses([call("report", { outcome: "done", result: "简报写好了" })]);
+      const routine = hob.runtime.routines.create({ assistantId: "hob", name: "每日简报", instruction: "整理简报", schedules: ["0 9 * * *"], skill: "daily-brief" } as never);
+      saveAssistantSkill(hob.home, "hob", { name: "daily-brief", title: "每日简报", description: "整理简报", content: "步骤" });
+      expect(routine).not.toHaveProperty("skill");
       await hob.runtime.routines.runNow(routine.id);
-      await hob.runtime.jobs.waitIdle();
-      const first = String(event.mock.calls.at(-1)![1]);
-      expect(first.startsWith("定时任务「每日简报」")).toBe(true);
-      expect(first.split("\n")[2]).toBe(hint);
-      // 读了技能：照样提醒，并且写清用了哪份
-      hob.faux.setResponses([call("read", { path: skill.path }), call("report", { outcome: "done", result: "简报写好了" })]);
-      await hob.runtime.routines.runNow(routine.id);
-      await hob.runtime.jobs.waitIdle();
-      const second = String(event.mock.calls.at(-1)![1]);
-      expect(second.startsWith("定时任务「每日简报」")).toBe(true);
-      expect(second).toContain(usedHint(["每日简报"]));
+      expect(event).toHaveBeenCalledWith("hob", expect.stringContaining("整理简报"), expect.anything());
+      expect(event.mock.calls.at(-1)?.[1]).not.toContain("按技能");
     } finally { hob.close(); }
   });
 });

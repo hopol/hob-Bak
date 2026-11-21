@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { dropIndex, reorderAt, type Box } from "../pin-drag.ts";
-import { closeAssistantMenu, pinConversation, savePinOrder, shallow, useAppSelect, type State } from "../store.ts";
+import { closeAssistantMenu, pinConversation, saveListOrder, savePinOrder, shallow, useAppSelect, type State } from "../store.ts";
 
 /** 拖动只在菜单开着、或者正在搜索时才改行为：切页不牵动这几行。 */
 const pickMenuOpen = (s: State) => s.menu !== null;
@@ -180,7 +180,7 @@ export function usePinDrag<T extends { id: string }>(pins: T[], locked = false):
  * 只和同一组的比）。只接鼠标：触摸在列表上是滚动，长按留给菜单。
  */
 /** 会话行（助手或群）要拖的东西：往置顶区拖就置顶，在行里上下拖就换先后。 */
-export function useRowToPin(item: { id: string; pinned: boolean; hidden: boolean }) {
+export function useRowToPin(item: { id: string; pinned: boolean; hidden: boolean }, reorder = false) {
   const app = useAppSelect(pickPinDrag, shallow);
   const menuOpen = app.menu !== null;
   // 搜索时日常只显示筛出来的几位，换先后会把别的挤乱：只许拖进置顶
@@ -237,13 +237,13 @@ export function useRowToPin(item: { id: string; pinned: boolean; hidden: boolean
       if (!press.active) return;
       if (!root || !over(e.clientX, e.clientY)) {
         const at = slot(e.clientX, e.clientY);
-        if (!at || item.hidden) return;
+        if (!at || (!reorder && item.hidden)) return;
         const ids = rows().map((el) => el.dataset.row ?? "");
         const from = ids.indexOf(item.id);
         if (from < 0) return;
         const next = ids.filter((id) => id !== item.id);
         next.splice(at.index > from ? at.index - 1 : at.index, 0, item.id);
-        void savePinOrder(next);
+        void (reorder ? saveListOrder(next) : savePinOrder(next));
         return;
       }
       const cells = [...root.querySelectorAll<HTMLElement>("[data-pin]")];
@@ -265,11 +265,13 @@ export function useRowToPin(item: { id: string; pinned: boolean; hidden: boolean
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [press, item.id, item.hidden, searching]);
+  }, [press, item.id, item.hidden, searching, reorder]);
 
   return {
     onPointerDown(e: ReactPointerEvent) {
-      if (e.pointerType !== "mouse" || e.button !== 0 || menuOpen) return;
+      // 触摸只在编辑时按住把手才拖，别处照常滚动
+      const onGrip = e.target instanceof Element && e.target.closest(".grip") !== null;
+      if (e.pointerType !== "mouse" && !(reorder && onGrip) || e.pointerType === "mouse" && e.button !== 0 || menuOpen) return;
       moved.current = false;
       setPress({ pointerId: e.pointerId, from: { x: e.clientX, y: e.clientY }, active: false });
     },

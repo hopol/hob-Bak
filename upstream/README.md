@@ -24,7 +24,7 @@ hands longer work to background jobs, and checks with you when your rules say a 
 
 - **You talk to assistants.** Each assistant has its own duties, rules, skills and schedules. It handles small requests itself and hands longer work to background jobs. A job card shows the live transcript, lets you add instructions or stop the job, and the result comes back into the conversation.
 - **Your rules decide what needs your approval.** Global rules and each assistant's own rules say which actions wait for your confirmation and which go ahead. When you confirm something, you can save it as a rule so the same kind of request isn't asked again.
-- **Work goes to the right assistant.** The main assistant, Hob, delegates requests that belong to another assistant and tracks them with a delegation card. When similar requests keep coming up, it offers to create a dedicated assistant for them.
+- **Work goes to the right assistant.** Assistants hand requests that belong to another assistant over to it and track them with a delegation card; the result comes back to whoever asked. When similar requests keep coming up, it offers to create a dedicated assistant for them.
 - **Schedules wake an assistant only when something changed.** A schedule can carry a check script that runs first; the assistant takes over only when the script finds something new.
 - **Finished work becomes a skill.** When a job's approach is worth keeping, the assistant can have the job write it up as a skill that later jobs receive. Every change is kept as a new version.
 
@@ -38,7 +38,7 @@ For a larger piece of work, the group owner opens a topic and the team works thr
 
 ## On a phone
 
-Hob works in a mobile browser and can be added to the home screen as an app. Push notifications tell you when an assistant needs your decision or a job gets stuck or fails (HTTPS required).
+Hob works in a mobile browser and can be added to the home screen as an app. Push notifications tell you when an assistant needs your answer, finishes its work or fails (HTTPS required).
 
 ![Hob on a phone: the home list, a job card in a conversation and the to-do list](docs/screenshots/en/mobile.png)
 
@@ -50,7 +50,7 @@ Hob works in a mobile browser and can be added to the home screen as an app. Pus
 - **MCP**: jobs can call the MCP services you configure, including configurations imported from Claude Code, Cursor and pi.
 - **Memory**: stored locally or in [Lore](https://github.com/FFatTiger/lore).
 - **Pages and images**: assistants can present comparisons and research as pages in the side panel, and generate or edit images through an OpenAI-compatible image API.
-- **Cloud desktop** (optional): a browser for each assistant, sharing its login state with that assistant's jobs; you can watch or take over.
+- **Cloud desktop** (optional): a browser for each assistant; a site you sign in to in one is signed in for all of them. You can watch or take over.
 - **Usage**: requests, tokens and estimated cost by model and by assistant.
 
 ## Quick start

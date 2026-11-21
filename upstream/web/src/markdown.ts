@@ -71,10 +71,12 @@ const markdown = new Marked({
 markdown.use(markedCjkFriendly());
 
 const SAFE_HREF = /^(https?:|mailto:|\/|#|\.)/i;
+// 页面路由都在 hash 里，站内没有别的路径：/ 开头（不是 //、/api/）的链接是服务器上的文件，点开走文件预览
+const FILE_HREF = /^\/(?!\/|api\/)/;
 export function renderMarkdown(text: string, mentions?: string[]): string {
   const html = markdown.parse(text, { async: false, gfm: true, breaks: true }) as string;
   const linked = html.replace(/<a href="([^"]*)"/g, (_m, href: string) =>
-    parseKnowledgeLink(href) ? `<a class="knowledge-citation" href="${href}"` : SAFE_HREF.test(href.trim()) ? `<a target="_blank" rel="noreferrer" href="${href}"` : "<a",
+    parseKnowledgeLink(href) ? `<a class="knowledge-citation" href="${href}"` : FILE_HREF.test(href.trim()) ? `<a class="file-link" href="${href}"` : SAFE_HREF.test(href.trim()) ? `<a target="_blank" rel="noreferrer" href="${href}"` : "<a",
   ).replace(/(<a class="knowledge-citation"[^>]*>)/g, `$1${iconSvg("doc", 13)}`)
     // 模型常照着附带资料的格式把出处写在括号里；标签本身已经够醒目，括号去掉
     .replace(/[（(]\s*(<a class="knowledge-citation"[^>]*>[\s\S]*?<\/a>)\s*[）)]/g, "$1")

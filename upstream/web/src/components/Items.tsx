@@ -1,10 +1,11 @@
 // 对话条目的渲染：气泡、选择题、任务卡、草稿卡、文件卡、灰字提示。
 import { t } from "../../../shared/i18n.ts";
-import { Fragment, useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Approval, ApprovalOption, Delegation, Draft, GroupItem, GroupSummary, Item, Job, NoteIcon, SedimentStatus } from "../../../shared/types.ts";
 import { attachmentName, isImagePath } from "../../../shared/media.ts";
 import { plainText as plain } from "../../../shared/plain-text.ts";
+import { isRoutineDueNote } from "../../../shared/routine-note.ts";
 import { visibleLiveCards } from "../page-live.ts";
 import { Markdown } from "./Markdown.tsx";
 import { splitTables } from "../markdown.ts";
@@ -32,6 +33,7 @@ import {
   jumpToDelegation,
   jumpToHandback,
   openFilePreview,
+  openLoginDesktop,
   openLivePreview,
   openNoteGroup,
   openJob,
@@ -47,7 +49,7 @@ import {
 } from "../store.ts";
 import { fmtDuration, fmtElapsed, fmtList, fmtWhen, isToday, needDivider } from "../util.ts";
 import { jobReason, jobRoundView } from "../steps.ts";
-import { menuPosition, messageMenu, moveSwipe, swipeReply, type SwipeState } from "../message-menu.ts";
+import { actionsFor, menuPosition, moveSwipe, swipeReply, type SwipeState } from "../message-menu.ts";
 import { DELEGATION_STATUS, JOB_STATUS, StatusTag, jobStatusIcon, jobStatusMeta, sedimentText } from "./status-meta.tsx";
 import { membersOf } from "./Groups.tsx";
 
@@ -129,41 +131,76 @@ function Tools({
   );
 }
 
-function MessagePopup({ anchor, text, itemId, close }: { anchor: RefObject<HTMLDivElement | null>; text: string; itemId: string; close: () => void }) {
-  const [layout, setLayout] = useState<{ bubble: DOMRect; area: DOMRect } | null>(null);
-  const clone = useRef<HTMLDivElement>(null);
+type Popup = { anchor: HTMLElement; item: Item; text: string; right: boolean };
+
+function MessagePopup({ popup, close, selectText, closing }: { popup: Popup; close: () => void; selectText: () => void; closing: boolean }) {
+  const menu = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ top: number; left: number; above: boolean } | null>(null);
   useLayoutEffect(() => {
-    const bubble = anchor.current;
-    const area = bubble?.closest(".mmsgs, .msgs");
-    if (bubble && area) setLayout({ bubble: bubble.getBoundingClientRect(), area: area.getBoundingClientRect() });
-  }, [anchor]);
-  useLayoutEffect(() => {
-    if (!layout || !clone.current || !anchor.current) return;
-    clone.current.replaceChildren(anchor.current.cloneNode(true));
-  }, [anchor, layout]);
-  if (!layout) return null;
-  const { bubble, area } = layout;
-  const position = menuPosition(bubble, area);
-  return createPortal(
-    <div className="message-popup" onPointerDown={(event) => event.stopPropagation()}>
-      <div className="message-shade" style={{ left: area.left, top: area.top, width: area.width, height: area.height }} onPointerDown={close} />
-      <div ref={clone} className="message-popup-bubble" style={{ left: bubble.left, top: bubble.top, width: bubble.width }} />
-      <div className="message-popup-menu" style={position}>
-        <Tools text={text} itemId={itemId} menu close={close} />
-      </div>
-    </div>,
-    document.body,
-  );
+    const el = popup.anchor;
+    const oldStyle = el.getAttribute("style");
+    el.classList.remove("message-press");
+    el.style.transition = "none";
+    el.style.transform = "none";
+    const box = el.getBoundingClientRect();
+    const pos = menuPosition(box, { top: 0, left: 0, right: window.innerWidth, bottom: window.innerHeight }, popup.right, actionsFor(popup.item.kind).length);
+    const placeholder = document.createElement("div");
+    const computed = getComputedStyle(el);
+    const { padding, backgroundColor, border } = computed;
+    placeholder.style.cssText = `width:${box.width}px;height:${box.height}px;flex:none;box-sizing:border-box;margin:${computed.margin};align-self:${computed.alignSelf}`;
+    el.before(placeholder);
+    el.classList.add("message-lifted");
+    el.setAttribute("popover", "manual");
+    Object.assign(el.style, { position: "fixed", left: `${box.left}px`, top: `${pos.bubbleTop}px`, width: `${box.width}px`, maxWidth: `${box.width}px`, margin: "0", padding, backgroundColor, border, maxHeight: pos.maxHeight === undefined ? "none" : `${pos.maxHeight}px`, overflow: pos.maxHeight === undefined ? "visible" : "hidden" });
+    if (pos.maxHeight !== undefined) el.classList.add("message-clipped");
+    el.showPopover();
+    el.style.removeProperty("transform");
+    el.style.removeProperty("transition");
+    setPosition({ top: pos.top, left: pos.left, above: pos.top < pos.bubbleTop });
+    const backdrop = (event: PointerEvent) => {
+      if (event.target !== el) return;
+      const r = el.getBoundingClientRect();
+      if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) { event.stopPropagation(); close(); }
+    };
+    el.addEventListener("pointerdown", backdrop);
+    return () => {
+      el.removeEventListener("pointerdown", backdrop);
+      if (el.matches(":popover-open")) el.hidePopover();
+      el.removeAttribute("popover");
+      el.classList.remove("message-lifted", "message-clipped", "message-closing");
+      if (oldStyle === null) el.removeAttribute("style"); else el.setAttribute("style", oldStyle);
+      placeholder.remove();
+    };
+  }, [popup, close]);
+  useLayoutEffect(() => { popup.anchor.classList.toggle("message-closing", closing); }, [popup, closing]);
+  useLayoutEffect(() => { if (position) menu.current?.showPopover(); }, [position]);
+  if (!position) return null;
+  const run = (action: string) => {
+    if (action === "reply") { setQuote({ itemId: popup.item.id, text: plain(popup.text).slice(0, 60) }); focusComposer(); close(); }
+    if (action === "copy") void copyText(popup.text).then((ok) => { if (!ok) setNotice(t("复制失败：浏览器不允许写入剪贴板")); close(); });
+    if (action === "select") selectText();
+    if (action === "job" && popup.item.kind === "job") { openJob(popup.item.jobId); close(); }
+  };
+  return createPortal(<div ref={menu} popover="manual" className={`message-popup-menu${popup.right ? " right" : ""}${position.above ? " above" : ""}${closing ? " closing" : ""}`} style={{ top: position.top, left: position.left }} onPointerDown={(event) => {
+    if (event.target !== event.currentTarget) return;
+    const r = event.currentTarget.getBoundingClientRect();
+    if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) close();
+  }}>
+    {actionsFor(popup.item.kind).map((action) => <button key={action} onClick={() => run(action)}>
+      <span>{action === "reply" ? t("回复") : action === "copy" ? t("复制") : action === "select" ? t("选择文字") : t("查看任务详情")}</span>
+      <Icon name={action === "reply" ? "reply" : action === "copy" ? "copy" : action === "select" ? "textSelect" : "chev"} size={17} />
+    </button>)}
+  </div>, document.body);
 }
 
 function jumpToQuote(event: React.MouseEvent<HTMLElement>, itemId: string) {
   const list = event.currentTarget.closest(".col");
   const target = [...(list?.querySelectorAll<HTMLElement>(".message-row[data-item-id]") ?? [])].find((row) => row.dataset.itemId === itemId);
-  if (target) flashItem(target);
+  if (target) flashItem(target.classList.contains("message-card-gesture") ? target.querySelector<HTMLElement>(".jobcard, .q, .igen, .filecard, .imgcard, .media-audio, .media-video") ?? target : target);
 }
 
 /** 每条消息工具行的状态。 */
-type ToolsState = { open: boolean; start?: (event: React.PointerEvent) => void; close: () => void; touch: boolean; distance: number; ready: boolean };
+type ToolsState = { start?: (event: React.PointerEvent) => void; touch: boolean; distance: number; ready: boolean };
 
 /** 结束了的任务用了多久；没开始跑就结束的（排队时被停）不显示。 */
 function took(job: Job): string | undefined {
@@ -311,21 +348,6 @@ function DraftCard({ draft }: { draft: Draft }) {
               <span className="k">{t("执行前确认")}</span>
               <span className={draft.askFirst.length ? undefined : "none"}>{draft.askFirst.join(" · ") || t("没有")}</span>
             </div>
-            <div className="kv">
-              <span className="k">{t("补充说明")}</span>
-              {draft.instructions.length ? (
-                // 每条一行：条目自己带句号，再用「；」接起来会变成「。；」
-                <span>
-                  {draft.instructions.map((line, i) => (
-                    <span className="line" key={i}>
-                      {line}
-                    </span>
-                  ))}
-                </span>
-              ) : (
-                <span className="none">{t("没有")}</span>
-              )}
-            </div>
           </div>
         </div>
         <div className="acts swap" style={{ marginTop: 12 }}>
@@ -360,7 +382,7 @@ function DelegationCard({ delegation, fresh }: { delegation: Delegation; fresh: 
   useEffect(() => { previousStatus.current = delegation.status; }, [delegation.status]);
   const target = s.assistants.find((a) => a.id === delegation.to);
   const name = target?.name ?? delegation.to;
-  const approvals = Object.values(s.approvals).filter((approval) => approval.status === "pending" && ((delegation.approvalIds ?? []).includes(approval.id) || Boolean(approval.jobId && delegation.jobIds.includes(approval.jobId))));
+  const approvals = Object.values(s.approvals).filter((approval) => approval.status === "pending" && (delegation.approvalIds ?? []).includes(approval.id) && approval.source !== "job");
   return (
     <div className={`hov${fresh ? " enter" : ""}`} id={`delegation-${delegation.id}`}>
       {/* 整张卡点进接手的助手（和任务卡一样整张可点、悬停整张变底色）；里面的任务行、提问、按钮各管各的 */}
@@ -400,7 +422,26 @@ function DelegationCard({ delegation, fresh }: { delegation: Delegation; fresh: 
 }
 
 function QuestionCard({ approval, fresh }: { approval: Approval; fresh: boolean }) {
-  return approval.questions?.length ? <MultiQuestionCard approval={approval} fresh={fresh} /> : <SingleQuestionCard approval={approval} fresh={fresh} />;
+  return approval.login ? <LoginCard approval={approval} fresh={fresh} /> : approval.questions?.length ? <MultiQuestionCard approval={approval} fresh={fresh} /> : <SingleQuestionCard approval={approval} fresh={fresh} />;
+}
+
+function LoginCard({ approval, fresh }: { approval: Approval; fresh: boolean }) {
+  const login = approval.login!;
+  const done = approval.status === "answered";
+  return (
+    <div className={`b q qlogin${fresh ? " enter" : ""}`}>
+      <div className="qt">{approval.title}</div>
+      <div className="qs">{t("网站：{site}", { site: login.site })}</div>
+      <div className="qs">{login.reason}</div>
+      {approval.status === "expired" ? <div className="opts"><div className="opt">{t("已结束")}</div></div> : done ? <div className="opts"><div className="opt chosen"><Icon name="check" size={15} />{t("已完成")}</div></div> : (
+        <div className="qfoot qacts">
+          <button className="hob-btn hob-btn-primary" onClick={() => openLoginDesktop(approval.id, approval.assistantId)}>
+            <Icon name="pointer" size={14} />{t("去登录")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** 一张卡问几个问题：每个问题选一项或自己写一句，一次提交。要补充的写进那个问题的「自己写」，卡上不另设补充框。 */
@@ -692,7 +733,7 @@ export function TopicCard({ topicId, fresh, itemId }: { topicId: string; fresh: 
   if (!g) {
     return (
       <div className={`hov${fresh ? " enter" : ""}`} data-item-id={itemId}>
-        <div className="b topiccard gone">{t("话题已不在")}</div>
+        <div className="b topiccard gone">{t("话题已不存在")}</div>
       </div>
     );
   }
@@ -775,7 +816,7 @@ function ItemView({
           <span className="send-progress" aria-label={t("正在发送")}><Icon name="spin" size={16} w={2.2} className="spin" /></span>
         ) : null}
         <div className={`hov right msg${fresh ? " enter-right" : ""}${pend ? " pending" : ""}`}>
-        {forwarded ? <div className="forwarded-line">{forwarded && "assistantId" in forwarded ? t("从和 Hob 的对话转来") : t("从综合转来")}</div> : null}
+        {forwarded ? <div className="forwarded-line">{forwarded && "assistantId" in forwarded ? (() => { const sender = s.assistants.find((a) => a.id === forwarded.assistantId); return t("从和「{name}」的对话转来", { name: sender?.name ?? forwarded.assistantId }); })() : t("从综合转来")}</div> : null}
         {album ? (
           <div className={`u-album${albumOpen ? " open" : ""}`} ref={hasBubble ? undefined : bubble} style={hasBubble ? undefined : swipeStyle}>
             <button className="album-pill" onClick={() => setAlbumOpen(!albumOpen)}>{albumOpen ? t("收起") : t("展开 {n}", { n: photos.length })}</button>
@@ -793,7 +834,7 @@ function ItemView({
         ) : null}
         {hasBubble ? (
         <div className="u" ref={bubble} style={swipeStyle}>
-          {item.from ? <button className="forward-label" onClick={() => void (item.from!.assistantId === "hob" ? jumpToDelegation(item.from!.assistantId, item.from!.delegationId, false) : jumpToHandback(item.from!.assistantId, item.from!.delegationId, false))}>{(() => { const sender = s.assistants.find((a) => a.id === item.from!.assistantId); return sender ? <Avatar sprite={sender.sprite} prop={sender.prop} size={16} /> : null; })()}{item.from.assistantId === "hob" ? t("转自 {name}", { name: item.from.name }) : t("转自「{name}」", { name: item.from.name })}</button> : null}
+          {item.from ? <button className="forward-label" onClick={() => void (item.from!.delegationId.startsWith("dg-") ? jumpToDelegation(item.from!.assistantId, item.from!.delegationId, false) : jumpToHandback(item.from!.assistantId, item.from!.delegationId, false))}>{(() => { const sender = s.assistants.find((a) => a.id === item.from!.assistantId); return sender ? <Avatar sprite={sender.sprite} prop={sender.prop} size={16} /> : null; })()}{t("转自 {name}", { name: item.from.name })}</button> : null}
           {item.quote ? <button className={`quote${quoteWho?.(item.quote.itemId) ? " named" : ""}`} onClick={(event) => jumpToQuote(event, item.quote!.itemId)}>{quoteWho?.(item.quote.itemId) ? t("{name}：", { name: quoteWho(item.quote.itemId)! }) : ""}{item.quote.text}</button> : null}
           {/* 其他附件是气泡里的一行文件卡 */}
           {item.text ? <span className={`u-text${item.from ? " u-brief" : ""}`}>{item.from ? <Brief text={item.text} /> : item.text}</span> : null}
@@ -809,7 +850,6 @@ function ItemView({
         ) : null}
         {pend ? null : <Tools text={item.text} itemId={item.id} />}
         </div>
-        {tools.open ? <MessagePopup anchor={bubble} text={item.text} itemId={item.id} close={tools.close} /> : null}
       </div>
     );
   }
@@ -843,15 +883,14 @@ function ItemView({
           )}
           <Tools text={item.text} itemId={item.id} />
           </div>
-          {tools.open ? <MessagePopup anchor={bubble} text={item.text} itemId={item.id} close={tools.close} /> : null}
         </div>
       </>
     );
   }
 
   if (item.kind === "note") {
-    // 定时任务到点：只写一行。老记录里带着检查到的原始内容，那是给群主的材料，不显示
-    if (item.icon === "routine" && item.text.includes("到点了")) {
+    // 定时任务到执行时间：只写一行。老记录里带着检查到的原始内容，那是给群主的材料，不显示
+    if (item.icon === "routine" && isRoutineDueNote(item.text, item.routineId)) {
       return <div className={`sys routine-note${fresh ? " enter-fade" : ""}`}><Icon name="clock" size={14} /><span>{item.text.replace(/，检查到：[\s\S]*$/u, "")}</span></div>;
     }
     // 带原因的（工具没办成）：点开看工具报错的原文
@@ -881,7 +920,7 @@ function ItemView({
 
   if (item.kind === "question") {
     const ap = s.approvals[item.approvalId];
-    return ap ? <QuestionCard approval={ap} fresh={fresh} /> : null;
+    return ap ? <div id={`approval-${ap.id}`} data-item-id={item.id}><QuestionCard approval={ap} fresh={fresh} /></div> : null;
   }
 
   if (item.kind === "job") {
@@ -932,6 +971,11 @@ function ItemView({
   );
 }
 
+function GestureCard({ item, tools, children }: { item: Item; tools: ToolsState; children: ReactNode }) {
+  if (!tools.touch || !["job", "question", "image", "file"].includes(item.kind)) return children;
+  return <div className="message-row message-card-gesture" data-item-id={item.id} onPointerDown={tools.start} onContextMenu={(event) => event.preventDefault()}>{children}</div>;
+}
+
 /** 同一次回复里的几条贴着（只有气泡自己的 4px），换一方说话或开新的一组（lead）才拉开。 */
 function opensGroup(prev: Item | undefined, cur: Item): boolean {
   if (!prev) return false;
@@ -944,23 +988,41 @@ function opensGroup(prev: Item | undefined, cur: Item): boolean {
  */
 function useItemGestures() {
   const touch = useNoHover();
-  const [openId, dispatchMenu] = useReducer(messageMenu, null);
-  const press = useRef<{ timer: number; pointerId: number; id: string; text: string; swipe: SwipeState; ready: boolean } | null>(null);
+  const s = useApp();
+  const [popup, setPopup] = useState<Popup | null>(null);
+  const popupRef = useRef(popup);
+  popupRef.current = popup;
+  const [closing, setClosing] = useState(false);
+  const closeTimer = useRef(0);
+  const [selected, setSelected] = useState<HTMLElement | null>(null);
+  const press = useRef<{ timer: number; pointerId: number; item: Item; text: string; anchor: HTMLElement; swipe: SwipeState; ready: boolean } | null>(null);
+  const suppressClick = useRef(false);
   const [swipe, setSwipe] = useState<{ id: string; distance: number; ready: boolean } | null>(null);
+  const close = useCallback(() => {
+    setClosing(true);
+    window.clearTimeout(closeTimer.current);
+    closeTimer.current = window.setTimeout(() => { setPopup(null); setClosing(false); }, 180);
+  }, []);
+  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
   useEffect(() => {
     const cancel = () => {
-      if (press.current) window.clearTimeout(press.current.timer);
+      if (press.current) { window.clearTimeout(press.current.timer); press.current.anchor.classList.remove("message-press"); }
       press.current = null;
       setSwipe(null);
     };
     const down = (event: PointerEvent) => {
-      dispatchMenu({ type: "outside", inside: event.target instanceof Element && Boolean(event.target.closest(".tools.menu")) });
+      if (popupRef.current && event.target instanceof Element && !event.target.closest(".message-popup-menu") && !popupRef.current.anchor.contains(event.target)) {
+        suppressClick.current = true;
+        window.setTimeout(() => { suppressClick.current = false; }, 1000);
+        close();
+      }
+      if (selected && event.target instanceof Node && !selected.contains(event.target)) { selected.classList.remove("message-selecting"); window.getSelection()?.removeAllRanges(); setSelected(null); }
     };
     const move = (event: PointerEvent) => {
       const p = press.current;
       if (!p || p.pointerId !== event.pointerId) return;
       p.swipe = moveSwipe(p.swipe, event.clientX, event.clientY);
-      if (Math.hypot(event.clientX - p.swipe.x, event.clientY - p.swipe.y) > 10) window.clearTimeout(p.timer);
+      if (Math.hypot(event.clientX - p.swipe.x, event.clientY - p.swipe.y) > 10) { window.clearTimeout(p.timer); p.anchor.classList.remove("message-press"); }
       if (p.swipe.direction === "vertical") { cancel(); return; }
       if (p.swipe.direction !== "horizontal") return;
       window.clearTimeout(p.timer);
@@ -968,30 +1030,25 @@ function useItemGestures() {
       if (ready && !p.ready) navigator.vibrate?.(10);
       p.ready = ready;
       if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        if (ready) {
-          setQuote({ itemId: p.id, text: plain(p.text).slice(0, 60) });
-          focusComposer();
-          cancel();
-        }
+        if (ready) { setQuote({ itemId: p.item.id, text: plain(p.text).slice(0, 60) }); focusComposer(); cancel(); }
         return;
       }
-      setSwipe({ id: p.id, distance: p.swipe.distance, ready });
+      setSwipe({ id: p.item.id, distance: p.swipe.distance, ready });
     };
     const up = (event: PointerEvent) => {
       const p = press.current;
       if (!p || p.pointerId !== event.pointerId) return;
-      if (swipeReply(p.swipe)) {
-        setQuote({ itemId: p.id, text: plain(p.text).slice(0, 60) });
-        focusComposer();
-      }
+      if (swipeReply(p.swipe)) { setQuote({ itemId: p.item.id, text: plain(p.text).slice(0, 60) }); focusComposer(); }
       cancel();
     };
-    const scroll = () => { cancel(); dispatchMenu({ type: "close" }); };
+    const scroll = () => { cancel(); if (popupRef.current) close(); if (selected) { selected.classList.remove("message-selecting"); window.getSelection()?.removeAllRanges(); setSelected(null); } };
+    const click = (event: MouseEvent) => { if (suppressClick.current && event.target instanceof Element && !event.target.closest(".message-popup-menu")) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false; } };
     document.addEventListener("pointerdown", down, true);
     document.addEventListener("pointermove", move, true);
     document.addEventListener("pointerup", up, true);
     document.addEventListener("pointercancel", cancel, true);
     document.addEventListener("scroll", scroll, true);
+    document.addEventListener("click", click, true);
     return () => {
       cancel();
       document.removeEventListener("pointerdown", down, true);
@@ -999,31 +1056,54 @@ function useItemGestures() {
       document.removeEventListener("pointerup", up, true);
       document.removeEventListener("pointercancel", cancel, true);
       document.removeEventListener("scroll", scroll, true);
+      document.removeEventListener("click", click, true);
     };
-  }, []);
-
-  /** 这一条接的指针手势；桌面返回的 start 是空的，不拦鼠标。 */
+  }, [close, selected]);
   const toolsFor = (item: Item | GroupItem): ToolsState => {
-    const text = "text" in item ? item.text : "";
+    const text = item.kind === "job" ? s.jobs[item.jobId]?.title ?? "" : item.kind === "question" ? s.approvals[item.approvalId]?.title ?? "" : item.kind === "image" ? t("图片") : item.kind === "file" ? item.name : "text" in item ? item.text : "";
     return {
-      open: touch && openId === item.id,
       touch,
       distance: swipe?.id === item.id ? swipe.distance : 0,
       ready: swipe?.id === item.id && swipe.ready,
-      close: () => dispatchMenu({ type: "close" }),
       start: touch ? (event) => {
-        if (event.pointerType !== "touch" || (item.kind !== "user" && item.kind !== "assistant") || (event.target as Element).closest("a,button,input,textarea,select,[contenteditable],.draft,.album-stack")) return;
-        if (press.current) window.clearTimeout(press.current.timer);
+        if (event.pointerType !== "touch" || !actionsFor(item.kind).length) return;
+        const target = event.target as Element;
+        const interactive = target.closest("a,button,input,textarea,select,[contenteditable],.draft,.album-stack");
+        const cardRoot = interactive && (interactive.matches(".filecard,.imgcard,.igen-img") && (item.kind === "file" || item.kind === "image"));
+        if (interactive && !cardRoot) return;
+        const row = event.currentTarget as HTMLElement;
+        const anchor = target.closest<HTMLElement>(".u,.b,.tablecard,.igen,.filecard,.imgcard,.media-audio,.media-video") ?? row.querySelector<HTMLElement>(".u,.b,.tablecard,.igen,.filecard,.imgcard,.media-audio,.media-video");
+        if (!anchor || selected === anchor) return;
+        if (press.current) { window.clearTimeout(press.current.timer); press.current.anchor.classList.remove("message-press"); }
+        anchor.classList.add("message-press");
         const { clientX: x, clientY: y, pointerId } = event;
         const timer = window.setTimeout(() => {
           press.current = null;
-          dispatchMenu({ type: "open", id: item.id });
-        }, 500);
-        press.current = { timer, pointerId, id: item.id, text, swipe: { x, y, direction: "pending", distance: 0 }, ready: false };
+          suppressClick.current = true;
+          window.setTimeout(() => { suppressClick.current = false; }, 1000);
+          navigator.vibrate?.(10);
+          window.clearTimeout(closeTimer.current);
+          setClosing(false);
+          setPopup({ anchor, item, text, right: item.kind === "user" });
+        }, 400);
+        press.current = { timer, pointerId, item, text, anchor, swipe: { x, y, direction: "pending", distance: 0 }, ready: false };
       } : undefined,
     };
   };
-  return { toolsFor };
+  const selectText = () => {
+    if (!popup) return;
+    const el = popup.anchor;
+    close();
+    window.setTimeout(() => {
+      el.classList.add("message-selecting");
+      const range = document.createRange();
+      range.selectNodeContents(el.querySelector(".u-text, .markdown") ?? el);
+      const selection = window.getSelection();
+      selection?.removeAllRanges(); selection?.addRange(range);
+      setSelected(el);
+    }, 200);
+  };
+  return { toolsFor, popup: popup ? <MessagePopup popup={popup} close={close} selectText={selectText} closing={closing} /> : null };
 }
 
 /**
@@ -1043,7 +1123,7 @@ export function visibleItems<T extends Item>(items: T[]): T[] {
 export function ItemList({ items: all }: { items: Item[] }) {
   const s = useApp();
   const items = visibleItems(all);
-  const { toolsFor } = useItemGestures();
+  const { toolsFor, popup } = useItemGestures();
   const rows: ReactNode[] = [];
   if (items.length && !isToday(items[0].at) && items[0].kind !== "note") {
     rows.push(
@@ -1066,17 +1146,17 @@ export function ItemList({ items: all }: { items: Item[] }) {
         ) : opensGroup(prev, item) ? (
           <div className="g" />
         ) : null}
-        <ItemView item={item} inlineDraft={inline} fresh={fresh} tools={toolsFor(item)} />
+        <GestureCard item={item} tools={toolsFor(item)}><ItemView item={item} inlineDraft={inline} fresh={fresh} tools={toolsFor(item)} /></GestureCard>
       </Fragment>,
     );
   }
   for (const page of visibleLiveCards(Object.values(s.livePages), s.sel)) {
     rows.push(<button key={page.callId} className={`att filecard${page.state === "failed" ? " bad" : ""}`} onClick={() => openLivePreview(page.callId)}>
       <span className="ico"><Icon name={page.state === "writing" ? "spin" : "close"} className={page.state === "writing" ? "spin" : ""} size={18} /></span>
-      <span><span className="n" style={{ display: "block" }}>{page.title || t("正在写页面…")}</span><span className="m">{page.state === "failed" ? t("生成失败：{error}", { error: page.error ?? "" }) : t("生成中")}</span></span>
+      <span><span className="n" style={{ display: "block" }}>{page.title || t("正在生成页面…")}</span><span className="m">{page.state === "failed" ? t("生成失败：{error}", { error: page.error ?? "" }) : t("生成中")}</span></span>
     </button>);
   }
-  return <>{rows}</>;
+  return <>{rows}{popup}</>;
 }
 
 /**
@@ -1086,7 +1166,7 @@ export function ItemList({ items: all }: { items: Item[] }) {
 export function GroupItemList({ g, items: all }: { g: GroupSummary; items: GroupItem[] }) {
   const s = useApp();
   const items = visibleItems(all);
-  const { toolsFor } = useItemGestures();
+  const { toolsFor, popup } = useItemGestures();
   const members = membersOf(g, s.assistants);
   const names = members.map((m) => m.name);
   const nameOf = (speaker: string | "user") =>
@@ -1109,7 +1189,7 @@ export function GroupItemList({ g, items: all }: { g: GroupSummary; items: Group
       rows.push(
         <Fragment key={item.id}>
           {divider}
-          <ItemView item={item} fresh={fresh} tools={toolsFor(item)} mentions={names} quoteWho={quoteWho} forwarded={item.forwardedFrom} />
+          <GestureCard item={item} tools={toolsFor(item)}><ItemView item={item} fresh={fresh} tools={toolsFor(item)} mentions={names} quoteWho={quoteWho} forwarded={item.forwardedFrom} /></GestureCard>
         </Fragment>,
       );
       continue;
@@ -1130,12 +1210,12 @@ export function GroupItemList({ g, items: all }: { g: GroupSummary; items: Group
               <small>{fmtList(item.at)}</small>
             </div>
             {run.map((entry) => (
-              <ItemView key={entry.id} item={entry} fresh={isFresh(entry.id)} tools={toolsFor(entry)} mentions={names} quoteWho={quoteWho} />
+              <GestureCard key={entry.id} item={entry} tools={toolsFor(entry)}><ItemView item={entry} fresh={isFresh(entry.id)} tools={toolsFor(entry)} mentions={names} quoteWho={quoteWho} /></GestureCard>
             ))}
           </div>
         </div>
       </Fragment>,
     );
   }
-  return <>{rows}</>;
+  return <>{rows}{popup}</>;
 }

@@ -314,8 +314,8 @@ describe("提示词", () => {
     try {
       await hob.runtime.models.get();
       const text = buildRouterTools(hob.runtime, "hob").find((tool) => tool.name === "start_job")!.parameters.properties.model.description;
-      expect(text).toContain("hob-faux/fast（默认） · 聪明 40% · 成本 10% · 速度 95% · 上下文 200K · 补充：轻活 · 思考档 off");
-      expect(text).toContain("\nhob-faux/eyes · 聪明 50% · 成本 50% · 速度 60% · 能看图 · 上下文 200K · 思考档 off");
+      expect(text).toContain("hob-faux/fast（默认） · 智能 40% · 成本 10% · 速度 95% · 上下文 200K · 补充：轻活 · 思考档 off");
+      expect(text).toContain("\nhob-faux/eyes · 智能 50% · 成本 50% · 速度 60% · 可查看图片 · 上下文 200K · 思考档 off");
     } finally { hob.close(); }
   });
   it("多个模型：列名字、定位、默认标记和挑法", () => {
@@ -377,7 +377,7 @@ describe("提示词", () => {
       });
       expect(text).not.toContain("## 你能做什么");
       expect(text).not.toContain("- 能做：");
-      expect(text).toContain("不能做：执行命令（bash）、生图");
+      expect(text).toContain("不能做：执行命令（bash）、生成图片（generate_image）");
     } finally {
       hob.close();
     }
@@ -743,7 +743,7 @@ describe("助手能力", () => {
       expect(worker.tools).not.toContain("edit");
       expect(worker.tools).not.toContain("write");
       expect(worker.tools).toContain("read");
-      expect(worker.prompt).toContain("不能做：执行命令（bash）、改文件（edit、write）");
+      expect(worker.prompt).toContain("不能做：执行命令（bash）、修改文件（edit、write）");
       expect(hob.runtime.store.job(job.id)?.status).toBe("done");
     } finally {
       hob.close();

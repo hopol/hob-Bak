@@ -49,7 +49,7 @@ export function membersOfGroup(group: Group): { members: string[]; ownerId: stri
 
 /** 提交前的检查：返回要显示的错误，没有错误返回 null。 */
 export function draftError(name: string, members: string[]): string | null {
-  if (!name.trim()) return t("给群起个名字。");
+  if (!name.trim()) return t("请为群命名。");
   if (!members.length) return t("至少选一个助手。");
   return null;
 }
@@ -137,21 +137,21 @@ export function NewGroupDialog({ onClose }: { onClose: () => void }) {
   return <DialogShell label={t("新建群")} title={t("新建群")} onClose={onClose} onSubmit={(event) => { event.preventDefault(); void submit(); }} actions={<><button type="button" className="hob-btn" onClick={onClose}>{t("取消")}</button><button type="submit" className="hob-btn hob-btn-primary" disabled={busy}>{t("建群")}</button></>}>
         {clones.length ? (
           <label className="gcreate-field">
-            <span>{t("照着已有的群建")}</span>
-            <Select value={from} onChange={clone} options={[{ value: "", label: t("不照，自己选成员") }, ...clones.map((g) => ({ value: g.id, label: t("照着「{name}」建", { name: g.name }) }))]} />
+            <span>{t("沿用已有群的设置创建")}</span>
+            <Select value={from} onChange={clone} options={[{ value: "", label: t("不沿用，自行选择成员") }, ...clones.map((g) => ({ value: g.id, label: t("沿用「{name}」创建", { name: g.name }) }))]} />
           </label>
         ) : null}
         <label className="gcreate-field">
           <span>{t("群名")}</span>
-          <input autoFocus value={name} placeholder={t("按范围起，如「家里机器」")} onChange={(event) => setName(event.target.value)} />
+          <input autoFocus value={name} placeholder={t("按用途命名，例如「家庭服务器」")} onChange={(event) => setName(event.target.value)} />
         </label>
         <label className="gcreate-field">
-          <span>{t("负责什么")}</span>
+          <span>{t("职责")}</span>
           <input value={purpose} placeholder={t("一句话，如「家里 NAS 和服务器上的存储和备份」")} onChange={(event) => setPurpose(event.target.value)} />
         </label>
         <div className="gcreate-label">{t("成员")}</div>
         <MemberList assistants={s.assistants} members={members} ownerId={ownerId} onToggle={toggle} onOwner={setOwnerId} />
-        <div className="gcreate-note">{t("收起的助手也能选。同一位助手在几个群里是同一个人：记忆、技能、规则只有一份，各群的对话分开。")}</div>
+        <div className="gcreate-note">{t("收起的助手也可以选择。同一个助手在多个群中共用记忆、技能和规则，各群的对话相互独立。")}</div>
         {error ? <div className="gcreate-error">{error}</div> : null}
       </DialogShell>;
 }

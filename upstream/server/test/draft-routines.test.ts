@@ -4,7 +4,7 @@ import { createFromDraft } from "../src/actions.ts";
 import { makeHob } from "./helpers.ts";
 
 function draft(routines: Draft["routines"]): Draft {
-  return { id: "d-test", assistantId: "hob", status: "pending", name: "写作", sprite: "page", duty: "写作", dutyLong: "写作", routines, routinesText: "计划全部建好", askFirst: [], instructions: [], carry: { conversations: 0 }, createdAt: new Date().toISOString() };
+  return { id: "d-test", assistantId: "hob", status: "pending", name: "写作", sprite: "page", duty: "写作", dutyLong: "写作", routines, routinesText: "计划全部建好", askFirst: [], carry: { conversations: 0 }, createdAt: new Date().toISOString() };
 }
 
 describe("创建助手的定时", () => {

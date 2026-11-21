@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 // 界面文字规范见 docs/copy.md：用户能看到的文字一律用书面中文，口语词不再出现。
-const BANNED = ["干活", "派活", "拍板", "卡住", "没动静", "试一张", "先问你", "直接做"];
+const BANNED = ["干活", "派活", "拍板", "卡住", "没动静", "试一张", "先问你", "直接做", "到点了", "只触发"];
 // 状态词全站统一成这七个，旧的写法不许再出现。
 const OLD_STATUS = ["等你批"];
 
@@ -39,6 +39,7 @@ function hits(files: string[], words: string[]): string[] {
         if (file.endsWith("server/src/worker-tools.ts") && word === "拍板" && line.includes("done 做完 / stuck 做不下去（写明缺什么）/ need_approval 需要用户拍板")) continue;
         if (file.endsWith("server/src/jobs.ts") && word === "干活" && line.includes("不能在 Hob 的数据目录里干活；不填 cwd 就在任务自己的目录里做。")) continue;
         if (file.endsWith("server/src/jobs.ts") && word === "派活" && line.includes('"派活时估的"')) continue;
+        if (file.endsWith("server/src/jobs.ts") && word === "派活" && line.includes("超过派活时预计的")) continue;
         if (line.includes(word)) found.push(`${relative(ROOT, file)}: ${word} → ${line.trim().slice(0, 60)}`);
       }
     }

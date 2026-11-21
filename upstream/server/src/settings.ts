@@ -95,7 +95,7 @@ export function defaultSettings(timezone = systemTimezone(), models: ModelSettin
     models,
     image: { source: "off" },
     search: defaultSearch(),
-    desktop: { url: "", enabled: false, publicAssistants: [] },
+    desktop: { url: "", enabled: false },
     claude: { enabled: false, plan: "pro", executable: "" },
     work: { maxJobs: 2, jobStallMinutes: 15, routerStallMinutes: 6 },
     push: { email: "" },
@@ -242,7 +242,6 @@ function normalize(raw: unknown, base: Settings): Settings {
     desktop: {
       url: typeof input.desktop?.url === "string" ? input.desktop.url : (base.desktop?.url ?? ""),
       enabled: typeof input.desktop?.enabled === "boolean" ? input.desktop.enabled : (base.desktop?.enabled ?? false),
-      publicAssistants: Array.isArray(input.desktop?.publicAssistants) ? input.desktop.publicAssistants.filter((id): id is string => typeof id === "string") : (base.desktop?.publicAssistants ?? []),
     },
     claude: {
       enabled: input.claude?.enabled === true,
@@ -451,7 +450,7 @@ export class SettingsStore {
     return this.get();
   }
 
-  setDesktop(revision: number, desktop: { url: string; enabled: boolean; publicAssistants?: string[] }): SettingsFile | undefined {
+  setDesktop(revision: number, desktop: { url: string; enabled: boolean }): SettingsFile | undefined {
     if (revision !== this.file.revision) return undefined;
     this.file = { revision: this.file.revision + 1, settings: { ...this.get().settings, desktop: { ...this.get().settings.desktop, ...desktop } } };
     this.write();

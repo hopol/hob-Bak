@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { toolFailureText } from "../src/pi.ts";
 import { call, makeHob, text, waitFor } from "./helpers.ts";
@@ -22,18 +22,18 @@ function toolResults(file: string): { name: string; text: string; isError: boole
     });
 }
 
-const tooLong = "字".repeat(401);
+const emptyNote = "";
 
 describe("工具失败的说法", () => {
   it("对话里的自定义工具报错：模型收到的文字以「调用失败：」开头", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
-      hob.faux.setResponses([call("start_job", { title: "查磁盘", note: tooLong }), text("我改一下再说。")]);
+      hob.faux.setResponses([call("start_job", { title: "查磁盘", note: emptyNote }), text("我改一下再说。")]);
       await hob.runtime.router.send("hob", { text: "帮我查下磁盘" });
       await hob.runtime.router.waitIdle("hob");
       const failed = toolResults(join(hob.home, "assistants", "hob", "router.jsonl")).find((item) => item.name === "start_job")!;
       expect(failed.isError).toBe(true);
-      expect(failed.text).toBe(`调用失败：备注 401 字，最多 400 字。用户原话和最近的对话会自动带上，备注只写从原话里看不出的背景，改短后再调用一次。`);
+      expect(failed.text).toBe(`调用失败：note 不能为空：写清交接说明后再调用一次。`);
     } finally { hob.close(); }
   });
 
@@ -41,7 +41,7 @@ describe("工具失败的说法", () => {
     const hob = makeHob({}, { memory: "off" });
     try {
       const group = hob.runtime.groups.create({ name: "内容组", purpose: "写稿", ownerId: "hob", members: ["hob"] });
-      hob.faux.setResponses([call("start_job", { title: "写稿", note: tooLong }), text("我改一下再说。")]);
+      hob.faux.setResponses([call("start_job", { title: "写稿", note: emptyNote }), text("我改一下再说。")]);
       const file = join(hob.home, "groups", group.id, "members", "hob.jsonl");
       await hob.runtime.groups.send(group.id, { text: "写一篇稿子" });
       await waitFor(() => existsSync(file) && toolResults(file).some((item) => item.name === "start_job"));

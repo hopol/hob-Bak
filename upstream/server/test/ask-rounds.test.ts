@@ -56,7 +56,7 @@ function userTexts(file: string): string[] {
 
 function addAssistant(hob: TestHob, id: string, name: string): Assistant {
   const base = hob.runtime.store.assistant("hob")!;
-  const assistant: Assistant = { ...base, id, name, duty: "机器", primary: false, pinned: false, sprite: "server", instructions: "" };
+  const assistant: Assistant = { ...base, id, name, duty: "机器", primary: false, pinned: false, sprite: "server" };
   hob.runtime.store.saveAssistant(assistant);
   return assistant;
 }
@@ -142,7 +142,7 @@ describe("一张卡问几个问题", () => {
       expect(remembered.options).toEqual([
         { key: "A", label: "发" },
         { key: "B", label: "不发" },
-        { key: "C", label: "以后「发公众号」直接做", always: true },
+        { key: "C", label: "以后「发公众号」直接执行", always: true },
       ]);
       expect(remembered.ruleText).toBe("发公众号");
 

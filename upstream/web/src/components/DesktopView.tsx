@@ -72,7 +72,7 @@ export function DesktopMini({ screen }: { screen: string }) {
   );
 }
 
-export function DesktopView({ onClose, takeOver = false, initialScreen = "hob" }: { onClose: () => void; takeOver?: boolean; initialScreen?: string }) {
+export function DesktopView({ onClose, takeOver = false, initialScreen = "hob", login = false }: { onClose: () => void; takeOver?: boolean; initialScreen?: string; login?: boolean }) {
   const target = useRef<HTMLDivElement>(null);
   const rfb = useRef<RFB | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -368,22 +368,21 @@ export function DesktopView({ onClose, takeOver = false, initialScreen = "hob" }
         {phase === "ready" && error ? <span className="desktop-note bad" role="alert">{error}</span> : null}
         <span className="sp" />
         <Select className="desktop-open" aria-label={t("屏幕")} value={screen} onChange={setScreen} options={[
-          ...(!Object.values(desktop.profiles).includes(screen) && screen !== "public" ? [{ value: screen, label: screen }] : []),
+          ...(!Object.values(desktop.profiles).includes(screen) ? [{ value: screen, label: screen }] : []),
           ...assistants.filter((assistant) => desktop.profiles[assistant.id]).map((assistant) => {
             const id = desktop.profiles[assistant.id];
             const running = desktop.screens.some((entry) => entry.id === id && entry.running);
             return { value: id, label: `${assistant.name} · ${running ? t("运行中") : t("未启动")}` };
           }),
-          { value: "public", label: `${t("公共屏幕")} · ${desktop.screens.some((entry) => entry.id === "public" && entry.running) ? t("运行中") : t("未启动")}` }
         ]} />
         {control.mine && touch ? <button className="hob-btn" onClick={() => input.current?.focus()}>{t("键盘")}</button> : null}
         <button
           className="hob-btn hob-btn-primary"
           disabled={!canToggle}
           title={takenByOther ? t("其他人正在接管") : undefined}
-          onClick={() => void toggle()}
+          onClick={() => login && control.mine ? onClose() : void toggle()}
         >
-          {control.mine ? t("交还") : t("接管")}
+          {login && control.mine ? t("完成") : control.mine ? t("交还") : t("接管")}
         </button>
         <button className="hob-icon-btn" title={t("关闭")} aria-label={t("关闭云桌面")} onClick={onClose}>
           <Icon name="close" size={18} />

@@ -50,7 +50,7 @@ import type {
   UsageModelPrice,
   UsageView,
 } from "../../shared/types.ts";
-import type { AssistantSkill, VisibleSkill } from "../../shared/skills.ts";
+import type { AssistantSkill } from "../../shared/skills.ts";
 import type { KnowledgeCollection, KnowledgeEntry, KnowledgeGroup } from "../../shared/knowledge.ts";
 import { defaultSearch, type SearchProviderName, type SearchSettings } from "../../shared/search.ts";
 import { ApiError, realApi, type HobApi } from "./api.ts";
@@ -152,8 +152,6 @@ export interface State {
   groupProfiles: Record<string, { value?: GroupProfile; error?: string }>;
   profiles: Record<string, Profile>;
   assistantSkills: Record<string, { skills: AssistantSkill[]; loaded: boolean; loading: boolean; error: string | null }>;
-  /** 一个助手（在一个群里）看得到的全部技能：定时任务的技能下拉用，键是 `${助手id}:${群id}`。 */
-  visibleSkills: Record<string, { skills: VisibleSkill[]; loaded: boolean; loading: boolean; error: string | null }>;
   sidebarJobs: Record<string, SidebarPage<Job>>;
   sidebarFiles: Record<string, SidebarPage<KnowledgeEntry>>;
   sel: string | null;
@@ -166,9 +164,12 @@ export interface State {
   steps: Record<string, JobStep[]>; // 打开了详情的任务才有过程
   worklog: WorklogState | null;
   collapsed: boolean;
-  nowWide: boolean; // 右栏「正在做」展开成宽栏：大屏桌面 + 完整日志
+  sideCollapsed: boolean;
+  nowWide: boolean; // 右栏「正在做」展开成宽栏
   theme: Theme;
   query: string;
+  homeFilter: "all" | "assistants" | "jobs" | "routines";
+  homeOrder: "recent" | "custom";
   quote: { itemId: string; text: string } | null;
   text: string;
   attachments: Attachment[]; // 输入框里待发的附件（选了就出现，后台在传）
@@ -181,15 +182,42 @@ export interface State {
   tick: number; // 定时刷新“进行中 · N 分钟”
   updateReady: boolean; // 新版本装好了，等用户点「刷新」
   loggingIn: boolean;
+  desktopLogin: { approvalId: string; assistantId: string } | null;
 }
 
 const params = new URLSearchParams(location.search);
 export const MOCK = params.get("mock") === "1";
-const SCENES: SceneId[] = ["g-owns", "g-owns-dark", "readme-chat", "readme-cards", "readme-desktop", "readme-knowledge", "readme-profile", "readme-group-now", "readme-mobile-list", "readme-mobile-chat", "readme-mobile-todos", "image", "act-demo", "act-think", "act-tool", "act-dark", "act-home", "boot", "bubbles", "bubbles-dark", "card-130", "card-130-dark", "job-after", "job-after-dark", "routine-check-dark", "routine-once", "routine-once-dark", "routine-once-list", "ask-rounds", "ask-rounds-answered", "ask-rounds-group", "ask-rounds-dark", "ask-rounds-mobile", "s1", "s2", "s3", "s4", "s6", "mlist", "mchat", "d-running", "d-waiting", "d-done", "d-dark", "d-source", "d-mobile", "h-hob", "h-dark", "h-source", "h-settings", "h-mobile", "g-chat", "g-mention", "g-mobile", "g-dark", "g-team", "todo-chat", "todo-topic", "todo-job", "topics", "topics-plain"];
+const SCENES: SceneId[] = ["g-owns", "g-owns-dark", "readme-chat", "readme-cards", "readme-desktop", "readme-knowledge", "readme-profile", "readme-group-now", "readme-mobile-list", "readme-mobile-chat", "readme-mobile-todos", "image", "act-demo", "act-think", "act-tool", "act-dark", "act-home", "boot", "bubbles", "bubbles-dark", "card-130", "card-130-dark", "job-after", "job-after-dark", "routine-check-dark", "routine-once", "routine-once-dark", "routine-once-list", "ask-rounds", "ask-rounds-answered", "ask-rounds-group", "ask-rounds-dark", "ask-rounds-mobile", "s1", "home-attention", "s2", "s3", "s4", "s6", "mlist", "mchat", "d-running", "d-waiting", "d-done", "d-dark", "d-source", "d-mobile", "h-hob", "h-dark", "h-source", "h-settings", "h-mobile", "g-chat", "g-mention", "g-mobile", "g-dark", "g-team", "todo-chat", "todo-topic", "todo-job", "topics", "topics-plain"];
 const sceneParam = params.get("scene") as SceneId | null;
 const scene: SceneId = sceneParam && SCENES.includes(sceneParam) ? sceneParam : "s1";
 const THEME_KEY = "hob.theme";
 const LOCALE_KEY = "hob.locale";
+const HOME_FILTER_KEY = "hob.home.filter";
+const HOME_ORDER_KEY = "hob.home.order";
+const UI_KEY = "hob.ui";
+
+function loadUi(): Record<string, unknown> {
+  try { const saved = JSON.parse(localStorage.getItem(UI_KEY) ?? "{}"); return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {}; }
+  catch { return {}; } // 损坏的偏好按默认处理
+}
+
+function saveUi(patch: Record<string, unknown>) {
+  localStorage.setItem(UI_KEY, JSON.stringify({ ...loadUi(), ...patch }));
+}
+
+function loadSideCollapsed(): boolean {
+  return loadUi().sideCollapsed === true;
+}
+
+/** 用户拖过的云桌面右栏宽度；没拖过就用样式里的默认值 */
+export function loadDesktopWidth(): number | undefined {
+  const width = loadUi().desktopWidth;
+  return typeof width === "number" && width > 0 ? width : undefined;
+}
+
+export function saveDesktopWidth(width: number) {
+  saveUi({ desktopWidth: Math.round(width) });
+}
 /** 这台页面客户端的标识：上报可见性；SSE 断了服务端就把这台当不可见。 */
 const CLIENT_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 let watchingVisibility = false;
@@ -198,6 +226,15 @@ function parsePanel(raw: string): PanelState {
   if (raw === "assistant" || raw === "now" || raw === "routines" || raw === "skills" || raw === "knowledge" || raw === "rules" || raw === "newRoutine") return { kind: raw };
   if (raw.startsWith("routine:")) return { kind: "routine", id: raw.slice("routine:".length) };
   return { kind: "now" };
+}
+
+function storedHomeFilter(): "all" | "assistants" | "jobs" | "routines" {
+  const value = localStorage.getItem(HOME_FILTER_KEY);
+  return value === "assistants" || value === "jobs" || value === "routines" ? value : "all";
+}
+
+function storedHomeOrder(): "recent" | "custom" {
+  return localStorage.getItem(HOME_ORDER_KEY) === "custom" ? "custom" : "recent";
 }
 
 function storedTheme(): Theme | null {
@@ -279,7 +316,6 @@ function initial(): State {
     profiles: {},
     groupProfiles: {},
     assistantSkills: {},
-    visibleSkills: {},
     sidebarJobs: {},
     sidebarFiles: {},
     sel: null, // 没选中对话就是首页
@@ -291,9 +327,12 @@ function initial(): State {
     steps: {},
     worklog: null,
     collapsed: false,
+    sideCollapsed: loadSideCollapsed(),
     nowWide: false,
     theme: storedTheme() ?? "system",
     query: "",
+    homeFilter: storedHomeFilter(),
+    homeOrder: storedHomeOrder(),
     quote: null,
     text: "",
     attachments: [],
@@ -306,6 +345,7 @@ function initial(): State {
     tick: 0,
     updateReady: false,
     loggingIn: false,
+    desktopLogin: null,
   };
   if (MOCK) {
     state.sel = ui.gsel ? null : ui.sel;
@@ -699,11 +739,6 @@ export async function saveDesktop(body: { revision: number; url: string; enabled
   set({ settings: await api.settings() });
   return view;
 }
-export async function saveDesktopPublic(revision: number, assistants: string[]) {
-  const view = await api.saveDesktopPublic(revision, assistants);
-  set({ settings: await api.settings() });
-  return view;
-}
 export const testDesktop = () => api.testDesktop();
 export const loadMcp = () => api.mcp();
 export const putMcpServer = (name: string, body: import("../../shared/mcp.ts").McpServerSave) => api.putMcp(name, body);
@@ -992,7 +1027,9 @@ let groupRetry: ReturnType<typeof setTimeout> | undefined;
 async function loadGroups() {
   clearTimeout(groupRetry);
   try {
-    set({ groups: await api.groups() });
+    const groups = await api.groups();
+    // 打开页面、断线重连时，正在说话的成员以服务端为准（之后跟 group-activity 事件）
+    set({ groups, groupActivity: Object.fromEntries(groups.flatMap((group) => group.activity ? [[group.id, group.activity]] : [])) });
   } catch (e) {
     set({ notice: t("无法加载群：{error}，稍后自动重试", { error: errText(e) }) });
     groupRetry = setTimeout(() => void loadGroups(), 5000);
@@ -1006,7 +1043,7 @@ async function loadBootstrap(reconnect = false) {
       phase: "ready",
       error: null,
       offline: null,
-      assistants: boot.assistants,
+      assistants: mergeAssistantSummaries(boot.assistants),
       jobs: index(boot.jobs),
       delegations: index(boot.delegations ?? []),
       routines: boot.routines,
@@ -1079,11 +1116,11 @@ export function applyEvent(ev: HobEvent) {
       break;
     }
     case "assistant": {
-      // 正看着这个助手的对话：新回复直接算已读，不亮未读
+      const current = state.assistants.find((a) => a.id === ev.assistant.id);
       const read = ev.assistant.unread > 0 && viewing(ev.assistant.id);
       if (read) void api.markRead(ev.assistant.id).catch(() => {});
-      // 设置页读的是档案里的助手：头像、名字在别处改了也跟着变
-      const assistant = read ? { ...ev.assistant, unread: 0 } : ev.assistant;
+      // 已读请求和实时摘要可能交错：旧摘要不能把本地已经清掉的未读重新带回来。
+      const assistant = mergeAssistantEvent(current, ev.assistant, read);
       const oldModels = state.assistants.find((a) => a.id === assistant.id)?.models;
       if (JSON.stringify(oldModels) !== JSON.stringify(assistant.models)) refreshGroupProfiles(assistant.id);
       set((s) => ({
@@ -1172,7 +1209,6 @@ export function applyEvent(ev: HobEvent) {
       // 通用技能变了（改、删、新建、换进换出）对所有助手都成立：事件里的和已经拉过的清单全部重拉
       void loadAssistantSkills(ev.assistantId);
       for (const id of Object.keys(state.assistantSkills)) if (id !== ev.assistantId) void loadAssistantSkills(id);
-      for (const key of Object.keys(state.visibleSkills)) void loadVisibleSkills(key.slice(0, key.indexOf(":")), key.slice(key.indexOf(":") + 1) || undefined);
       break;
     case "group": {
       // 正看着这个群：新消息直接算已读，不亮未读
@@ -1252,14 +1288,51 @@ function withoutActivity(map: State["groupActivity"], groupId: string, speaker: 
   return { ...map, [groupId]: current };
 }
 
+function latestIso(a?: string, b?: string): string | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return a >= b ? a : b;
+}
+
+/** 已读先在本地生效；服务端请求完成前到达的旧摘要仍按这个时间点合并。 */
+function markAssistantRead(id: string): void {
+  const readAt = new Date().toISOString();
+  set((s) => ({
+    assistants: s.assistants.map((a) => a.id === id ? { ...a, unread: 0, readAt } : a),
+  }));
+  void api.markRead(id).catch(() => {});
+}
+
+function mergeAssistantEvent(current: AssistantSummary | undefined, incoming: AssistantSummary, read: boolean): AssistantSummary {
+  const readAt = read ? new Date().toISOString() : latestIso(current?.readAt, incoming.readAt);
+  const oldMessage = Boolean(current?.readAt && (incoming.last?.at ?? "") <= current.readAt);
+  return {
+    ...incoming,
+    ...(readAt ? { readAt } : {}),
+    ...(read || oldMessage ? { unread: 0 } : {}),
+  };
+}
+
+function mergeAssistantSummaries(incoming: AssistantSummary[]): AssistantSummary[] {
+  return incoming.map((assistant) => {
+    const current = state.assistants.find((item) => item.id === assistant.id);
+    if (!current?.readAt) return assistant;
+    const oldMessage = (assistant.last?.at ?? "") <= current.readAt;
+    return {
+      ...assistant,
+      readAt: latestIso(current.readAt, assistant.readAt),
+      ...(oldMessage ? { unread: 0 } : {}),
+    };
+  });
+}
+
 /** 页面在前台就不推（服务端根据这个决定）。只存内存，SSE 断开会自动清掉。 */
 function reportVisibility(): void {
   void api.visibility(CLIENT_ID, document.visibilityState === "visible").catch(() => undefined);
   // 切回来时正开着的那个助手 / 群攒下的未读算看过了
   const a = state.assistants.find((x) => x.id === state.sel);
   if (a && a.unread > 0 && viewing(a.id)) {
-    set((s) => ({ assistants: s.assistants.map((x) => (x.id === a.id ? { ...x, unread: 0 } : x)) }));
-    void api.markRead(a.id).catch(() => {});
+    markAssistantRead(a.id);
   }
   const g = state.groups.find((x) => x.id === state.gsel);
   if (g && g.unread > 0 && viewingGroup(g.id)) {
@@ -1464,8 +1537,7 @@ export async function select(id: string, nav = true, keepStack = false) {
   }));
   const a = state.assistants.find((x) => x.id === id);
   if (a && a.unread > 0) {
-    set((s) => ({ assistants: s.assistants.map((x) => (x.id === id ? { ...x, unread: 0 } : x)) }));
-    void api.markRead(id).catch(() => {});
+    markAssistantRead(id);
   }
   await Promise.all([loadItems(id), loadProfile(id)]);
 }
@@ -1811,6 +1883,14 @@ export async function answer(approvalId: string, answer: AnswerApprovalBody) {
   }
 }
 
+export function openLoginDesktop(approvalId: string, assistantId: string) {
+  set({ desktopLogin: { approvalId, assistantId } });
+}
+
+export function closeLoginDesktop() {
+  set({ desktopLogin: null });
+}
+
 export async function createDraft(id: string) {
   try {
     await api.createDraft(id);
@@ -1843,6 +1923,64 @@ export async function archiveAssistant(id: string) {
 export async function retryDelegation(id: string) {
   try { await api.retryDelegation(id); }
   catch (e) { set({ notice: t("重新转交失败：{error}", { error: errText(e) }) }); }
+}
+
+async function findGroupItem(groupId: string, matches: (item: GroupItem) => boolean): Promise<boolean> {
+  while (state.gsel === groupId && !(state.groupItems[groupId] ?? []).some(matches) && state.groupPages[groupId]?.hasMore) {
+    const first = state.groupItems[groupId]?.[0]?.id;
+    await loadOlderGroupItems(groupId);
+    if (state.groupPages[groupId]?.error) throw new Error(state.groupPages[groupId].error!);
+    if (!first || state.groupItems[groupId]?.[0]?.id === first) break;
+  }
+  return (state.groupItems[groupId] ?? []).some(matches);
+}
+
+export async function jumpToApproval(approvalId: string) {
+  const approval = state.approvals[approvalId];
+  if (!approval) return;
+  if (approval.source === "job" && approval.jobId) {
+    await jumpToJob(approval.jobId);
+    return;
+  }
+  try {
+    if (approval.groupId) {
+      await selectGroup(approval.groupId, true, false, true);
+      if (!await findGroupItem(approval.groupId, (item) => item.kind === "question" && item.approvalId === approvalId)) {
+        set({ notice: t("未找到对应的问题") });
+        return;
+      }
+    } else {
+      await select(approval.assistantId);
+      if (!await findConversationItem(approval.assistantId, (item) => item.kind === "question" && item.approvalId === approvalId)) {
+        set({ notice: t("未找到对应的问题") });
+        return;
+      }
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const row = document.getElementById(`approval-${approvalId}`);
+      if (row) flashItem(row);
+    }));
+  } catch (e) {
+    set({ notice: t("无法定位问题：{error}", { error: errText(e) }) });
+  }
+}
+
+export function openAssistant(id: string) {
+  const approval = Object.values(state.approvals)
+    .filter((item) => item.status === "pending" && item.assistantId === id && !item.groupId && item.source !== "job")
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+  // 点助手进的是它的对话：有等用户回答的问题卡就停在卡上。任务在等（多半是等助手回复）不算，任务从「任务」那一行进
+  if (approval) void jumpToApproval(approval.id);
+  else void select(id);
+}
+
+export function openGroup(id: string) {
+  const topics = state.groups.filter((group) => group.parentId === id).map((group) => group.id);
+  const approval = Object.values(state.approvals)
+    .filter((item) => item.status === "pending" && item.groupId && (item.groupId === id || topics.includes(item.groupId)) && item.source !== "job")
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+  if (approval) void jumpToApproval(approval.id);
+  else void selectGroup(id);
 }
 
 export async function jumpToHandback(assistantId: string, id: string, forwarded: boolean) {
@@ -1914,20 +2052,6 @@ export async function loadAssistantSkills(id: string) {
   }
 }
 
-const visibleSkillLoads: Record<string, number> = {};
-/** 定时任务的技能下拉要的：本群、自己的、通用（含只读）。 */
-export async function loadVisibleSkills(assistantId: string, groupId?: string) {
-  const key = `${assistantId}:${groupId ?? ""}`;
-  const generation = visibleSkillLoads[key] = (visibleSkillLoads[key] ?? 0) + 1;
-  set((s) => ({ visibleSkills: { ...s.visibleSkills, [key]: { skills: s.visibleSkills[key]?.skills ?? [], loaded: s.visibleSkills[key]?.loaded ?? false, loading: true, error: null } } }));
-  try {
-    const skills = await api.visibleSkills(assistantId, groupId);
-    if (visibleSkillLoads[key] === generation) set((s) => ({ visibleSkills: { ...s.visibleSkills, [key]: { skills, loaded: true, loading: false, error: null } } }));
-  } catch (e) {
-    if (visibleSkillLoads[key] === generation) set((s) => ({ visibleSkills: { ...s.visibleSkills, [key]: { skills: s.visibleSkills[key]?.skills ?? [], loaded: s.visibleSkills[key]?.loaded ?? false, loading: false, error: errText(e) } } }));
-  }
-}
-
 export async function changeAssistantSkill(id: string, name: string, action: "enable" | "disable" | "rollback" | "delete") {
   try {
     const group = state.groups.some((item) => item.id === id);
@@ -1948,11 +2072,10 @@ export async function sedimentJob(id: string) {
 
 /* ---------------- 定时任务 ---------------- */
 
-export async function saveRoutine(id: string, patch: Omit<Partial<Routine>, "skill"> & { skill?: string | null }) {
+export async function saveRoutine(id: string, patch: Partial<Routine>) {
   const before = state.routines.find((r) => r.id === id);
   if (!before) return;
-  const { skill, ...rest } = patch;
-  set((s) => ({ routines: s.routines.map((r) => r.id === id ? { ...r, ...rest, ...(skill !== undefined ? { skill: skill ?? undefined } : {}) } : r) }));
+  set((s) => ({ routines: s.routines.map((r) => r.id === id ? { ...r, ...patch } : r) }));
   try {
     await api.patchRoutine(id, patch);
   } catch (e) {
@@ -1980,9 +2103,9 @@ export async function deleteRoutine(id: string) {
 export async function runRoutine(id: string) {
   try {
     const result = await api.runRoutine(id);
-    if (result?.outcome === "quiet") set({ notice: t("检查过了，没有变化") });
+    if (result?.outcome === "quiet") set({ notice: t("已检查，没有变化") });
     else if (result?.outcome === "failed") set({ notice: t("检查失败：{error}", { error: result.reason ?? t("原因未知") }) });
-    else if (result?.outcome === "notify") set({ notice: t("检查有新内容，已发到对话") });
+    else if (result?.outcome === "notify") set({ notice: t("检查发现新内容，已发送到对话") });
   } catch (e) {
     set({ notice: t("运行失败：{error}", { error: errText(e) }) });
   }
@@ -2073,6 +2196,46 @@ export async function savePinOrder(ids: string[]): Promise<string | null> {
   return message;
 }
 
+export async function saveListOrder(ids: string[]): Promise<string | null> {
+  const isGroup = (id: string) => state.groups.some((group) => group.id === id);
+  const changedAssistants = ids
+    .map((id, listOrder) => ({ id, listOrder }))
+    .filter(({ id }) => !isGroup(id))
+    .filter(({ id, listOrder }) => state.assistants.find((assistant) => assistant.id === id)?.listOrder !== listOrder);
+  const changedGroups = ids
+    .map((id, listOrder) => ({ id, listOrder }))
+    .filter(({ id }) => isGroup(id))
+    .filter(({ id, listOrder }) => state.groups.find((group) => group.id === id)?.listOrder !== listOrder);
+  if (!changedAssistants.length && !changedGroups.length) return null;
+  const beforeAssistants = state.assistants;
+  const beforeGroups = state.groups;
+  set((s) => ({
+    assistants: s.assistants.map((assistant) => {
+      const index = ids.indexOf(assistant.id);
+      return index < 0 ? assistant : { ...assistant, listOrder: index };
+    }),
+    groups: s.groups.map((group) => {
+      const index = ids.indexOf(group.id);
+      return index < 0 ? group : { ...group, listOrder: index };
+    }),
+  }));
+  const results = await Promise.all([
+    ...changedAssistants.map(({ id, listOrder }) => api.patchAssistant(id, { listOrder })),
+    ...changedGroups.map(({ id, listOrder }) => api.patchGroup(id, { listOrder })),
+  ].map((request) => request.then(() => ({ ok: true as const }), (error) => ({ ok: false as const, error }))));
+  const failedAssistantIds = changedAssistants.filter((_, index) => !results[index]?.ok).map((entry) => entry.id);
+  const failedGroupIds = changedGroups.filter((_, index) => !results[changedAssistants.length + index]?.ok).map((entry) => entry.id);
+  if (!failedAssistantIds.length && !failedGroupIds.length) return null;
+  const first = results.find((result) => !result.ok);
+  const message = t("保存失败：{error}", { error: errText(first && !first.ok ? first.error : t("未知错误")) });
+  set((s) => ({
+    assistants: s.assistants.map((assistant) => failedAssistantIds.includes(assistant.id) ? beforeAssistants.find((old) => old.id === assistant.id) ?? assistant : assistant),
+    groups: s.groups.map((group) => failedGroupIds.includes(group.id) ? beforeGroups.find((old) => old.id === group.id) ?? group : group),
+    notice: message,
+  }));
+  return message;
+}
+
 export async function addRule(assistantId: string, text: string, mode: "ask" | "allow"): Promise<string | null> {
   if (state.groups.some((group) => group.id === assistantId)) {
     try { await api.patchGroup(assistantId, { rule: { text, mode } }); await loadGroupProfile(assistantId); return null; }
@@ -2147,8 +2310,8 @@ export async function loadTranscript(jobId: string) {
 }
 
 /** instant：和换对话一起打开，跟着对话直接出现，不再滑入 */
-export function openJob(id: string, round?: number, instant = false) {
-  set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "job", id, round, ...(instant ? { instant } : {}) }) }));
+export function openJob(id: string, round?: number, instant = false, jumpApprovalId?: string) {
+  set((s) => ({ panelStack: pushPage(s.panelStack, { kind: "job", id, round, ...(instant ? { instant } : {}), ...(jumpApprovalId ? { jumpApprovalId } : {}) }) }));
   void loadTranscript(id);
 }
 
@@ -2232,14 +2395,19 @@ export function newAssistant() {
   set({ text: t("我想创建一个专属助手，负责："), nonce: state.nonce + 1, mobile: "chat", sheet: false });
 }
 
-/** 从定时运行记录打开任务所在对话及详情。 */
-export async function jumpToJob(assistantId: string, jobId: string) {
+export async function jumpToJob(assistantOrJobId: string, requestedJobId?: string) {
+  const jobId = requestedJobId ?? assistantOrJobId;
   if (!state.jobs[jobId]) await loadTranscript(jobId);
   const job = state.jobs[jobId];
   if (!job) return;
+  const approval = Object.values(state.approvals).find((item) => item.status === "pending" && item.jobId === jobId);
+  if (!requestedJobId) {
+    openJob(jobId, undefined, false, approval?.id);
+    return;
+  }
   if (job.groupId && state.groups.some((group) => group.id === job.groupId)) await selectGroup(job.groupId, true, true, true);
-  else if (state.assistants.some((assistant) => assistant.id === assistantId)) await select(assistantId, true, true);
-  openJob(jobId);
+  else if (state.assistants.some((assistant) => assistant.id === assistantOrJobId)) await select(assistantOrJobId, true, true);
+  openJob(jobId, undefined, false, approval?.id);
 }
 
 export function openRoutine(id: string) {
@@ -2359,7 +2527,7 @@ export async function deleteKnowledgeCollection(id: string) {
     const { deleted } = await api.deleteKnowledgeCollection(id);
     if (state.knowledge.category === id) setKnowledgeFilter({ category: "all" });
     else await loadKnowledge(false, true);
-    set({ notice: deleted ? t("已删除知识库，一起删掉 {n} 个文件", { n: deleted }) : t("已删除知识库") });
+    set({ notice: deleted ? t("已删除知识库，同时删除 {n} 个文件", { n: deleted }) : t("已删除知识库") });
   } catch (e) { set({ notice: t("删除失败：{error}", { error: errText(e) }) }); }
 }
 export async function patchKnowledgeEntry(id: string, patch: { name?: string; collections?: string[] }) {
@@ -2390,7 +2558,7 @@ export async function jumpToItem(assistantId: string, itemId: string) {
       const el = Array.from(document.querySelectorAll<HTMLElement>("[data-item-id]")).find((node) => node.dataset.itemId === itemId);
       if (!el) {
         if (performance.now() < deadline) requestAnimationFrame(locate);
-        else set({ notice: t("没能定位到这条消息") });
+        else set({ notice: t("未能定位到这条消息") });
         return;
       }
       flashItem(el);
@@ -2424,8 +2592,23 @@ export function toggleNowWide() {
   set((s) => ({ nowWide: !s.nowWide }));
 }
 
+export function toggleSideCollapsed() {
+  const sideCollapsed = !state.sideCollapsed;
+  saveUi({ sideCollapsed });
+  set({ sideCollapsed });
+}
+
+export function setNowWide(nowWide: boolean) {
+  set({ nowWide });
+}
+
+export function showNowWide() {
+  set({ collapsed: false, nowWide: true, sheet: false });
+}
+
 export function collapsePanel() {
-  set({ collapsed: true, sheet: false });
+  closePanelPages();
+  set({ collapsed: true, nowWide: false, sheet: false });
 }
 
 export function expandPanel() {
@@ -2434,6 +2617,16 @@ export function expandPanel() {
 
 export function setQuery(query: string) {
   set({ query });
+}
+
+export function setHomeFilter(homeFilter: State["homeFilter"]) {
+  localStorage.setItem(HOME_FILTER_KEY, homeFilter);
+  set({ homeFilter });
+}
+
+export function setHomeOrder(homeOrder: State["homeOrder"]) {
+  localStorage.setItem(HOME_ORDER_KEY, homeOrder);
+  set({ homeOrder });
 }
 
 export function setMobile(page: MobilePage) {

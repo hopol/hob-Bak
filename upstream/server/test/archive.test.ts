@@ -15,7 +15,6 @@ function addAssistant(hob: TestHob, id: string, extra: Partial<Assistant> = {}):
     pinned: false,
     hidden: false,
     notify: true,
-    instructions: "",
     createdAt: new Date().toISOString(),
     ...extra,
   };
@@ -42,8 +41,7 @@ describe("归档助手", () => {
   it("目录和定时进归档，定时停掉，什么都不转给主助手", async () => {
     const hob = makeHob();
     try {
-      const assistant = addAssistant(hob, "writer", { instructions: "先列要点，再展开" });
-      hob.runtime.settings.setDesktop(hob.runtime.settings.get().revision, { url: "", enabled: false, publicAssistants: ["hob", "writer"] });
+      const assistant = addAssistant(hob, "writer");
       const now = new Date().toISOString();
       hob.runtime.store.saveRules("writer", [{ id: "r-w1", text: "发布公众号", mode: "ask", changedAt: now }]);
       const routine = hob.runtime.routines.create({
@@ -58,7 +56,6 @@ describe("归档助手", () => {
       await hob.runtime.router.waitIdle("writer");
       expect(existsSync(hob.runtime.store.routerFile("writer"))).toBe(true);
       addJob(hob, "t-old", "writer", "done");
-      const hobBefore = hob.runtime.store.assistant("hob")!;
       const removed: string[] = [];
       hob.runtime.bus.subscribe((event) => { if (event.type === "routine_removed") removed.push(event.id); });
 
@@ -67,15 +64,13 @@ describe("归档助手", () => {
 
       // 助手没了，定时停掉、从列表里拿掉
       expect(hob.runtime.store.assistant("writer")).toBeUndefined();
-      expect(hob.runtime.settings.settings.desktop?.publicAssistants).toEqual(["hob"]);
       expect(hob.runtime.store.routine(routine.id)).toBeUndefined();
       expect(hob.runtime.routines.nextRuns(routine.id)).toHaveLength(0);
       expect(removed).toEqual([routine.id]);
 
-      // 主助手原样：没有规则、定时、补充说明，也没在它的对话里写东西
+      // 主助手原样：没有规则、定时，也没在它的对话里写东西
       expect(hob.runtime.store.rules("hob")).toHaveLength(0);
       expect(hob.runtime.router.profile("hob").routines).toHaveLength(0);
-      expect(hob.runtime.store.assistant("hob")!.instructions).toBe(hobBefore.instructions);
       expect(hob.runtime.router.items("hob").items.filter((item) => item.kind === "note")).toHaveLength(0);
 
       // 归档：整个目录移进 archive/assistants/<id>-<时间>/，档案、规则、对话、定时都在

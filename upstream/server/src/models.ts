@@ -128,7 +128,7 @@ export class ModelCatalog {
 export function noteOf(entry: RosterEntry, catalog: ModelCatalog): string {
   const info = catalog.find(entry.ref);
   const scores = entry.scores ?? guessModelScores(info ?? { id: entry.ref.split("/").at(-1) ?? entry.ref, name: "", reasoning: false });
-  return [scoreSummary(scores), ...(info?.input.includes("image") ? ["能看图"] : []), ...(info ? [`上下文 ${contextText(info.contextWindow)}`] : []), ...(entry.note.trim() ? [`补充：${entry.note.trim()}`] : [])].join(" · ");
+  return [scoreSummary(scores), ...(info?.input.includes("image") ? ["可查看图片"] : []), ...(info ? [`上下文 ${contextText(info.contextWindow)}`] : []), ...(entry.note.trim() ? [`补充：${entry.note.trim()}`] : [])].join(" · ");
 }
 
 /** 助手的名字：注册表里有名字就用，没有就用 ref。 */

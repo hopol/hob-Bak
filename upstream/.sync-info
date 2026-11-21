@@ -1,5 +1,5 @@
-commit=7c5d5652f068a048c9cd65f9859a1c21e1453ed5
-timestamp=2026-11-16T09:14:08Z
+commit=a67893b92c0d6af8705de86649765e8316f2f232
+timestamp=2026-11-21T09:25:06Z
 upstream_url=https://github.com/FFatTiger/hob
 upstream_branch=main
-version=1.7.0
+version=1.10.0

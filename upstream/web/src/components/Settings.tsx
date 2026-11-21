@@ -70,7 +70,6 @@ import {
   loadMcp,
   loadDesktop,
   saveDesktop,
-  saveDesktopPublic,
   testDesktop,
   putMcpServer,
   patchMcpServer,
@@ -309,7 +308,7 @@ function RulesSection() {
 
   const change = (next: { id?: string; text: string; mode: Rule["mode"] }[]) => saveRules(next);
   return <>
-    <PageHead title={t("全局规则")} desc={t("所有助手和任务都遵守的规则。「执行前确认」的事项，助手执行前会征求你的确认；「一律照做」是做事的规则。每个助手自己的规则在它的档案里修改。")} />
+    <PageHead title={t("全局规则")} desc={t("所有助手和任务都遵守的规则。「执行前确认」的规则，助手执行前会征求你的确认；「一律照做」表示无需确认即可执行。每个助手自己的规则在其档案中修改。")} />
     {error ? <div className="badline" role="status">{error}</div> : null}
     {rules === null ? error ? <button className="hob-btn" onClick={() => void loadRules()}>{t("重试")}</button> : <Empty><DelayedText text={t("正在读取全局规则…")} /></Empty> :
       ([{ mode: "ask", label: t("执行前确认") }, { mode: "allow", label: t("一律照做") }] as const).map(({ mode, label }) => <Group key={mode}>
@@ -356,11 +355,9 @@ function DesktopSection() {
   const [token, setToken] = useState("");
   const [enabled, setEnabled] = useState(false);
   const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
-  const [message, setMessage] = useState<{ ok: boolean; text: string; public?: boolean } | null>(null);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [showDesktop, setShowDesktop] = useState<"hob" | "public" | null>(null);
-  const [publicAssistants, setPublicAssistants] = useState<string[]>([]);
-  const assistants = useApp().assistants;
+  const [showDesktop, setShowDesktop] = useState(false);
 
   useEffect(() => {
     void loadDesktop()
@@ -368,7 +365,6 @@ function DesktopSection() {
         setView(v);
         setUrl(v.url);
         setEnabled(v.enabled);
-        setPublicAssistants(v.publicAssistants);
       })
       .catch((e: Error) => setMessage({ ok: false, text: t("无法读取云桌面配置：{error}", { error: e.message }) }));
   }, []);
@@ -393,20 +389,6 @@ function DesktopSection() {
     }
   }
 
-  async function savePublic() {
-    if (!view) return;
-    setBusy(true);
-    setMessage(null);
-    try {
-      const next = await saveDesktopPublic(view.revision, publicAssistants);
-      setView(next);
-      setPublicAssistants(next.publicAssistants);
-      setMessage({ ok: true, text: t("已保存"), public: true });
-    } catch (error) {
-      setMessage({ ok: false, text: error instanceof Error ? error.message : String(error), public: true });
-    } finally { setBusy(false); }
-  }
-
   async function testConnection() {
     setBusy(true);
     setTest(null);
@@ -429,7 +411,7 @@ function DesktopSection() {
 
   return (
     <>
-      <PageHead title={t("云桌面")} desc={t("云桌面需要单独部署。登录 Hob 的人可以观看和接管桌面。")} />
+      <PageHead title={t("云桌面")} desc={t("云桌面需要单独部署。登录 Hob 的用户可以观看和接管桌面。")} />
       {deployed ? (
         <Group>
           <div className="note">{t("由部署配置（compose 的 desktop 服务）")}</div>
@@ -442,7 +424,7 @@ function DesktopSection() {
             <div className="sline">{view?.enabled ? t("已启用") : t("未启用")}</div>
             <div className="ctl">
               <button className="hob-btn" disabled={busy || !view} onClick={() => void testConnection()}>{t("测试连接")}</button>
-              <button className="hob-btn" disabled={!view?.enabled} onClick={() => setShowDesktop("hob")}>{t("打开桌面")}</button>
+              <button className="hob-btn" disabled={!view?.enabled} onClick={() => setShowDesktop(true)}>{t("打开桌面")}</button>
               {statusLine}
             </div>
           </div>
@@ -454,7 +436,7 @@ function DesktopSection() {
             <div className="ctl">
               <button className={`tog${enabled ? "" : " off"}`} aria-label={t("启用云桌面")} aria-pressed={enabled} disabled={!view} onClick={() => setEnabled(!enabled)} />
               <span className="note">
-                {(enabled ? t("已启用。登录 Hob 的人可以观看桌面，接管后可以操作。") : t("未启用。界面不打开桌面，任务也不能使用桌面。")) + (enabledPending ? t("（保存后生效）") : "")}
+                {(enabled ? t("已启用。登录 Hob 的用户可以观看桌面，接管后可以操作。") : t("未启用。界面不打开桌面，任务也不能使用桌面。")) + (enabledPending ? t("（保存后生效）") : "")}
               </span>
             </div>
           </Group>
@@ -471,9 +453,9 @@ function DesktopSection() {
               </div>
               <div className="sfoot">
                 <button className="hob-btn" disabled={busy || !view} onClick={() => void testConnection()}>{t("测试连接")}</button>
-                <button className="hob-btn" disabled={!view?.enabled} onClick={() => setShowDesktop("hob")}>{t("打开桌面")}</button>
+                <button className="hob-btn" disabled={!view?.enabled} onClick={() => setShowDesktop(true)}>{t("打开桌面")}</button>
                 {statusLine}
-                {message && !message.public ? <span className={message.ok ? "okline" : "badline"} role="status">{message.text}</span> : null}
+                {message ? <span className={message.ok ? "okline" : "badline"} role="status">{message.text}</span> : null}
                 <span className="sp" />
                 <button className="hob-btn hob-btn-primary" disabled={busy || !view} onClick={() => void save()}>{t("保存")}</button>
               </div>
@@ -482,25 +464,7 @@ function DesktopSection() {
           </Group>
         </>
       )}
-      <Group>
-        <div className="lbl">{t("公共屏幕")}</div>
-        <div className="formcard">
-          <div className="plist">
-            {assistants.map((assistant) => <label key={assistant.id}>
-              <input type="checkbox" className="rcheck" checked={publicAssistants.includes(assistant.id)} disabled={busy || !view} onChange={(event) => setPublicAssistants((ids) => event.target.checked ? [...ids, assistant.id] : ids.filter((id) => id !== assistant.id))} />
-              <span>{assistant.name}</span>
-            </label>)}
-          </div>
-          <div className="sfoot">
-            <button className="hob-btn" disabled={!view?.enabled || busy} onClick={() => setShowDesktop("public")}>{t("打开公共屏幕")}</button>
-            {message?.public ? <span className={message.ok ? "okline" : "badline"} role="status">{message.text}</span> : null}
-            <span className="sp" />
-            <button className="hob-btn hob-btn-primary" disabled={!view || busy} onClick={() => void savePublic()}>{t("保存")}</button>
-          </div>
-        </div>
-        <div className="note">{t("用于登录你自己的账号，勾选的助手可以使用。受 Google 限制，目前无法登录 Google 账号。")}</div>
-      </Group>
-      {showDesktop ? <Suspense fallback={null}><DesktopScreen initialScreen={showDesktop} takeOver={showDesktop === "public"} onClose={() => setShowDesktop(null)} /></Suspense> : null}
+      {showDesktop ? <Suspense fallback={null}><DesktopScreen initialScreen="hob" takeOver onClose={() => setShowDesktop(false)} /></Suspense> : null}
     </>
   );
 }
@@ -809,7 +773,7 @@ function ThinkingLevels({
                   className="ttext"
                   value={row.text}
                   placeholder={t("默认")}
-                  title={t("留空就按服务商协议的默认值发")}
+                  title={t("留空则按服务商协议的默认值发送")}
                   onChange={(e) =>
                     edit(
                       rows.map((item) => (item.level === row.level ? { ...item, text: e.target.value } : item)),
@@ -820,11 +784,11 @@ function ThinkingLevels({
                   disabled={busy || disabled}
                 />
                 {row.level === "off" ? (
-                  <span className="rremove still" title={t("关闭这一档不能删")} aria-hidden />
+                  <span className="rremove still" title={t("「关闭」这一档不能删除")} aria-hidden />
                 ) : (
                   <button
                     className="rremove"
-                    title={t("删掉「{level}」", { level: thinkingText(row.level) })}
+                    title={t("删除「{level}」", { level: thinkingText(row.level) })}
                     onClick={() => save(rows.filter((item) => item.level !== row.level))}
                     disabled={busy || disabled}
                   >
@@ -835,7 +799,7 @@ function ThinkingLevels({
             ))}
           </div>
           <div className="ctl" style={{ gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-            <Select value={pick} onChange={(value) => setPick(value as ThinkingLevel | "")} disabled={busy || disabled || !rest.length} aria-label={t("添加思考档")} options={[{ value: "", label: rest.length ? t("选择档位") : t("七个档都用上了") }, ...rest.map((level) => ({ value: level, label: thinkingText(level) }))]} />
+            <Select value={pick} onChange={(value) => setPick(value as ThinkingLevel | "")} disabled={busy || disabled || !rest.length} aria-label={t("添加思考档")} options={[{ value: "", label: rest.length ? t("选择档位") : t("七个档位均已使用") }, ...rest.map((level) => ({ value: level, label: thinkingText(level) }))]} />
             <button
               className="hob-btn"
               onClick={() => {
@@ -855,7 +819,7 @@ function ThinkingLevels({
             ) : null}
           </div>
           <div className="note">
-            {t("留空就按服务商协议的默认值发；填了才按你写的发（例如 DeepSeek 的「中」填 high）。关闭这一档不能删，其余档删掉后不再出现在思考强度里。")}
+            {t("留空则按服务商协议的默认值发送；填写后按所填的值发送（例如 DeepSeek 的「中」填 high）。「关闭」这一档不能删除，其余档删除后不再出现在思考强度中。")}
           </div>
           {error ? <div className="badline">{error}</div> : null}
           {saved ? <div className="okline">{t("已保存思考档")}</div> : null}
@@ -1909,7 +1873,7 @@ function ModelUseEditor({ entry, info, update, collapsible = false }: { entry: R
     if (!saved || entry.scoresConfirmed !== true || saved.smart !== next.smart || saved.cost !== next.cost || saved.speed !== next.speed) save(next);
   };
   if (!expanded) return <div className="ctl"><span className="note">{scoreSummary(entry.scores ?? scores)}</span><button className="hob-btn" onClick={() => setExpanded(true)}>{t("修改")}</button></div>;
-  const names = { smart: t("聪明程度"), cost: t("成本"), speed: t("速度") } as const;
+  const names = { smart: t("智能程度"), cost: t("成本"), speed: t("速度") } as const;
   return (
     <div className="group">
       <div className="note">{t("Hob 按用途选择分派任务的模型。")} {initial.unconfirmed ? t("数值按模型名称推测，请确认。") : ""}</div>
@@ -2164,7 +2128,7 @@ function AddModels({ view }: { view: ModelsView }) {
   return (
     <>
       <SubBack />
-      <PageHead title={t("添加模型")} desc={t("「服务商」提供的全部模型，打勾的已在可用模型中。")} />
+      <PageHead title={t("添加模型")} desc={t("「服务商」提供的全部模型，已勾选的已在可用模型中。")} />
       <SaveFeedback message={feedback.message} toast />
       {view.models.length === 0 ? (
         <Group>
@@ -2362,7 +2326,7 @@ function PushSection() {
         <div className="lbl">{t("本机推送")}</div>
         {supported ? (
           <div className="ctl">
-            <span style={{ fontSize: 14 }}>{t("需要确认或任务受阻时推送给我")}</span>
+            <span style={{ fontSize: 14 }}>{t("需要我回答或做完时通知我")}</span>
             <span className="sp" />
             <button
               className={`tog${on ? "" : " off"}`}
@@ -2379,7 +2343,7 @@ function PushSection() {
             {t("浏览器已拒绝通知权限：点击地址栏左侧的图标 → 通知 → 允许，然后刷新本页并重新开启。")}
           </div>
         ) : null}
-        <div className="note">{t("页面在前台时不推送，页面不在前台或锁屏时才推送。各助手还需在助手设置中开启「需要确认时通知我」。")}</div>
+        <div className="note">{t("页面在前台时不推送，页面不在前台或锁屏时才推送。各助手还需在助手设置中开启「需要我回答或做完时通知我」。")}</div>
         <div className="note">{t("在 iPhone 上需先将 Hob 添加到主屏幕，再从主屏幕打开才能接收推送。")}</div>
       </Group>
 
@@ -2629,7 +2593,7 @@ function MemorySection() {
     <>
       <PageHead
         title={t("记忆")}
-        desc={t("所有助手共用同一份长期记忆。各助手需要知道的专属事实写在助手设置的「补充说明」中。")}
+        desc={t("所有助手共用同一份长期记忆。")}
       />
 
       <Group>
@@ -3049,11 +3013,11 @@ function SkillDetail({ skill, onDeleted, onRolledBack }: { skill: SkillView | un
   const [error, setError] = useState<string | null>(null);
   if (!skill) return <><SubBack label={t("技能")} /><div className="note">{t("技能不存在或已删除。")}</div></>;
   const remove = async () => {
-    if (!window.confirm(t("把技能「{name}」移到归档？它不再出现在技能列表里，文件还在归档目录。", { name: skill.title || skill.name }))) return;
+    if (!window.confirm(t("把技能「{name}」移到归档？它将不再出现在技能列表中，文件仍保留在归档目录。", { name: skill.title || skill.name }))) return;
     try { await deleteSkill(skill.name); onDeleted(t("已把「{name}」移到归档", { name: skill.title || skill.name })); } catch (e) { setError(errText(e)); }
   };
   const rollback = async () => {
-    if (!window.confirm(t("把技能「{name}」回退到上一版？现在的这一版会留在历史里。", { name: skill.title || skill.name }))) return;
+    if (!window.confirm(t("把技能「{name}」回退到上一版？当前版本将保留在历史记录中。", { name: skill.title || skill.name }))) return;
     try { await rollbackGeneralSkill(skill.name); setError(null); onRolledBack(); } catch (e) { setError(errText(e)); }
   };
   return (
@@ -3554,7 +3518,7 @@ function McpDetail({
                     );
                   })}
                 </div>
-                <div className="note">{t("关掉的工具不声明给模型；改动对之后新开的任务生效。")}</div>
+                <div className="note">{t("已关闭的工具不声明给模型；改动对新创建的任务生效。")}</div>
               </>
             ) : (
               <div className="note">{t("服务已连接，但没有提供工具。")}</div>
@@ -3572,7 +3536,7 @@ function McpDetail({
         <button className="hob-btn hob-btn-danger" disabled={busy} onClick={() => void remove()}>{t("删除服务")}</button>
         {error ? <div className="badline" role="alert">{error}</div> : null}
       </Group>
-      <div className="note">{t("环境变量和请求头的值不回显；留空表示沿用已保存的值。删除整行表示删掉这个值。")}</div>
+      <div className="note">{t("环境变量和请求头的值不回显；留空表示沿用已保存的值。删除整行表示移除该值。")}</div>
     </>
   );
 }

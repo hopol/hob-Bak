@@ -85,13 +85,13 @@ export function JobOverlay({ embedded = false, page }: { embedded?: boolean; pag
   return (
     <div className={`${embedded ? "jd-embedded" : "jd-overlay"}${presence.leaving ? " leaving" : ""}`} onClick={embedded ? undefined : closePanelPages}>
       <div className="jd" onClick={(event) => event.stopPropagation()}>
-        {shown.kind === "jobs" ? <><PanelHead className="jdhead" title={<span className="t">{t("任务记录")}</span>} close /><WorklogPage /></> : <JobDetail key={`${shown.id}-${shown.round ?? "default"}`} id={shown.id} round={shown.round} />}
+        {shown.kind === "jobs" ? <><PanelHead className="jdhead" title={<span className="t">{t("任务记录")}</span>} close /><WorklogPage /></> : <JobDetail key={`${shown.id}-${shown.round ?? "default"}`} id={shown.id} round={shown.round} jumpApprovalId={shown.jumpApprovalId} />}
       </div>
     </div>
   );
 }
 
-function JobDetail({ id, round }: { id: string; round?: number }) {
+function JobDetail({ id, round, jumpApprovalId }: { id: string; round?: number; jumpApprovalId?: string }) {
   const s = useApp();
   const job = s.jobs[id];
   const steps = s.steps[id];
@@ -100,7 +100,7 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
   const pinned = useRef(round === undefined && (job ? active(job) : true));
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [showDesktop, setShowDesktop] = useState(false);
-  // 看桌面看的是这个任务所属助手的那块屏幕，不是默认的主助手
+  // 查看桌面看的是这个任务所属助手的那块屏幕，不是默认的主助手
   const desktop = useDesktopScreens();
   // 续做过的任务：看第几轮。没点过就跟着最新一轮；从对话里的卡点进来，就是那张卡那一轮
   const [picked, setPicked] = useState(round);
@@ -130,6 +130,15 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
     }
   }, [steps?.length, steps?.[steps.length - 1]?.id]);
 
+  useEffect(() => {
+    if ((!jumpApprovalId && job?.status !== "waiting") || !steps?.length) return;
+    const timer = window.setTimeout(() => {
+      const target = body.current?.querySelector<HTMLElement>('[data-job-approval="true"]');
+      if (target) target.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "center" });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [jumpApprovalId, job?.status, steps?.length]);
+
   if (!job) {
     return (
       <div className="jdbody">
@@ -153,7 +162,7 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
     <>
       <PanelHead className="jdhead" title={<span className="t">{t("任务")}</span>} close>
         {job.status === "done" ? <button className="hob-btn hob-btn-compact" disabled={job.sediment?.status === "running"} onClick={() => { void sedimentJob(job.id); }}><Icon name="mem" size={14} />{job.sediment?.status === "running" ? t("正在沉淀…") : t("沉淀成技能")}</button> : null}
-        {steps?.some((step) => step.name?.startsWith("browser_") || step.name?.startsWith("desktop_")) ? <button className="hob-btn hob-btn-compact" onClick={() => setShowDesktop(true)}><Icon name="pointer" size={14} />{t("看桌面")}</button> : null}
+        {steps?.some((step) => step.name?.startsWith("browser_") || step.name?.startsWith("desktop_")) ? <button className="hob-btn hob-btn-compact" onClick={() => setShowDesktop(true)}><Icon name="pointer" size={14} />{t("查看桌面")}</button> : null}
         <button className="hob-icon-btn fp-act fp-wide-btn" title={t("切换全宽")} onClick={togglePreviewFull}>
           <Icon name={full ? "shrink" : "expand"} size={17} />
         </button>
@@ -223,7 +232,7 @@ function JobDetail({ id, round }: { id: string; round?: number }) {
 function AfterList({ ids }: { ids: string[] }) {
   const s = useApp();
   return <>
-    <div className="lbl">{t("要等的")}</div>
+    <div className="lbl">{t("等待的任务")}</div>
     <div className="jd-files">
       {ids.map((id) => {
         const before = s.jobs[id];
@@ -288,7 +297,7 @@ function ReplyBox({ job }: { job: Job }) {
       <div className="jd-comp">
         <input
           value={text}
-          placeholder={active(job) ? t("补充说明或更正方向") : t("接着说…")}
+          placeholder={active(job) ? t("补充说明或更正方向") : t("继续输入…")}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
             event.stopPropagation();
@@ -314,11 +323,19 @@ function Step({ step, cwd }: { step: StepRow; cwd?: string }) {
   const content = useLeave(open, 180);
 
   if (step.kind === "text") {
+    if (step.from === "hob") {
+      const minutes = step.args?.minutes;
+      return (
+        <div className="jd-reminder">
+          {typeof minutes === "number" ? t("已运行 {minutes} 分钟，超过预计的 {expect} 分钟，已提醒任务整理结果", { minutes, expect: String(step.args?.expect ?? "") }) : step.text}
+        </div>
+      );
+    }
     if (step.from === "user") {
       return (
         <div className={`jd-mine${step.queued ? " queued" : ""}`}>
           {step.text}
-          {step.queued ? <div className="jd-mine-note">{t("已送达，当前这一步做完后读取")}</div> : null}
+          {step.queued ? <div className="jd-mine-note">{t("已送达，当前步骤完成后读取")}</div> : null}
         </div>
       );
     }
@@ -333,7 +350,7 @@ function Step({ step, cwd }: { step: StepRow; cwd?: string }) {
   const title = step.title ?? step.name ?? "";
   const parts = titleParts(title);
   return (
-    <div className={`jd-tool${step.isError ? " bad" : ""}${open ? " open" : ""}`}>
+    <div className={`jd-tool${step.isError ? " bad" : ""}${open ? " open" : ""}`} data-job-approval={step.name === "ask_user" ? "true" : undefined}>
       <button className="jd-tool-head" onClick={() => setOpen((value) => !value)}>
         <span className="ico">
           {step.running ? (

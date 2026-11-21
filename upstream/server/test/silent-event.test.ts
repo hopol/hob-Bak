@@ -174,7 +174,7 @@ describe("系统事件那一轮可以只回 NO_REPLY", () => {
     const hob = makeHob({}, { memory: "off", tokensPerSecond: 20 });
     try {
       const base = hob.runtime.store.assistant("hob")!;
-      hob.runtime.store.saveAssistant({ ...base, id: "ops", name: "服务器", duty: "机器", primary: false, pinned: false, sprite: "page", instructions: "" });
+      hob.runtime.store.saveAssistant({ ...base, id: "ops", name: "服务器", duty: "机器", primary: false, pinned: false, sprite: "page" });
       const group = hob.runtime.groups.create({ name: "家里机器", purpose: "机器上的事", ownerId: "hob", members: ["hob", "ops"] });
       hob.faux.setResponses([
         fauxAssistantMessage([fauxText("我先看一下它在做什么，这一步要一会儿。"), fauxToolCall("set_rule", { text: "重启前先问我", mode: "ask" })], { stopReason: "toolUse" }),
@@ -221,7 +221,7 @@ describe("系统事件那一轮可以只回 NO_REPLY", () => {
     const hob = makeHob({}, { memory: "off" });
     try {
       const base = hob.runtime.store.assistant("hob")!;
-      hob.runtime.store.saveAssistant({ ...base, id: "ops", name: "服务器", duty: "机器", primary: false, pinned: false, sprite: "page", instructions: "" });
+      hob.runtime.store.saveAssistant({ ...base, id: "ops", name: "服务器", duty: "机器", primary: false, pinned: false, sprite: "page" });
       const group = hob.runtime.groups.create({ name: "家里机器", purpose: "机器上的事", ownerId: "hob", members: ["hob", "ops"] });
       hob.faux.setResponses([
         fauxAssistantMessage([fauxText("@服务器 先看一眼"), fauxToolCall("set_rule", { text: "重启前先问我", mode: "ask" })], { stopReason: "toolUse" }),

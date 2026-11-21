@@ -35,8 +35,8 @@ describe("知识库查内容", () => {
       expect((await tool.execute("x", { query: "绝对不存在" })).content[0].text).toBe("（只按关键词查）\n知识库里没有找到相关内容。");
       bind([other.id]);
       expect((await tool.execute("x", { query: "每日巡检", collection: "运维" })).content[0].text).toBe("（只按关键词查）\n知识库里没有找到相关内容。");
-      expect(activityLabel("search_knowledge", { query: "每日巡检" })).toBe("正在查知识库：每日巡检");
-      expect(toolTitle("search_knowledge", { query: "每日巡检" })).toBe("查知识库：每日巡检");
+      expect(activityLabel("search_knowledge", { query: "每日巡检" })).toBe("正在搜索知识库：每日巡检");
+      expect(toolTitle("search_knowledge", { query: "每日巡检" })).toBe("搜索知识库：每日巡检");
     } finally { hob.close(); }
   });
 
@@ -97,7 +97,7 @@ describe("知识库查内容", () => {
       bind([collection.id]);
       hob.faux.setResponses([text("好")]);
       await hob.runtime.router.send("hob", { text: "每日巡检怎么做" }); await hob.runtime.router.waitIdle("hob");
-      expect(search).not.toHaveBeenCalled(); expect(events).not.toContain("正在查知识库");
+      expect(search).not.toHaveBeenCalled(); expect(events).not.toContain("正在搜索知识库");
       vectorOn(hob);
       const result = { entry, chunk: { index: 0, heading: "手册.md › 备份", text: "每日巡检需要检查备份状态。" }, score: 0.9 };
       search.mockImplementation(async (query) => query.includes("巡检") ? [result] : []);
@@ -107,7 +107,7 @@ describe("知识库查内容", () => {
       expect(JSON.stringify(state.session!.messages)).toContain(`#k/${entry.id}/0`);
       expect(hob.runtime.router.items("hob").items).toContainEqual(expect.objectContaining({ id: item.id, text: "每日巡检怎么做" }));
       expect(search).toHaveBeenCalledWith("每日巡检怎么做", [collection.id], { limit: 3, gate: true });
-      expect(events).toContain("正在查知识库");
+      expect(events).toContain("正在搜索知识库");
       search.mockClear();
       hob.faux.setResponses([text("好"), text("好")]);
       await hob.runtime.router.send("hob", { text: "继续" }); await hob.runtime.router.waitIdle("hob");
@@ -118,7 +118,7 @@ describe("知识库查内容", () => {
       vi.spyOn(hob.runtime.router, "event").mockResolvedValue();
       hob.faux.setResponses([text("收到")]);
       search.mockClear();
-      const delegation = await hob.runtime.delegations.start("ops", "每日巡检怎么做");
+      const delegation = await hob.runtime.delegations.start("hob", "ops", "每日巡检怎么做");
       await waitFor(() => Boolean(hob.runtime.store.delegation(delegation.id)?.turnFinished));
       expect(search).toHaveBeenCalledWith("每日巡检怎么做", [collection.id], { limit: 3, gate: true });
       const ops = await hob.runtime.router.ensure("ops");

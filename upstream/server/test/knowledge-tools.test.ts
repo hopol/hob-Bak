@@ -33,8 +33,8 @@ describe("find_knowledge", () => {
       expect((await tool.execute("x", { days: 0 })).isError).toBe(true);
       const read = buildRouterTools(hob.runtime, "hob").find((tool) => tool.name === "read")!;
       expect((await read.execute("x", { path: entry.path })).content[0].text).toContain("重要关键词资料");
-      expect(activityLabel("find_knowledge", { query: "关键词" })).toBe("正在找资料：关键词");
-      expect(activityLabel("find_knowledge")).toBe("正在找资料");
+      expect(activityLabel("find_knowledge", { query: "关键词" })).toBe("正在查找资料：关键词");
+      expect(activityLabel("find_knowledge")).toBe("正在查找资料");
     } finally { vi.restoreAllMocks(); hob.close(); }
   });
 

@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ApprovalOption } from "../../shared/types.ts";
 import { generateImage } from "./image.ts";
@@ -13,12 +13,12 @@ export function registerReportTool(runtime: HobRuntime, jobId: string, sediment 
   return {
     name: "report",
     label: "提交结果",
-    description: "交结果。做完了、做不下去了，或者要用户拍板时调用。",
+    description: "提交结果。完成了、无法继续，或者需要用户决定时调用。",
     parameters: Type.Object({
       outcome: Type.Unsafe<"done" | "stuck" | "need_approval">(
-        Type.String({ description: "done 要的结果拿到了；stuck 要的结果没拿到（做不下去或没做完），写明做到哪、缺什么；need_approval 要用户拍板才能往下做，写明要定什么。" }),
+        Type.String({ description: "done 要的结果拿到了；stuck 要的结果没拿到（无法继续或未完成），写明做到哪、受阻原因、缺什么；need_approval 需要用户决定才能继续，写明要决定什么。" }),
       ),
-      result: Type.String({ description: "完整结果，按这个顺序写：结论；做了什么；验证了什么、怎么验证的；没验证或不确定的；需要用户决定的。带上数据、链接和文件路径，写给派活的助手。" }),
+      result: Type.String({ description: "完整结果，按这个顺序写：结论；做了什么；验证了什么、怎么验证的；没验证或不确定的；需要用户决定的。带上数据、链接和文件路径，写给分派任务的助手。" }),
       files: Type.Optional(Type.Array(Type.String(), { description: "交给助手的文件（绝对路径），比如要给用户看的图。" })),
     }),
     execute: async (_id, params: any) => {
@@ -93,7 +93,7 @@ export function registerAskTool(runtime: HobRuntime, jobId: string, sediment = f
     }),
     execute: async (_id, params: any) => {
       // 沉淀这一轮问不了：答案要现等，先把做法里的判断点写进技能
-      if (sediment) return ok("沉淀时不用问：拿不准的地方，在技能里写成执行前要确认的一步。");
+      if (sediment) return ok("沉淀时无需询问：拿不准的地方，在技能里写成执行前要确认的一步。");
       const labels: { label: string }[] = Array.isArray(params.options) ? params.options : [];
       if (labels.length < 2 || labels.length > 3) {
         return { content: [{ type: "text" as const, text: "选项要 2 到 3 个。" }], details: undefined, isError: true };
@@ -106,6 +106,33 @@ export function registerAskTool(runtime: HobRuntime, jobId: string, sediment = f
         ...(recommended ? { recommended } : {}),
       });
       // 用户可能没选给出的选项，而是自己写了一段：answer 已经是回给模型的整句
+      return ok(answer);
+    },
+  };
+}
+
+/** Worker 的登录交接：先把等待交给助手，由助手决定是否向用户出 ask_login 卡。 */
+export function registerAskLoginTool(runtime: HobRuntime, jobId: string, sediment = false): ToolDefinition<any, any> {
+  return {
+    name: "ask_login",
+    label: "请用户登录",
+    description: "请用户在桌面上登录一个网站：碰到登录页、两步验证、验证码这类只能用户本人完成的步骤时用。会出一张卡，用户登录完会告诉你；登录信息所有助手共用，登一次就行。",
+    parameters: Type.Object({
+      site: Type.String({ description: "哪个网站" }),
+      reason: Type.String({ description: "为什么要登录，一句话" }),
+    }),
+    execute: async (_id, params: any) => {
+      if (sediment) return ok("沉淀时无需询问：把登录这一步写进技能，交给助手处理。");
+      const site = String(params.site ?? "").trim();
+      const reason = String(params.reason ?? "").trim();
+      if (!site || !reason) return { content: [{ type: "text" as const, text: "site 和 reason 都要填写清楚。" }], details: undefined, isError: true };
+      const answer = await runtime.jobs.askQuestion(jobId, {
+        title: `需要登录：${site}`,
+        detail: reason,
+        options: [{ key: "A", label: "已登录" }],
+        recommended: "A",
+        login: { site, reason },
+      });
       return ok(answer);
     },
   };

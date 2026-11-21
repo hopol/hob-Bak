@@ -8,7 +8,7 @@ describe("助手技能", () => {
   it("显示用量、上次使用时间和版本", () => {
     const now = new Date(2026, 10, 5, 10);
     expect(skillUsage({ uses: 3, lastUsedAt: new Date(2026, 10, 5, 9).toISOString(), version: 2 }, now)).toBe("用过 3 次 · 上次今天 09:00 · 第 2 版");
-    expect(skillUsage({ uses: 0, version: 1 }, now)).toBe("还没用过 · 第 1 版");
+    expect(skillUsage({ uses: 0, version: 1 }, now)).toBe("尚未使用 · 第 1 版");
     expect(skillUsage({ uses: 1, version: 3 }, now)).toBe("用过 1 次 · 第 3 版");
   });
 

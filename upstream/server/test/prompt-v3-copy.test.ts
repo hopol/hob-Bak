@@ -55,17 +55,14 @@ describe.skipIf(!doc)("第三版逐字对照", () => {
       }
       expect(router.find((tool) => tool.name === "show_page")?.description.startsWith(`${line(routerSource, "show_page")}\n`)).toBe(true);
       const secondary = buildRouterTools(hob.runtime, "other");
-      expect(secondary.find((tool) => tool.name === "hand_back_to_hob")?.description).toBe(line(routerSource, "hand_back_to_hob"));
-      expect(secondary.find((tool) => tool.name === "edit_notes")?.description).toBe(line(routerSource, "edit_notes"));
+      expect(secondary.find((tool) => tool.name === "hand_back")?.description).toBe(line(routerSource, "hand_back"));
       const worker = [registerReportTool(hob.runtime, "t"), registerAskTool(hob.runtime, "t"), registerImageTool(hob.runtime, "t")];
       for (const tool of worker) expect(tool.description, tool.name).toBe(line(workerSource, tool.name));
       const outcomeSource = workerSource.split("\n").find((item) => item.startsWith("- `outcome`："))!.split("：").slice(1).join("：");
       expect(worker[0]!.parameters.properties.outcome.description).toBe(outcomeSource);
-      const desktop = new DesktopToolSession(hob.runtime, "hob", true, undefined, true).tools();
-      for (const tool of desktop) expect(tool.description, tool.name).toBe(line(routerSource, tool.name));
-      const workerDesktop = new DesktopToolSession(hob.runtime, "hob", true, undefined, false).tools();
-      expect(workerDesktop.find((tool) => tool.name === "browser_open")?.description).toBe(line(workerSource, "browser_open"));
-      for (const tool of [...router, ...secondary, ...worker, ...desktop, ...workerDesktop]) expect(tool.promptSnippet, tool.name).toBeUndefined();
+      const desktop = new DesktopToolSession(hob.runtime, "hob", true, "任务").tools();
+      for (const tool of desktop) expect(tool.description, tool.name).toBe(line(workerSource, tool.name));
+      for (const tool of [...router, ...secondary, ...worker, ...desktop]) expect(tool.promptSnippet, tool.name).toBeUndefined();
     } finally { hob.close(); }
   });
 

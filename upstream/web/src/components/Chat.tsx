@@ -13,6 +13,7 @@ import { Avatar } from "../sprites.tsx";
 import { applyMention, filterMembers, mentionAt, stepPick } from "../mention.ts";
 import {
   expandPanel,
+  toggleSideCollapsed,
   focusComposer,
   groupById,
   groupChatItems,
@@ -62,7 +63,7 @@ function Thinking({ leaving, gap, a }: { leaving: boolean; gap: boolean; a: Assi
       <div className={`hov think${leaving ? " leaving" : ""}`}>
         <div className="activity-line" role="status">
           <Avatar sprite={a.sprite} prop={a.prop} size={46} free motion={a.activity?.state === "tool" ? "work" : "think"} />
-          <span className="activity-shimmer">{a.activity?.label ?? t("正在想…")}</span>
+          <span className="activity-shimmer">{a.activity?.label ?? t("正在思考…")}</span>
         </div>
       </div>
     </>
@@ -266,7 +267,7 @@ function EmptyChat({ a }: { a: AssistantSummary }) {
       <div className="t">{a.primary ? t("我是{assistant}，你的主助手", { assistant: sendName(a.name, false) }) : t("我是{assistant}", { assistant: sendName(a.name, false) })}</div>
       <div className="d">
         {a.primary
-          ? t("交给我的事，我会分派给后台任务执行，完成、受阻或需要你确认时再告诉你；也可以让我定时执行。同类工作多了，我会建议创建专属助手。")
+          ? t("交给我的任务，我会分派给后台任务执行，完成、受阻或需要你确认时再告诉你；也可以让我定时执行。同类任务较多时，我会建议创建专属助手。")
           : t("负责{duty}。", { duty: a.duty })}
       </div>
       {ready ? (
@@ -304,7 +305,7 @@ function EmptyChat({ a }: { a: AssistantSummary }) {
   );
 }
 
-/** 群里正在说话的成员：底部一行一个人，头像 +「名字正在想…」。 */
+/** 群里正在说话的成员：底部一行一个人，头像 +「名字 正在思考…」。 */
 function GroupThinking({ g }: { g: GroupSummary }) {
   const s = useApp();
   const speaking = groupSpeaking(s, g);
@@ -319,7 +320,7 @@ function GroupThinking({ g }: { g: GroupSummary }) {
           <div className="hov think" key={id}>
             <div className="activity-line" role="status">
               <Avatar sprite={m.sprite} prop={m.prop} size={40} free motion={s.groupActivity[g.id]?.[id]?.state === "tool" ? "work" : "think"} />
-              <span className="activity-shimmer">{t("{name}正在想…", { name: sendName(m.name) })}</span>
+              <span className="activity-shimmer">{t("{name} 正在思考…", { name: sendName(m.name) })}</span>
             </div>
           </div>
         );
@@ -343,8 +344,8 @@ function EmptyGroup({ g }: { g: GroupSummary }) {
 /** 话题顶上那行灰字：谁开的、什么时候。（服务端记的是 createdBy） */
 function openLine(g: GroupSummary, assistants: AssistantSummary[]): string {
   const who = g.createdBy && g.createdBy !== "user"
-    ? t("{name}从综合开了这个话题", { name: assistants.find((a) => a.id === g.createdBy)?.name ?? g.createdBy })
-    : t("你开了这个话题");
+    ? t("{name}在综合创建了话题", { name: assistants.find((a) => a.id === g.createdBy)?.name ?? g.createdBy })
+    : t("你创建了这个话题");
   return `${who} · ${fmtWhen(g.createdAt)}`;
 }
 
@@ -394,6 +395,7 @@ export function Chat() {
   return (
     <main className="chat">
       <div className="chead">
+        {s.sideCollapsed ? <button className="hob-icon-btn side-expand" title={t("展开左栏")} aria-label={t("展开左栏")} onClick={toggleSideCollapsed}><Icon name="panel" size={18} style={{ transform: "scaleX(-1)" }} /></button> : null}
         <ChatHead g={g} a={a} parent={parent} />
         {s.collapsed ? (
           <button className="chead-btn right" title={t("展开右栏")} onClick={expandPanel}>
@@ -560,7 +562,7 @@ export function Composer({ variant = "desktop", todos, jobs }: { variant?: "desk
           className="ta"
           rows={1}
           value={s.text}
-          placeholder={g ? (g.parentId ? t("在这个话题里说，不点名由{owner}接", { owner: sendName(owner?.name ?? "") }) : t("发到综合，不点名由{owner}接", { owner: sendName(owner?.name ?? "") })) : t("给{assistant}发消息", { assistant: sendName(a?.name ?? "") })}
+          placeholder={g ? (g.parentId ? t("在此话题中发言，未点名时由{owner}接手", { owner: sendName(owner?.name ?? "") }) : t("在综合中发言，未点名时由{owner}接手", { owner: sendName(owner?.name ?? "") })) : t("给{assistant}发消息", { assistant: sendName(a?.name ?? "") })}
           onChange={(e) => {
             setText(e.target.value);
             setCaret(e.target.selectionStart ?? e.target.value.length);

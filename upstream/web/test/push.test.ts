@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { base64ToBytes, deviceLabel, sameKey } from "../src/push.ts";
+import { base64ToBytes, canShowPushPrompt, deviceLabel, sameKey } from "../src/push.ts";
+
+describe("首次通知提示", () => {
+  const base = { supported: true, subscribed: false, permission: "default" as NotificationPermission, dismissed: false };
+
+  it("只在支持推送、没有订阅、未拒绝且没有点过不用了时出现", () => {
+    expect(canShowPushPrompt(base)).toBe(true);
+    expect(canShowPushPrompt({ ...base, supported: false })).toBe(false);
+    expect(canShowPushPrompt({ ...base, subscribed: true })).toBe(false);
+    expect(canShowPushPrompt({ ...base, permission: "denied" })).toBe(false);
+    expect(canShowPushPrompt({ ...base, dismissed: true })).toBe(false);
+  });
+
+  it("权限已经允许但浏览器里还没有订阅时仍提示打开", () => {
+    expect(canShowPushPrompt({ ...base, permission: "granted" })).toBe(true);
+  });
+});
 
 describe("base64ToBytes", () => {
   it("base64 和 base64url 都解成同一串字节", () => {

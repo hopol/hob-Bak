@@ -4,7 +4,7 @@ import type { JobStatus, JobStep } from "../../../shared/types.ts";
 
 const state = vi.hoisted(() => ({ status: "done" as string, sediment: undefined as undefined | { status: "running" }, steps: undefined as JobStep[] | undefined }));
 vi.mock("../store.ts", () => ({
-  backPanel: vi.fn(), closePanelPages: vi.fn(), closeSheet: vi.fn(), sedimentJob: vi.fn(), togglePreviewFull: vi.fn(), fetchFileMeta: vi.fn(), loadJobFiles: vi.fn(), loadModels: vi.fn(),
+  backPanel: vi.fn(), closePanelPages: vi.fn(), closeSheet: vi.fn(), collapsePanel: vi.fn(), sedimentJob: vi.fn(), togglePreviewFull: vi.fn(), fetchFileMeta: vi.fn(), loadJobFiles: vi.fn(), loadModels: vi.fn(),
   loadWorklog: vi.fn(), moreWorklog: vi.fn(), openFilePreview: vi.fn(), openJob: vi.fn(),
   replyJob: vi.fn(), select: vi.fn(), selectGroup: vi.fn(), stopJob: vi.fn(),
   useApp: () => ({
@@ -27,9 +27,9 @@ it("工作记录中的群任务打开原话题和任务详情", () => {
 });
 
 describe("任务详情回复", () => {
-  it.each<JobStatus>(["done", "stuck", "failed", "stopped"])("%s 显示接着说", (status) => {
+  it.each<JobStatus>(["done", "stuck", "failed", "stopped"])("%s 显示继续输入", (status) => {
     state.status = status;
-    expect(renderToStaticMarkup(<JobOverlay />)).toContain('placeholder="接着说…"');
+    expect(renderToStaticMarkup(<JobOverlay />)).toContain('placeholder="继续输入…"');
   });
   it("运行中的任务保留补充提示且不显示报告和产出", () => {
     state.status = "running";

@@ -1,4 +1,5 @@
 // 设置 → 模型「添加模型」和思考档的纯函数：按名字 / ref 过滤，按服务商分组，按模型的档收思考档。界面直接用，测试单独跑。
+import { t } from "../../shared/i18n.ts";
 import type { ModelInfo, ThinkingLevel } from "../../shared/types.ts";
 
 /** 思考档从低到高，和引擎的顺序一致（fitThinking 用）。 */
@@ -36,4 +37,10 @@ export function groupByProvider(models: ModelInfo[]): { provider: string; models
     group.models.push(model);
   }
   return groups;
+}
+
+/** 模型下拉的选项：可用模型；已经选了、后来又从可用模型里去掉的，照实列在最后，不显示成空。 */
+export function rosterOptions(roster: { ref: string }[], current: string | undefined, name: (ref: string) => string) {
+  const options = roster.map((entry) => ({ value: entry.ref, label: name(entry.ref) }));
+  return current && !roster.some((entry) => entry.ref === current) ? [...options, { value: current, label: t("{name}（不在可用模型里）", { name: name(current) }) }] : options;
 }

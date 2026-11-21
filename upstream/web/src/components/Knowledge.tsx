@@ -307,9 +307,9 @@ export function CollectionStatus({ collection, collections, assistants, embeddin
   const bound = assistants.filter((a) => a.knowledge?.includes(collection.id));
   const [busy, setBusy] = useState(false);
   return <div className="knowledge-status">
-    <div>{bound.length ? t("给 {assistants} 用", { assistants: bound.map((a) => a.name).join(t("、")) }) : <strong>{t("还没有助手用这个库")}</strong>} · <button onClick={(e) => menu.toggle(collection.id, e.currentTarget)}>{bound.length ? t("修改") : t("选择助手")}</button></div>
+    <div>{bound.length ? t("供 {assistants} 使用", { assistants: bound.map((a) => a.name).join(t("、")) }) : <strong>{t("尚未有助手使用此知识库")}</strong>} · <button onClick={(e) => menu.toggle(collection.id, e.currentTarget)}>{bound.length ? t("修改") : t("选择助手")}</button></div>
     {menu.menu && createPortal(<div className="amenu knowledge-popup" ref={menu.box}><AssistantChoices collectionId={collection.id} collections={collections} assistants={assistants} busy={busy} setBusy={setBusy} /></div>, document.body)}
-    <div>{t("已建索引 {indexed}/{total}", { indexed: collection.indexed ?? 0, total: collection.count - (collection.unsupported ?? 0) })}{(collection.failed ?? 0) > 0 ? <> · {t("{n} 个失败", { n: collection.failed ?? 0 })} · <IndexRetry id={collection.id} busy={busy} setBusy={setBusy} /></> : null}{!embedding ? <> · {t("只按关键词查")} · <button onClick={() => { openSettings(); setSection("knowledge"); }}>{t("去设置向量模型")}</button></> : null}</div>
+    <div>{t("已建索引 {indexed}/{total}", { indexed: collection.indexed ?? 0, total: collection.count - (collection.unsupported ?? 0) })}{(collection.failed ?? 0) > 0 ? <> · {t("{n} 个失败", { n: collection.failed ?? 0 })} · <IndexRetry id={collection.id} busy={busy} setBusy={setBusy} /></> : null}{!embedding ? <> · {t("仅按关键词搜索")} · <button onClick={() => { openSettings(); setSection("knowledge"); }}>{t("前往设置向量模型")}</button></> : null}</div>
   </div>;
 }
 

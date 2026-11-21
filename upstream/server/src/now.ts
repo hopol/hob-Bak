@@ -46,11 +46,9 @@ export function nowBlock(runtime: HobRuntime, assistantId: string, current?: str
   const activeLine = (job: Job) => `${job.id}「${short(job.title)}」，${stateOf(job)}`;
   const active = jobs.filter((job) => mine(job.groupId) && ACTIVE.has(job.status)).map(activeLine);
   if (active.length) lines.push(`进行中：${active.join("；")}`);
-  if (assistantId === "hob") {
-    const delegations = runtime.store.delegations().filter((item) => item.from === assistantId && (item.status === "running" || item.status === "waiting"))
-      .map((item) => `${runtime.store.assistant(item.to)?.name ?? item.to}「${short(item.text)}」，${clock(item.createdAt)} 起`);
-    if (delegations.length) lines.push(`转交中：${delegations.join("；")}`);
-  }
+  const delegations = runtime.store.delegations().filter((item) => item.from === assistantId && (item.status === "running" || item.status === "waiting"))
+    .map((item) => `${runtime.store.assistant(item.to)?.name ?? item.to}「${short(item.text)}」，${clock(item.createdAt)} 起`);
+  if (delegations.length) lines.push(`转交中：${delegations.join("；")}`);
   const pending = runtime.store.approvals().filter((item) => item.assistantId === assistantId && item.status === "pending" && item.source !== "job");
   const approvals = pending.filter((item) => mine(item.groupId)).map((item) => item.title);
   if (approvals.length) lines.push(`等用户选：${approvals.join("；")}`);

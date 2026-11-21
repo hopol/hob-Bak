@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
 import { pointerEventLength } from "./pointer-event.mjs";
 import { ensureLocale } from "./locale.mjs";
+import { SharedLoginStore, changedCookies, cookieSite, pageMatchesCookieSite, pushCookiesToBrowsers, refreshAllowed, removedCookies } from "./shared-login.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const version = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8")).version;
@@ -27,6 +28,20 @@ const context = new AsyncLocalStorage();
 const screens = new Map();
 const eventClients = new Set();
 const TZ = process.env.TZ || "UTC";
+function validTimezone(value) {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+}
+function requestTimezone(req) {
+  const raw = req.headers["x-hob-timezone"];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value === "string" && validTimezone(value)) return value;
+  return TZ;
+}
 // 壁纸、dock 配置和启动器 .desktop 随镜像走（镜像里在 /app/desktop）
 const ASSETS = process.env.DESKTOP_ASSETS || path.join(__dirname, "..", "desktop");
 
@@ -175,7 +190,7 @@ function childEnv() {
   const screen = context.getStore();
   const { DESKTOP_TOKEN: _token, DESKTOP_TOKEN_EXPORT: _export, ...env } = process.env;
   // 桌面里所有程序（dock、文件管理器、终端、浏览器）的语言都由 DESKTOP_LANG 定。
-  return { ...env, DISPLAY: screen?.display, DESKTOP_SCREEN: screen?.id, DESKTOP_DOCK_TOKEN: screen ? dockToken(screen.id) : "", DESKTOP_PORT: String(PORT), TZ, LANG: LANG_SETTING.LANG, LANGUAGE: LANG_SETTING.LANGUAGE };
+  return { ...env, DISPLAY: screen?.display, DESKTOP_SCREEN: screen?.id, DESKTOP_DOCK_TOKEN: screen ? dockToken(screen.id) : "", DESKTOP_PORT: String(PORT), TZ: screen?.timezone ?? TZ, LANG: LANG_SETTING.LANG, LANGUAGE: LANG_SETTING.LANGUAGE };
 }
 
 function run(cmd, args, { timeoutMs = 15000, input, maxOutput = 65536 } = {}) {
@@ -272,7 +287,7 @@ function startBrowserTitles() {
     for (const [profile, entry] of browsers) {
       if (profile !== context.getStore().id) continue;
       if (!entry.settledOk) continue;
-      const prefix = profile === "public" ? "公共浏览器" : `${profile} 的浏览器`;
+      const prefix = `${profile} 的浏览器`;
       const found = await run("xdotool", ["search", "--onlyvisible", "--class", `^hob-${profile}$`]);
       for (const id of found.out.trim().split("\n").filter(Boolean)) {
         const cur = (await run("xdotool", ["getwindowname", id])).out.trim();
@@ -287,6 +302,7 @@ function startBrowserTitles() {
 
 // ---------- Chromium ----------
 const browsers = new Map(); // profile -> { child, port, wsPath, noSandbox, settledOk, ready }
+const sharedLogin = new SharedLoginStore(DATA_DIR);
 const PROFILE_RE = /^[a-z0-9-]{1,64}$/;
 
 function screenList() {
@@ -300,18 +316,19 @@ function publish() {
   for (const ws of eventClients) if (ws.readyState === WebSocket.OPEN) ws.send(msg);
 }
 function touch(s) { s.lastActiveAt = new Date().toISOString(); }
-function ensureScreen(id) {
+function ensureScreen(id, timezone = TZ) {
   if (shuttingDown) return Promise.reject(new HttpError(503, "shutting_down", "桌面正在关闭"));
   const existing = screens.get(id);
   if (existing) {
+    existing.timezone = timezone;
     touch(existing);
-    return existing.stopping ? existing.stopping.then(() => ensureScreen(id)) : existing.ready;
+    return existing.stopping ? existing.stopping.then(() => ensureScreen(id, timezone)) : existing.ready;
   }
   if (screens.size >= MAX_SCREENS) return Promise.reject(new HttpError(429, "too_many_screens", "屏幕数量已达上限"));
   const used = new Set([...screens.values()].map((s) => s.number));
   let number = 1;
   while (used.has(number)) number++;
-  const s = { id, number, display: `:${number}`, vncPort: 5900 + number, children: new Set(), services: new Set(), viewers: 0, cdpClients: 0, activeRequests: 1, sockets: new Set(), inputQueue: Promise.resolve() };
+  const s = { id, number, display: `:${number}`, vncPort: 5900 + number, timezone, children: new Set(), services: new Set(), viewers: 0, cdpClients: 0, activeRequests: 1, sockets: new Set(), inputQueue: Promise.resolve() };
   touch(s);
   screens.set(id, s);
   s.ready = context.run(s, () => startDisplay()).then(() => { publish(); return s; }).catch(async (e) => { if (!s.stopping) await stopScreen(id, true); throw e; }).finally(() => { s.activeRequests--; touch(s); });
@@ -347,8 +364,6 @@ setInterval(() => {
 function chromiumArgs(profile, userDir, noSandbox) {
   const args = [
     `--user-data-dir=${userDir}`,
-    "--remote-debugging-address=127.0.0.1",
-    "--remote-debugging-port=0",
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-crash-reporter",
@@ -361,6 +376,14 @@ function chromiumArgs(profile, userDir, noSandbox) {
     "--start-maximized",
     // 部署方可能没给 --shm-size；/dev/shm 太小会让 Chromium 崩，直接用 /tmp
     "--disable-dev-shm-usage",
+    "--disable-blink-features=AutomationControlled",
+    "--enable-features=ReducedSystemInfo,SpoofWebGLInfo",
+    "--enable-unsafe-swiftshader",
+    "--use-angle=gl",
+    "--use-gl=angle",
+    "--ignore-gpu-blocklist",
+    "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+    "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0",
   ];
   if (noSandbox) args.push("--no-sandbox");
   return args;
@@ -436,6 +459,9 @@ async function launchBrowser(profile, entry) {
     });
     try {
       await waitPortFile(child, portFile, 30000, errRef);
+      const lines = fs.readFileSync(portFile, "utf8").split("\n");
+      entry.port = Number(lines[0].trim());
+      entry.wsPath = lines[1].trim();
     } catch (e) {
       await killAndWait(child, "SIGTERM", 3000);
       const msg = String(e.message || e);
@@ -446,10 +472,8 @@ async function launchBrowser(profile, entry) {
       }
       throw new HttpError(500, "start_failed", msg);
     }
-    const lines = fs.readFileSync(portFile, "utf8").split("\n");
-    entry.port = Number(lines[0].trim());
-    entry.wsPath = lines[1].trim();
     entry.settledOk = true;
+    await syncBrowserCookies(profile, entry, "migrate");
     publish();
     console.log(`desktopd: chromium[${profile}] 就绪 cdp=127.0.0.1:${entry.port}${entry.noSandbox ? "（--no-sandbox）" : ""}`);
     return entry;
@@ -460,9 +484,10 @@ function ensureBrowser(profile) {
   if (shuttingDown) return Promise.reject(new HttpError(503, "shutting_down", "桌面正在关闭"));
   const cur = browsers.get(profile);
   if (cur) return cur.stopping ? cur.stopping.then(() => ensureBrowser(profile)) : cur.ready;
-  const entry = { child: null, port: 0, wsPath: "", noSandbox: false, settledOk: false, ready: null };
-  entry.ready = launchBrowser(profile, entry).catch((e) => {
+  const entry = { child: null, port: 0, wsPath: "", noSandbox: false, settledOk: false, cookieBaseline: [], pendingRefreshSites: new Set(), refreshHistory: new Map(), ready: null, profile };
+  entry.ready = launchBrowser(profile, entry).catch(async (e) => {
     if (browsers.get(profile) === entry && !entry.stopping) browsers.delete(profile);
+    await killAndWait(entry.child, "SIGTERM", 3000);
     throw e;
   });
   browsers.set(profile, entry);
@@ -475,6 +500,7 @@ function stopBrowser(profile) {
   if (entry.stopping) return entry.stopping;
   // 启动中的浏览器也要等它就绪后关闭；关闭完成前不能启动同一 profile。
   entry.stopping = entry.ready.catch(() => {}).then(async () => {
+    await syncBrowserCookies(profile, entry, "sync").catch((error) => console.error(`desktopd: ${profile} 共享登录同步失败：${error.message || error}`));
     await cdpClose(entry);
     if (!(await waitForExit(entry.child, 5000))) await killAndWait(entry.child, "SIGTERM", 8000);
     if (browsers.get(profile) === entry) browsers.delete(profile);
@@ -504,6 +530,139 @@ function killAndWait(child, sig, ms) {
     try { child.kill(sig); } catch {}
   });
 }
+
+function cdpCommand(entry, method, params = {}) {
+  return new Promise((resolve, reject) => {
+    if (!entry.port || !entry.wsPath || !entry.child || entry.child.exitCode !== null || entry.child.signalCode !== null) return reject(new Error("浏览器没有可用的 CDP 连接"));
+    let ws;
+    try { ws = new WebSocket(`ws://127.0.0.1:${entry.port}${entry.wsPath}`); }
+    catch (error) { reject(error); return; }
+    const timer = setTimeout(() => { try { ws.terminate(); } catch {} reject(new Error(`CDP ${method} 超时`)); }, 5000);
+    const finish = (error, value) => { clearTimeout(timer); try { ws.close(); } catch {} if (error) reject(error); else resolve(value); };
+    ws.on("open", () => ws.send(JSON.stringify({ id: 1, method, params })));
+    ws.on("message", (data) => {
+      let value;
+      try { value = JSON.parse(data.toString()); } catch { return; }
+      if (value.id !== 1) return;
+      if (value.error) finish(new Error(`CDP ${method} 失败：${value.error.message || "未知错误"}`));
+      else finish(null, value.result ?? {});
+    });
+    ws.on("error", (error) => finish(error));
+  });
+}
+
+async function cdpTargetCommand(entry, targetId, method, params = {}) {
+  return new Promise((resolve, reject) => {
+    if (!entry.port || !entry.wsPath || !entry.child || entry.child.exitCode !== null || entry.child.signalCode !== null) return reject(new Error("浏览器没有可用的 CDP 连接"));
+    let ws;
+    try { ws = new WebSocket(`ws://127.0.0.1:${entry.port}${entry.wsPath}`); }
+    catch (error) { reject(error); return; }
+    let sessionId = "";
+    const timer = setTimeout(() => { try { ws.terminate(); } catch {} reject(new Error(`CDP ${method} 超时`)); }, 5000);
+    const finish = (error, value) => { clearTimeout(timer); try { ws.close(); } catch {} if (error) reject(error); else resolve(value); };
+    ws.on("open", () => ws.send(JSON.stringify({ id: 1, method: "Target.attachToTarget", params: { targetId, flatten: true } })));
+    ws.on("message", (data) => {
+      let value;
+      try { value = JSON.parse(data.toString()); } catch { return; }
+      if (value.id === 1) {
+        if (value.error || !value.result?.sessionId) return finish(new Error(`CDP Target.attachToTarget 失败：${value.error?.message || "没有 session"}`));
+        sessionId = value.result.sessionId;
+        ws.send(JSON.stringify({ id: 2, sessionId, method, params }));
+      } else if (value.id === 2) {
+        if (value.error) finish(new Error(`CDP ${method} 失败：${value.error.message || "未知错误"}`));
+        else finish(null, value.result ?? {});
+      }
+    });
+    ws.on("error", (error) => finish(error));
+  });
+}
+
+async function refreshBrowserPages(entry, sites) {
+  const result = await cdpCommand(entry, "Target.getTargets");
+  let refreshed = false;
+  for (const target of result.targetInfos ?? []) {
+    if (target.type !== "page" || !/^https?:/i.test(target.url) || ![...sites].some((site) => pageMatchesCookieSite(target.url, site))) continue;
+    try {
+      await cdpTargetCommand(entry, target.targetId, "Page.reload", { ignoreCache: false });
+      refreshed = true;
+    } catch (error) {
+      console.error(`desktopd: ${entry.profile} 刷新登录页面失败：${error.message || error}`);
+    }
+  }
+  return refreshed;
+}
+
+async function flushRefreshes(profile, entry) {
+  if (!entry.pendingRefreshSites.size || screens.get(profile)?.cdpClients) return;
+  const now = Date.now();
+  for (const site of [...entry.pendingRefreshSites]) {
+    const history = (entry.refreshHistory.get(site) ?? []).filter((at) => now - at < 60_000);
+    entry.refreshHistory.set(site, history);
+    if (!refreshAllowed(history, now)) continue;
+    try {
+      const refreshed = await refreshBrowserPages(entry, new Set([site]));
+      if (refreshed) {
+        history.push(Date.now());
+        entry.refreshHistory.set(site, history);
+      }
+      entry.pendingRefreshSites.delete(site);
+    } catch {
+      // The browser may be navigating or closing; leave it pending for the next tick.
+    }
+  }
+}
+
+async function pushSharedCookies(source, cookies, removed) {
+  const sites = new Set([...cookies, ...removed].map(cookieSite).filter(Boolean));
+  await pushCookiesToBrowsers(source, browsers, cookies, async (entry, next, deleted) => {
+    if (next.length) await cdpCommand(entry, "Storage.setCookies", { cookies: next });
+    for (const cookie of deleted) {
+      await cdpCommand(entry, "Storage.setCookies", { cookies: [{ ...cookie, value: "", expires: 0 }] });
+    }
+    for (const site of sites) entry.pendingRefreshSites.add(site);
+    await flushRefreshes(entry.profile, entry);
+  }, removed);
+}
+
+async function syncBrowserCookies(profile, entry, mode) {
+  const result = await cdpCommand(entry, "Storage.getCookies");
+  const cookies = Array.isArray(result.cookies) ? result.cookies : [];
+  const before = sharedLogin.snapshot();
+  const previous = mode === "migrate" ? before : entry.cookieBaseline;
+  const changed = changedCookies(previous, cookies);
+  const removed = removedCookies(previous, cookies);
+  const common = mode === "migrate"
+    ? await sharedLogin.migrateProfile(profile, cookies)
+    : changed.length || removed.length ? await sharedLogin.syncProfile(profile, changed, removed) : before;
+  const actual = mode === "migrate"
+    ? (await cdpCommand(entry, "Storage.setCookies", { cookies: common }), (await cdpCommand(entry, "Storage.getCookies")).cookies)
+    : cookies;
+  entry.cookieBaseline = (Array.isArray(actual) ? actual : []).map((cookie) => ({ ...cookie }));
+  const added = changedCookies(before, common);
+  const deleted = removedCookies(before, common);
+  if (added.length || deleted.length) await pushSharedCookies(profile, added, deleted);
+  if (mode !== "migrate") await flushRefreshes(profile, entry);
+  return common.length;
+}
+
+let cookieSyncing = false;
+async function syncOpenBrowsers() {
+  if (cookieSyncing) return;
+  cookieSyncing = true;
+  try {
+    for (const [profile, entry] of browsers) {
+      if (!entry.settledOk || entry.stopping) continue;
+      await syncBrowserCookies(profile, entry, "sync");
+    }
+    for (const [profile, entry] of browsers) {
+      if (entry.settledOk && !entry.stopping) await flushRefreshes(profile, entry);
+    }
+  } finally {
+    cookieSyncing = false;
+  }
+}
+const cookieSyncTimer = setInterval(() => { void syncOpenBrowsers().catch((error) => console.error(`desktopd: 定时同步登录态失败：${error.message || error}`)); }, 5000);
+cookieSyncTimer.unref();
 
 function cdpClose(entry) {
   return new Promise((resolve) => {
@@ -716,7 +875,7 @@ function listProfiles() {
 const server = http.createServer(async (req, res) => {
   const pathname = new URL(req.url, "http://localhost").pathname;
   if (!authorized(req) && !dockAuthorized(req, pathname)) return sendError(res, 401, "unauthorized", "缺 Bearer 令牌");
-  const route = /^\/api\/screens\/([a-z0-9-]{1,64})\/(start|stop|screenshot|input|paste|browser\/(?:start|stop|focus))$/.exec(pathname);
+  const route = /^\/api\/screens\/([a-z0-9-]{1,64})\/(start|stop|screenshot|input|paste|browser\/(?:start|stop|focus|sync))$/.exec(pathname);
   try {
     if (req.method === "GET" && pathname === "/api/health") {
       return sendJson(res, 200, {
@@ -732,7 +891,7 @@ const server = http.createServer(async (req, res) => {
     if (route) {
       const [, id, action] = route;
       if (req.method === "POST" && action === "start") {
-        await ensureScreen(id);
+        await ensureScreen(id, requestTimezone(req));
         return sendJson(res, 200, {});
       }
       if (req.method === "POST" && action === "stop") {
@@ -740,7 +899,7 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, {});
       }
       if (req.method === "POST" && action === "browser/start") {
-        const s = await ensureScreen(id);
+        const s = await ensureScreen(id, requestTimezone(req));
         s.activeRequests++;
         try {
           await context.run(s, () => ensureBrowser(id));
@@ -777,6 +936,12 @@ const server = http.createServer(async (req, res) => {
             return sendJson(res, 200, {});
           }
           if (req.method === "POST" && action === "browser/stop") { await stopBrowser(id); return sendJson(res, 200, {}); }
+          if (req.method === "POST" && action === "browser/sync") {
+            const entry = browsers.get(id);
+            if (!entry || !entry.settledOk) throw new HttpError(404, "not_running", `浏览器 ${id} 没有可同步的自动化连接`);
+            const cookies = await syncBrowserCookies(id, entry, "sync");
+            return sendJson(res, 200, { cookies });
+          }
           if (req.method === "POST" && action === "browser/focus") { await focusBrowser(id); return sendJson(res, 200, {}); }
           return sendError(res, 404, "not_found", "没有这个接口");
         });

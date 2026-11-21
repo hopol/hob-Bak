@@ -2,9 +2,9 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { Approval, Job, PushSubscriptionJson } from "../../shared/types.ts";
+import type { Approval, PushSubscriptionJson } from "../../shared/types.ts";
 import { createApp } from "../src/http.ts";
-import { pushApproval, pushJobEnd, PushService, type PushSender } from "../src/push.ts";
+import { pushApproval, PushService, type PushSender } from "../src/push.ts";
 import type { HobRuntime } from "../src/runtime.ts";
 import { makeHob } from "./helpers.ts";
 
@@ -47,20 +47,6 @@ function approvalOf(assistantId: string, title = "发到公众号吗？"): Appro
     status: "pending",
     source: "router",
     createdAt: new Date().toISOString(),
-  };
-}
-
-function jobOf(assistantId: string, patch: Partial<Job> = {}): Job {
-  return {
-    id: "t-0001",
-    assistantId,
-    title: "查页面卡顿",
-    instruction: "查一下",
-    status: "stuck",
-    createdAt: new Date().toISOString(),
-    stats: { reads: 0, commands: 0, edits: 0 },
-    activity: [],
-    ...patch,
   };
 }
 
@@ -165,40 +151,12 @@ describe("推送触发规则", () => {
       await flush();
       expect(fake.sent[2]?.payload).toMatchObject({ title: "群里问", body: "Hob · 等待你的回答", url: "/#/group/g-1" });
 
-      // 助手关了「需要我拍板时通知我」
+      // 助手关了「需要我回答或做完时通知我」
       const hobAssistant = hob.runtime.store.assistant("hob")!;
       hob.runtime.store.saveAssistant({ ...hobAssistant, notify: false });
       pushApproval(deps, approvalOf("hob", "不该推"));
       await flush();
       expect(fake.sent).toHaveLength(3);
-    } finally {
-      hob.close();
-    }
-  });
-
-  it("任务受阻或失败推给所属助手，已完成不推", async () => {
-    const fake = fakeSender();
-    const hob = makeHob({}, { pushSender: fake.sender });
-    try {
-      hob.runtime.push.subscribe(subscription("a"), "iPhone");
-      const deps = { push: hob.runtime.push, store: hob.runtime.store };
-
-      pushJobEnd(deps, jobOf("hob", { status: "stuck", statusReason: "15 分钟无响应" }));
-      await flush();
-      expect(fake.sent[0]?.payload.body).toBe("任务「查页面卡顿」受阻：15 分钟无响应");
-
-      pushJobEnd(deps, jobOf("hob", { status: "failed", statusReason: "Hob 重启，任务中断" }));
-      await flush();
-      expect(fake.sent[1]?.payload.body).toBe("任务「查页面卡顿」失败：Hob 重启，任务中断");
-
-      pushJobEnd(deps, jobOf("hob", { status: "done" }));
-      await flush();
-      expect(fake.sent).toHaveLength(2);
-
-      // 群里的任务：点开去它所在的群
-      pushJobEnd(deps, jobOf("hob", { status: "stuck", statusReason: "卡住了", groupId: "g-1" }));
-      await flush();
-      expect(fake.sent[2]?.payload).toMatchObject({ url: "/#/group/g-1" });
     } finally {
       hob.close();
     }

@@ -76,7 +76,7 @@ export interface VisibleSkill {
   dir: string; // 技能目录
   scope: SkillScope;
   editable: boolean;
-  source?: "lore" | "local";
+  source?: "lore" | "local" | "builtin";
   version?: number;
   updatedAt?: string;
   /** 本群、自己的技能在助手的技能页可以停用；停用的不加载、不进提示词，但能改、能删、能重新开。 */

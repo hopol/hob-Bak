@@ -1,7 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { call, makeHob, text } from "./helpers.ts";
+import { describe, expect, it, vi } from "vitest";
+import { makeHob } from "./helpers.ts";
 import { buildRouterTools } from "../src/router-tools.ts";
-import { saveAssistantSkill } from "../src/assistant-skills.ts";
 import { createApp } from "../src/http.ts";
 
 describe("群定时", () => {
@@ -35,45 +34,37 @@ describe("群定时", () => {
       expect(await patch.json()).toEqual({ error: "群的定时由群主处理" });
     } finally { hob.close(); }
   });
-  it("群主接收定时，换群主时同步并清除不可用技能", async () => {
+  it("群主接收定时，换群主时同步；不绑定技能", async () => {
     const hob = makeHob();
     try {
       const main = hob.runtime.store.assistant("hob")!;
       hob.runtime.store.saveAssistant({ ...main, id: "ops", name: "服务器", primary: false });
       const group = hob.runtime.groups.create({ name: "团队", purpose: "协作", ownerId: "hob", members: ["hob", "ops"] });
       const topic = hob.runtime.groups.createTopic(group.id, "话题", "user");
-      saveAssistantSkill(hob.home, "hob", { name: "ops-skill", title: "服务器技能", description: "检查服务器", content: "步骤" });
       const tool = buildRouterTools(hob.runtime, "ops", topic.id).find((item) => item.name === "create_routine")!;
       expect(tool.parameters.properties).not.toHaveProperty("by");
-      const result = await tool.execute("routine", { name: "检查", instruction: "检查", schedules: ["0 9 * * *"], skill: "ops-skill" });
+      const result = await tool.execute("routine", { name: "检查", instruction: "检查", schedules: ["0 9 * * *"], skill: "ignored" });
       expect(result.isError).not.toBe(true);
       const routine = hob.runtime.store.routines()[0]!;
       expect(routine).toMatchObject({ assistantId: "hob", groupId: topic.id });
+      expect(routine).not.toHaveProperty("skill");
       expect(() => hob.runtime.routines.update(routine.id, { assistantId: "ops" })).toThrow("群的定时由群主处理");
       const delivered: { gid: string; aid: string; event: string; trigger?: string }[] = [];
       hob.runtime.groups.deliverEvent = async (gid, aid, event, trigger) => { delivered.push({ gid, aid, event, trigger }); };
       expect(await hob.runtime.routines.runNow(routine.id)).toEqual({ outcome: "handed" });
-      const note = hob.runtime.groups.items(topic.id).items.find((item) => item.kind === "note" && item.text.includes("到点了"))!;
-      expect(delivered[0]).toMatchObject({ gid: topic.id, aid: "hob", trigger: note.id, event: expect.stringContaining("绑定的技能：ops-skill") });
+      const note = hob.runtime.groups.items(topic.id).items.find((item) => item.kind === "note" && item.text.includes("已到执行时间"))!;
+      expect(delivered[0]).toMatchObject({ gid: topic.id, aid: "hob", trigger: note.id, event: expect.stringContaining("服务器 填写的任务内容：检查") });
       expect(hob.runtime.store.jobs()).toHaveLength(0);
       expect(hob.runtime.store.routine(routine.id)?.runs[0]).toMatchObject({ status: "handed" });
-      hob.runtime.routines.update(routine.id, { check: { script: "printf 'issue 1\\nissue 2'", then: "job" } });
-      expect((await hob.runtime.routines.runNow(routine.id)).outcome).toBe("handed");
-      expect(delivered[1]?.event).toContain("issue 1\nissue 2");
-      hob.runtime.routines.update(routine.id, { check: { script: "printf hello", then: "notify" } });
-      expect((await hob.runtime.routines.runNow(routine.id)).outcome).toBe("notify");
-      expect(delivered).toHaveLength(2);
-      expect(hob.runtime.groups.items(topic.id).items).toContainEqual(expect.objectContaining({ kind: "assistant", text: "hello", speaker: "hob" }));
       hob.runtime.groups.update(group.id, { ownerId: "ops" });
       expect(hob.runtime.store.routine(routine.id)).toMatchObject({ assistantId: "ops", groupId: topic.id });
-      expect(hob.runtime.store.routine(routine.id)?.skill).toBeUndefined();
-      expect(hob.runtime.groups.items(group.id).items).toContainEqual(expect.objectContaining({ kind: "note", text: expect.stringContaining("已解除绑定") }));
+      expect(hob.runtime.store.routine(routine.id)).not.toHaveProperty("skill");
     } finally { hob.close(); }
   });
 });
 
 describe("定时", () => {
-  it("创建、改时间即时生效、立即跑一次并记 runs", async () => {
+  it("创建、改时间即时生效、立即运行交给助手并记 runs", async () => {
     const hob = makeHob();
     try {
       const routine = hob.runtime.routines.create({
@@ -93,31 +84,11 @@ describe("定时", () => {
       expect(hob.runtime.routines.nextRuns(routine.id)).toHaveLength(0);
       hob.runtime.routines.update(routine.id, { active: true });
 
-      hob.faux.setResponses([
-        call("report", { outcome: "done", result: "今天 6 条" }),
-        text("简报好了。"),
-        text("好"),
-      ]);
-      const job = (await hob.runtime.routines.runNow(routine.id)).job!;
-      expect(job.routineId).toBe(routine.id);
-      expect(hob.runtime.router.items("hob").items.filter((item) => item.kind === "job" && item.jobId === job.id)).toHaveLength(1);
-      await hob.runtime.jobs.waitIdle();
-      await hob.runtime.router.waitIdle("hob");
-
-      const saved = hob.runtime.store.routine(routine.id)!;
-      const finished = hob.runtime.store.job(job.id)!;
-      expect(saved.runs[0]).toMatchObject({ jobId: job.id, status: "done", durationMs: finished.durationMs, tools: finished.stats.reads + finished.stats.commands + finished.stats.edits, tokens: finished.usage!.input + finished.usage!.output });
-
-      // 定时结果的回复带 routine 标记
-      const items = hob.runtime.router.items("hob").items;
-      const reply = items.filter((item) => item.kind === "assistant").pop();
-      expect(reply).toMatchObject({ kind: "assistant", routine: { id: routine.id, name: "每日简报", jobId: job.id } });
-
-      hob.faux.setResponses([call("report", { outcome: "done", result: "继续完成" }), text("完成了。"), text("好")]);
-      await hob.runtime.jobs.reply(job.id, "继续做");
-      expect(hob.runtime.router.items("hob").items.filter((item) => item.kind === "job" && item.jobId === job.id)).toHaveLength(2);
-      await hob.runtime.jobs.waitIdle();
-      await hob.runtime.router.waitIdle("hob");
+      const event = vi.spyOn(hob.runtime.router, "event").mockResolvedValue(true);
+      const tick = await hob.runtime.routines.runNow(routine.id);
+      expect(tick).toEqual({ outcome: "handed" });
+      expect(event).toHaveBeenCalledWith("hob", expect.stringContaining("看看今天的新闻"), expect.anything());
+      expect(hob.runtime.store.routine(routine.id)?.runs[0]).toMatchObject({ status: "handed" });
     } finally {
       hob.close();
     }

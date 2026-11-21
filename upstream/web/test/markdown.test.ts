@@ -52,6 +52,11 @@ describe("renderMarkdown", () => {
     expect(html).toContain('<a target="_blank" rel="noreferrer" href="http://a.b/c">点这里</a>');
   });
 
+  it("服务器上的文件路径链接标成文件链接，不当网页新开", () => {
+    expect(renderMarkdown("[报告.md](/srv/data/work/报告.md)")).toMatch(/<a class="file-link" href="\/srv\/data\/work\/[^"]+">报告.md<\/a>/);
+    expect(renderMarkdown("[x](/api/files?path=a)")).toContain('target="_blank"');
+  });
+
   it("javascript: 这类链接不生成可点的地址", () => {
     for (const bad of ["[x](javascript:alert(1))", "[x](  JaVaScRiPt:alert(1))", "[x](data:text/html,hi)"]) {
       const html = renderMarkdown(bad);

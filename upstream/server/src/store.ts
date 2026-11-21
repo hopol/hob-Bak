@@ -39,6 +39,11 @@ function withoutRevision<T>(item: StoredRecord<T>): T {
   return value as T;
 }
 
+function withoutRoutineFields(item: StoredRecord<Routine>): Routine {
+  const { _hobRevision: _revision, skill: _skill, userWords: _userWords, ...value } = item as StoredRecord<Routine> & { skill?: unknown; userWords?: unknown };
+  return value as Routine;
+}
+
 function readJsonl<T>(path: string): T[] {
   if (!existsSync(path)) return [];
   const out: T[] = [];
@@ -123,7 +128,7 @@ export class Store {
     for (const path of ["knowledge/entries.json", "knowledge/collections.json", "system/lore/config.json", "system/engine/mcp.json"]) readJson(join(this.home, path), null);
     for (const root of [join(this.home, "assistants"), archiveAssistantsDir(this.home)]) {
       if (existsSync(root)) for (const id of readdirSync(root)) {
-        for (const name of ["profile.json", "rules.json", "state.json", "approvals.json", "routines.json", "memories.json", "drafts.json", "delegations.json"]) {
+        for (const name of ["profile.json", "rules.json", "state.json", "approvals.json", "routines.json", "drafts.json", "delegations.json"]) {
           readJson(join(root, id, name), null);
         }
       }
@@ -173,8 +178,7 @@ export class Store {
   assistant(id: string): Assistant | undefined {
     const profile = readJson<Assistant | null>(join(this.assistantDir(id), "profile.json"), null);
     if (!profile) return undefined;
-    // 旧档案没有这个字段
-    return { ...profile, instructions: profile.instructions ?? "" };
+    return profile;
   }
 
   saveAssistant(assistant: Assistant): void {
@@ -277,7 +281,6 @@ export class Store {
       id: own.id,
       name: own.name,
       purpose: parent.purpose,
-      ...(parent.instructions !== undefined ? { instructions: parent.instructions } : {}),
       ownerId: parent.ownerId,
       members: parent.members,
       ...(parent.models ? { models: parent.models } : {}),
@@ -426,7 +429,7 @@ export class Store {
       const old = found.get(item.id);
       if (!old || (item._hobRevision ?? 0) > (old.item._hobRevision ?? 0) || ((item._hobRevision ?? 0) === (old.item._hobRevision ?? 0) && modified > old.modified)) found.set(item.id, { item, modified });
     }
-    return [...found.values()].map(({ item }) => withoutRevision(item));
+    return [...found.values()].map(({ item }) => withoutRoutineFields(item));
   }
 
   routine(id: string): Routine | undefined {
@@ -441,7 +444,9 @@ export class Store {
     const records = files.map((file) => ({ file, list: readJson<StoredRecord<Routine>[]>(file, []) }));
     const revision = 1 + Math.max(0, ...records.flatMap(({ list }) => list.filter((item) => item.id === routine.id).map((item) => item._hobRevision ?? 0)));
     const list = records.find(({ file }) => file === target)!.list.filter((r) => r.id !== routine.id);
-    list.push({ ...routine, _hobRevision: revision });
+    const clean = routine as Routine & { skill?: unknown; userWords?: unknown };
+    const { skill: _skill, userWords: _userWords, ...withoutRemovedFields } = clean;
+    list.push({ ...withoutRemovedFields, _hobRevision: revision });
     writeJsonAtomic(target, list);
     for (const { file, list: old } of records) {
       if (file === target) continue;
@@ -621,39 +626,44 @@ export class Store {
   }
 
   /**
-   * 一次性迁移：老的 assistants/<id>/memories.json 每条追加成该助手 instructions 的一行，
-   * 然后删掉文件；草稿里的 memories 改名成 instructions。跑过一次就没有了，不是兼容层。
+   * 一次性迁移：从助手和群资料中移除旧的补充说明，并把非空原文留在同目录的
+   * instructions.archived.md 里；草稿中的补充说明直接丢弃。重复启动不会覆盖档案。
    */
-  migrateMemories(): void {
-    type OldDraft = Draft & { memories?: string[]; carry: Draft["carry"] & { memories?: number } };
-    const drafts = readJson<OldDraft[]>(this.hobFile("drafts.json"), []);
-    if (drafts.some((draft) => !Array.isArray(draft.instructions))) {
-      writeJsonAtomic(
-        this.hobFile("drafts.json"),
-        drafts.map(({ memories, carry, ...draft }) => ({
-          ...draft,
-          instructions: draft.instructions ?? memories ?? [],
-          ...(carry ? { carry: { ...(carry.conversations !== undefined ? { conversations: carry.conversations } : {}) } } : {}),
-        })),
-      );
-    }
-    const root = join(this.home, "assistants");
-    if (!existsSync(root)) return;
-    for (const id of readdirSync(root)) {
-      const file = join(root, id, "memories.json");
-      if (!existsSync(file)) continue;
-      const lines = readJson<{ text?: string }[]>(file, [])
-        .map((memory) => (memory?.text ?? "").trim())
-        .filter(Boolean);
-      const assistant = this.assistant(id);
-      if (!assistant && lines.length) throw new Error(`迁移 ${file} 失败：助手 ${id} 不存在`);
-      if (assistant && lines.length) {
-        const current = assistant.instructions.trim();
-        this.saveAssistant({ ...assistant, instructions: [current, ...lines].filter(Boolean).join("\n") });
+  migrateInstructions(): void {
+    const archive = (path: string): void => {
+      const record = readJson<Record<string, unknown> | null>(path, null);
+      if (!record || !Object.prototype.hasOwnProperty.call(record, "instructions")) return;
+      const instructions = record.instructions;
+      const { instructions: _instructions, ...rest } = record;
+      if (typeof instructions === "string" && instructions.trim()) {
+        const archived = join(dirname(path), "instructions.archived.md");
+        if (!existsSync(archived)) writeFileSync(archived, instructions);
       }
-      rmSync(file, { force: true });
+      writeJsonAtomic(path, rest);
+    };
+    const assistantRoots = [join(this.home, "assistants"), archiveAssistantsDir(this.home)];
+    for (const root of assistantRoots) {
+      if (!existsSync(root)) continue;
+      for (const folder of readdirSync(root)) archive(join(root, folder, "profile.json"));
+    }
+    const groupRoots = [groupsDir(this.home), archiveGroupsDir(this.home)];
+    for (const root of groupRoots) {
+      if (!existsSync(root)) continue;
+      for (const folder of readdirSync(root)) {
+        const dir = join(root, folder);
+        archive(join(dir, "group.json"));
+        const topics = join(dir, "topics");
+        if (!existsSync(topics)) continue;
+        for (const topic of readdirSync(topics)) archive(join(topics, topic, "group.json"));
+      }
+    }
+    const draftPath = this.hobFile("drafts.json");
+    const drafts = readJson<Record<string, unknown>[]>(draftPath, []);
+    if (drafts.some((draft) => Object.prototype.hasOwnProperty.call(draft, "instructions"))) {
+      writeJsonAtomic(draftPath, drafts.map(({ instructions: _instructions, ...draft }) => draft));
     }
   }
+
 
   /** 从已创建的草稿补全旧助手的详细职责，不覆盖已有值。 */
   migrateAssistantDuties(): void {
@@ -678,7 +688,6 @@ export class Store {
       pinned: true,
       hidden: false,
       notify: true,
-      instructions: "",
       createdAt: new Date().toISOString(),
     };
     this.saveAssistant(hob);

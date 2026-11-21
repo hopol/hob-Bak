@@ -2,8 +2,8 @@ import type { ModelScores } from "./types.ts";
 import { t } from "./i18n.ts";
 
 export const SCORE_STAGES = {
-  smart: [{ value: 25, label: "一般" }, { value: 50, label: "较聪明" }, { value: 75, label: "很聪明" }, { value: 100, label: "最聪明" }],
-  cost: [{ value: 0, label: "免费" }, { value: 20, label: "很低" }, { value: 50, label: "中等" }, { value: 75, label: "较高" }, { value: 100, label: "特别贵" }],
+  smart: [{ value: 25, label: "一般" }, { value: 50, label: "较强" }, { value: 75, label: "强" }, { value: 100, label: "最强" }],
+  cost: [{ value: 0, label: "免费" }, { value: 20, label: "很低" }, { value: 50, label: "中等" }, { value: 75, label: "较高" }, { value: 100, label: "很高" }],
   speed: [{ value: 25, label: "较慢" }, { value: 50, label: "中等" }, { value: 75, label: "较快" }, { value: 100, label: "很快" }],
 } as const;
 
@@ -21,7 +21,7 @@ export function scoreLabel(kind: keyof ModelScores, value: number): string {
 }
 
 export function scoreSummary(scores: ModelScores): string {
-  return t("聪明 {smart}% · 成本 {cost}% · 速度 {speed}%", { smart: scores.smart, cost: scores.cost, speed: scores.speed });
+  return t("智能 {smart}% · 成本 {cost}% · 速度 {speed}%", { smart: scores.smart, cost: scores.cost, speed: scores.speed });
 }
 
 export function contextText(contextWindow: number): string {

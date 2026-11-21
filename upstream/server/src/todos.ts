@@ -1,9 +1,9 @@
 // 待办：一份清单，每项只有「做什么」和「做到哪儿」。
 // 单聊存在助手目录下，群的综合和每个话题各存在自己的群目录下（同一个话题里的成员共用一份）。待办只归助手，任务没有。
-// 一份待办有头有尾：全做完了、被清掉了、话题关了、搁久了、转交出去，就清空当前这份；收起的那些不进对话，也不进时间线。
+// 一份待办有头有尾：全做完了、被清掉了、话题关了、一轮结束时手上没活了、转交出去，就清空当前这份；收起的那些不进对话，也不进时间线。
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { Iso, TodoItem } from "../../shared/types.ts";
@@ -17,12 +17,6 @@ const STATUSES: TodoStatus[] = ["todo", "doing", "done"];
 
 /** 还没结束的任务状态。 */
 const ACTIVE = new Set(["running", "queued", "waiting"]);
-
-/**
- * 一份待办多久没更新算搁置。
- * ponytail: 这是兜底——主要靠每轮把手上这份带给模型、由它做完就清；这一条只防没人管的那份一直挂着。
- */
-export const TODOS_STALE_MS = 24 * 3600 * 1000;
 
 /**
  * 几轮没更新提醒一句。
@@ -173,23 +167,50 @@ function publishTodos(runtime: HobRuntime, assistantId: string, groupId?: string
   if (assistant) runtime.bus.emit({ type: "assistant", assistant: runtime.router.summary(assistant) });
 }
 
-/** 这个会话里还有没有在跑的任务：有的话搁久了的那份先不动。 */
+/** 这个会话里还有没有在跑的任务。 */
 function busyHere(runtime: HobRuntime, assistantId: string, groupId?: string): boolean {
   return runtime.store.jobs().some((job) => job.groupId === groupId && ACTIVE.has(job.status) && (groupId !== undefined || job.assistantId === assistantId));
 }
 
 /**
- * 搁久了的那一份：超过一天没更新、这个会话里也没有在跑的任务，就清掉。
- * 每轮开始前和启动时检查，不另起定时器。
+ * 这个会话手上还有没有活。有活就留着这份待办；没有就收掉。
+ * 算有活的是这几样：
+ * - 在跑、排队或等待中的任务（这个会话里的）；
+ * - 从这个会话发出、还没结束的转交；
+ * - 从这个会话交给群、话题还没关的（message_group 开出来的话题，等群给结论）；
+ * - 这个会话里还在等用户回答的提问卡；
+ * - 群会话里，还有别的成员在这个会话里跑着一轮。
  */
-export async function pruneStaleTodos(runtime: HobRuntime, assistantId: string, groupId?: string): Promise<void> {
+export function todosBusy(runtime: HobRuntime, assistantId: string, groupId?: string): boolean {
+  if (busyHere(runtime, assistantId, groupId)) return true;
+  // 转交和交给群只从单聊发出（群会话里没有 message_assistant、message_group），群会话不算这两样
+  const delegating = groupId === undefined && runtime.store
+    .delegations()
+    .some((record) => record.from === assistantId && !record.reportedAt && (record.status === "running" || record.status === "waiting"));
+  if (delegating) return true;
+  const handedOver = groupId === undefined && runtime.store.groups().some((group) => group.parentId !== undefined && !group.closedAt && group.handover?.by === assistantId);
+  if (handedOver) return true;
+  const asking = runtime.store.approvals().some((approval) => approval.status === "pending" && (groupId ? approval.groupId === groupId : approval.assistantId === assistantId && !approval.groupId));
+  if (asking) return true;
+  return groupId !== undefined && runtime.router.busyMembers(groupId).some((id) => id !== assistantId);
+}
+
+/**
+ * 一轮结束、或者服务启动时：这个会话手上没活了，就把这份待办收起（不进时间线）。
+ * 一轮出错结束的那一轮调用方不清，留到下一轮。
+ */
+export function releaseIdleTodos(runtime: HobRuntime, assistantId: string, groupId?: string): void {
   const path = sessionTodosPath(runtime.home, assistantId, groupId);
-  const book = readTodoBook(path);
-  if (!book.items.length || !book.updatedAt) return;
-  if (Date.now() - new Date(book.updatedAt).getTime() <= TODOS_STALE_MS) return;
-  if (busyHere(runtime, assistantId, groupId)) return;
+  if (!readTodos(path).length) return;
+  if (todosBusy(runtime, assistantId, groupId)) return;
   clearTodos(path);
   publishTodos(runtime, assistantId, groupId);
+}
+
+/** 启动时把各会话手上已经没活的待办收起：任务和转交都按中断处理过了，再没有手上的活。 */
+export function releaseIdleTodosAtStartup(runtime: HobRuntime): void {
+  for (const assistant of runtime.store.assistants()) releaseIdleTodos(runtime, assistant.id);
+  for (const group of runtime.store.groups()) releaseIdleTodos(runtime, group.ownerId, group.id);
 }
 
 /** 待办工具的落点：会话（单聊、综合、话题）。待办只归助手，任务没有。 */
@@ -225,7 +246,7 @@ export function updateTodosTool(runtime: HobRuntime, target: TodosTarget): ToolD
   return {
     name: "update_todos",
     label: "更新待办",
-    description: "列出或更新手上这件事的待办，用户在界面上看得到每一项做到哪儿。每次传完整的一份，替换原来的；传空列表就是清掉。",
+    description: "列出或更新手上这件事的待办，用户在界面上看得到每一项做到哪儿。每次传完整的一份，替换原来的；传空列表就是清掉。清单只在你手上还有活时留着：这一轮结束时，如果没有在跑的任务、没有等结果的转交或交给群的话题，也没有等用户回答的提问，它会自动收起；下一件事重新列。",
     parameters: Type.Object({
       items: Type.Array(
         Type.Object({

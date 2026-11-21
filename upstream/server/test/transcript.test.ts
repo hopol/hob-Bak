@@ -275,8 +275,8 @@ describe("步骤标题", () => {
     expect(toolTitle("some_new_tool", {})).toBe("some_new_tool");
   });
 
-  it("找资料显示关键词", () => {
-    expect(toolTitle("find_knowledge", { query: "周报" })).toBe("找资料：周报");
-    expect(toolTitle("find_knowledge", {})).toBe("找资料");
+  it("查找资料显示关键词", () => {
+    expect(toolTitle("find_knowledge", { query: "周报" })).toBe("查找资料：周报");
+    expect(toolTitle("find_knowledge", {})).toBe("查找资料");
   });
 });

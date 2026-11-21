@@ -75,6 +75,11 @@ export function assistantFilesDir(home: string, id: string, kind?: "uploads" | "
   return kind ? join(assistantDir(home, id), "files", kind) : join(assistantDir(home, id), "files");
 }
 
+/** 助手自己跨轮保留的工作目录。 */
+export function assistantWorkDir(home: string, id: string): string {
+  return join(assistantDir(home, id), "work");
+}
+
 /** 群数据的根目录：一个群一个目录。 */
 export function groupsDir(home: string): string {
   return join(home, "groups");

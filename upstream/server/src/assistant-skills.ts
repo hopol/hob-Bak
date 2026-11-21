@@ -153,7 +153,7 @@ export function listAssistantSkills(home: string, assistantId: string): Assistan
   return listSkills(assistantSkillsDir(home, assistantId));
 }
 
-/** 给对话、任务和定时用的已启用技能。 */
+/** 给对话和任务用的已启用技能。 */
 export function usableAssistantSkills(home: string, assistantId: string): AssistantSkill[] {
   try { return listAssistantSkills(home, assistantId).filter((skill) => skill.enabled); }
   catch (error) { console.error(`读取「${assistantId}」的技能失败：`, error); return []; }

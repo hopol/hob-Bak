@@ -38,6 +38,8 @@ describe("右栏数据", () => {
     const delegation: Delegation = { id: "d", from: "hob", to: "a", text: "", createdAt: "2026-01-01T00:00:00Z", status: "running", jobIds: [] };
     expect(assistantStatus({ ...a, busy: true }, [], [], [])).toBe("执行中");
     expect(assistantStatus(a, [], [approval], [])).toBe("等你确认");
+    // 群和话题里出的问题卡挂在群那一行，不算到助手头上
+    expect(assistantStatus(a, [], [{ ...approval, groupId: "g-1" }], [])).toBe("空闲");
     expect(assistantStatus(a, [], [], [delegation])).toBe("执行中");
     // 交出去的一方（主助手）这一轮已经说完了，等结果时是空闲的
     expect(assistantStatus({ id: "hob", busy: false }, [], [], [delegation])).toBe("空闲");
@@ -48,7 +50,8 @@ describe("右栏数据", () => {
     expect(assistantStatus(a, [job("waiting"), job("queued")], [], [])).toBe("执行中");
     expect(assistantStatus(a, [job("running"), job("queued")], [], [])).toBe("执行中");
     expect(assistantStatus(a, [job("queued")], [], [delegation])).toBe("执行中");
-    expect(assistantStatus(a, [job("running")], [{ ...approval, assistantId: "other", source: "job", jobId: "running" }], [])).toBe("等你确认");
+    // 任务的提问只交给助手，不算用户要处理的
+    expect(assistantStatus(a, [job("running")], [{ ...approval, source: "job", jobId: "running" }], [])).toBe("执行中");
     expect(assistantStatus(a, [{ ...job("running"), assistantId: "other" }], [{ ...approval, assistantId: "other", status: "answered" }], [{ ...delegation, to: "other" }])).toBe("空闲");
     expect(assistantStatus(a, [], [], [{ ...delegation, status: "waiting" }])).toBe("空闲");
   });

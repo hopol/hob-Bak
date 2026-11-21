@@ -92,6 +92,21 @@ describe("谁能用哪些技能", () => {
   });
 });
 
+describe("Hob 自带的 playwright-cli 技能", () => {
+  it("只在云桌面开着时出现，只读", () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
+      expect(visibleSkills(hob.runtime, "hob").some((skill) => skill.name === "playwright-cli")).toBe(false);
+      vi.spyOn(hob.runtime.desktop, "view").mockReturnValue({ ...hob.runtime.desktop.view(), enabled: true, url: "http://desktop.test", tokenConfigured: true });
+      const skill = visibleSkills(hob.runtime, "hob").find((item) => item.name === "playwright-cli");
+      expect(skill).toMatchObject({ source: "builtin", editable: false });
+    } finally {
+      vi.restoreAllMocks();
+      hob.close();
+    }
+  });
+});
+
 describe("通用技能和别的两档一样能改", () => {
   it("启动时给导入格式的技能补索引，目录改成 name，标题没有就用名字", () => {
     const hob = makeHob({}, { memory: "off" });
@@ -221,7 +236,7 @@ describe("新建在哪、换范围", () => {
       expect(existsSync(join(dir, ".history", "1", "SKILL.md"))).toBe(true);
       expect(listSkills(join(hob.home, "assistants", "hob", "skills"))).toEqual([]);
       const notes = hob.runtime.router.items("hob").items.filter((item) => item.kind === "note");
-      expect(notes.at(-1)).toMatchObject({ icon: "skill", text: "已把技能「每周周报」换成通用的" });
+      expect(notes.at(-1)).toMatchObject({ icon: "skill", text: "已把技能「每周周报」改为通用技能" });
       expect(saved.version).toBe(1);
 
       // 收回来：还在原位置，提示行说收回
@@ -231,36 +246,31 @@ describe("新建在哪、换范围", () => {
     } finally { hob.close(); }
   });
 
-  it("换过去重名时报错；绑着的定时任务照常能用", async () => {
+  it("换范围时不影响定时任务；定时任务不绑定技能", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
       saveAssistantSkill(hob.home, "hob", { ...hobSkill, content: "自己的" });
       saveSkill(generalSkillsDir(hob.home), hobSkill);
-      hob.runtime.routines.create({ assistantId: "hob", name: "周报", instruction: "写周报", schedules: ["0 9 * * *"], skill: hobSkill.name });
-      expect(() => moveSkill(join(hob.home, "assistants", "hob", "skills"), generalSkillsDir(hob.home), hobSkill.name, "通用技能里已经有叫 weekly-report 的技能")).toThrow("通用技能里已经有叫 weekly-report 的技能");
-      // 换的是另一档的同一份：定时任务跟着名字走，照样绑得到
+      const routine = hob.runtime.routines.create({ assistantId: "hob", name: "周报", instruction: "写周报", schedules: ["0 9 * * *"], skill: hobSkill.name } as never);
+      expect(routine).not.toHaveProperty("skill");
+      expect(() => moveSkill(join(hob.home, "assistants", "hob", "skills"), generalSkillsDir(hob.home), hobSkill.name, "已有名为 weekly-report 的通用技能")).toThrow("已有名为 weekly-report 的通用技能");
       archiveSkill(generalSkillsDir(hob.home), hobSkill.name);
       moveSkill(join(hob.home, "assistants", "hob", "skills"), generalSkillsDir(hob.home), hobSkill.name, "冲突");
-      const start = vi.spyOn(hob.runtime.jobs, "start").mockResolvedValue({} as never);
-      const routineId = hob.runtime.store.routines()[0].id;
-      hob.runtime.routines.reload();
-      expect(hob.runtime.routines.nextRuns(routineId)).toHaveLength(1);
-      await hob.runtime.routines.runNow(routineId);
-      expect(start.mock.calls[0][1].instruction).toBe("按技能「每周周报」做（先读它的 SKILL.md）。\n写周报");
-      expect(visibleSkills(hob.runtime, "other").map((skill) => skill.name)).toEqual([hobSkill.name]);
+      expect(visibleSkills(hob.runtime, "hob").map((skill) => skill.name)).toContain(hobSkill.name);
+      expect(hob.runtime.store.routine(routine.id)).not.toHaveProperty("skill");
     } finally { hob.close(); }
   });
 
-  it("通用技能出现在定时任务的可见清单里，能绑；说明前缀用标题", async () => {
+  it("通用技能不会绑定到定时任务", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
       saveSkill(generalSkillsDir(hob.home), hobSkill);
-      const routine = hob.runtime.routines.create({ assistantId: "hob", name: "周报", instruction: "写周报", schedules: ["0 9 * * *"], skill: hobSkill.name });
-      expect(routine.skill).toBe(hobSkill.name);
-      expect(() => hob.runtime.routines.update(routine.id, { skill: "missing" })).toThrow("绑定的技能无效或未启用");
-      const start = vi.spyOn(hob.runtime.jobs, "start").mockResolvedValue({} as never);
+      const routine = hob.runtime.routines.create({ assistantId: "hob", name: "周报", instruction: "写周报", schedules: ["0 9 * * *"], skill: hobSkill.name } as never);
+      expect(routine).not.toHaveProperty("skill");
+      const event = vi.spyOn(hob.runtime.router, "event").mockResolvedValue(true);
       await hob.runtime.routines.runNow(routine.id);
-      expect(start.mock.calls[0][1].instruction).toBe("按技能「每周周报」做（先读它的 SKILL.md）。\n写周报");
+      expect(event).toHaveBeenCalledWith("hob", expect.stringContaining("写周报"), expect.anything());
+      expect(event.mock.calls[0]?.[1]).not.toContain("按技能");
     } finally { hob.close(); }
   });
 });

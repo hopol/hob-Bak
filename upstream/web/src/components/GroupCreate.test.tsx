@@ -16,7 +16,7 @@ vi.mock("react-dom", async (importOriginal) => ({ ...(await importOriginal<typeo
 import { createBody, draftError, MemberList, membersOfGroup, NewGroupDialog } from "./GroupCreate.tsx";
 
 function assistant(id: string, name: string, duty: string, hidden = false): AssistantSummary {
-  return { id, name, duty, sprite: "page", primary: false, pinned: false, hidden, notify: false, instructions: "", createdAt: "2026-11-08T01:00:00.000Z", unread: 0, busy: false };
+  return { id, name, duty, sprite: "page", primary: false, pinned: false, hidden, notify: false, createdAt: "2026-11-08T01:00:00.000Z", unread: 0, busy: false };
 }
 
 const list: AssistantSummary[] = [
@@ -52,17 +52,17 @@ describe("建群", () => {
     expect(html.indexOf("收起的助手")).toBeLessThan(html.indexOf("产品负责人"));
   });
 
-  it("有群时最上面能照着已有的群建，没有群就不显示这一行", () => {
+  it("有群时最上面能沿用已有群的设置创建，没有群就不显示这一行", () => {
     state.groups = groups;
     try {
       const html = dialog();
-      expect(html).toContain("照着已有的群建");
-      expect(html).toContain("不照，自己选成员");
+      expect(html).toContain("沿用已有群的设置创建");
+      expect(html).toContain("不沿用，自行选择成员");
       expect(html).toContain('aria-haspopup="listbox"');
     } finally {
       state.groups = [];
     }
-    expect(dialog()).not.toContain("照着已有的群建");
+    expect(dialog()).not.toContain("沿用已有群的设置创建");
   });
 
   it("照着某个群建：成员和群主照它勾好", () => {
@@ -81,7 +81,7 @@ describe("建群", () => {
   it("只选一个助手就能建群", () => {
     expect(draftError("周报", ["write"])).toBeNull();
     expect(draftError("周报", [])).toBe("至少选一个助手。");
-    expect(draftError("  ", ["write"])).toBe("给群起个名字。");
+    expect(draftError("  ", ["write"])).toBe("请为群命名。");
   });
 
   it("建群带着名字、负责什么、成员和群主，没有工作方式", () => {

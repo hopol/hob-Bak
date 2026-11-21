@@ -2,6 +2,19 @@ import { t } from "../../shared/i18n.ts";
 // 浏览器这边的推送：VAPID 公钥转字节、订阅 / 退订、设备名。纯函数单独拿出来方便测。
 import type { PushSubscriptionJson } from "../../shared/types.ts";
 
+export const PUSH_PROMPT_DISMISSED = "hob.push-prompt-dismissed";
+
+export interface PushPromptConditions {
+  supported: boolean;
+  subscribed: boolean;
+  permission: NotificationPermission;
+  dismissed: boolean;
+}
+
+export function canShowPushPrompt(conditions: PushPromptConditions): boolean {
+  return conditions.supported && !conditions.subscribed && conditions.permission !== "denied" && !conditions.dismissed;
+}
+
 /** 设备名：设置页靠它区分几台设备，只看 UA 里的显眼标记，不做指纹。 */
 export function deviceLabel(userAgent: string): string {
   if (/iPhone/i.test(userAgent)) return "iPhone";
@@ -25,13 +38,17 @@ export function base64ToBytes(value: string): Uint8Array {
 
 /** 页面里能不能用推送（iOS 上要先把 Hob 加到主屏幕，从主屏幕打开才有 PushManager）。 */
 export function pushSupported(): boolean {
-  return (
-    typeof navigator !== "undefined" &&
-    "serviceWorker" in navigator &&
-    typeof window !== "undefined" &&
-    "PushManager" in window &&
-    "Notification" in window
-  );
+  if (
+    typeof navigator === "undefined" ||
+    !("serviceWorker" in navigator) ||
+    typeof window === "undefined" ||
+    !("PushManager" in window) ||
+    !("Notification" in window)
+  ) return false;
+  const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  if (!ios) return true;
+  const standalone = (navigator as Navigator & { standalone?: boolean }).standalone === true || window.matchMedia?.("(display-mode: standalone)").matches === true;
+  return standalone;
 }
 
 /** 现有订阅用的是不是这把公钥（拿不到就当不是，重订一次没坏处） */

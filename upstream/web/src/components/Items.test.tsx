@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Approval, ApprovalQuestion, Item, JobStatus, SedimentStatus } from "../../../shared/types.ts";
+import { ROUTINE_DUE_TEXT_LEGACY } from "../../../shared/routine-note.ts";
 
 const state = vi.hoisted(() => ({ sediment: undefined as SedimentStatus | undefined, status: "done" as JobStatus, statusReason: undefined as string | undefined, approvals: {} as Record<string, Approval> }));
 
@@ -119,13 +120,29 @@ describe("对话卡片出处", () => {
     } finally { vi.unstubAllGlobals(); }
   });
 
+  it("定时任务到执行时间那一行：新记录按 routineId 认，老记录按文字认，检查到的内容不显示", () => {
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
+    try {
+      const at = "2026-01-01T00:00:00Z";
+      const fresh: Item = { kind: "note", id: "r1", at, icon: "routine", text: "定时任务「每日检查」已到执行时间", routineId: "r-1" };
+      const legacy: Item = { kind: "note", id: "r2", at, icon: "routine", text: `定时任务「每日检查」${ROUTINE_DUE_TEXT_LEGACY}，检查到：\n问题一：登录异常` };
+      const html = renderToStaticMarkup(<ItemList items={[fresh, legacy]} />);
+      expect(html.match(/routine-note/g)).toHaveLength(2);
+      expect(html).toContain("定时任务「每日检查」已到执行时间");
+      expect(html).toContain(`定时任务「每日检查」${ROUTINE_DUE_TEXT_LEGACY}`);
+      expect(html).not.toContain("问题一：登录异常");
+      const other = renderToStaticMarkup(<ItemList items={[{ kind: "note", id: "r3", at, icon: "routine", text: "定时任务已停止" }]} />);
+      expect(other).not.toContain("routine-note");
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it("没办成的提示点开才看原因：一行文字，原因是工具报错的原文", () => {
     vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
     try {
       const at = "2026-01-01T00:00:00Z";
-      const failed: Item = { kind: "note", id: "n4", at, icon: "info", text: "「创建任务」没有成功", detail: "备注 401 字，最多 400 字。" };
+      const failed: Item = { kind: "note", id: "n4", at, icon: "info", text: "「创建任务」执行失败", detail: "备注 401 字，最多 400 字。" };
       const html = renderToStaticMarkup(<ItemList items={[failed]} />);
-      expect(html).toMatch(/<details><summary>「创建任务」没有成功<\/summary><div class="why">备注 401 字，最多 400 字。<\/div><\/details>/);
+      expect(html).toMatch(/<details><summary>「创建任务」执行失败<\/summary><div class="why">备注 401 字，最多 400 字。<\/div><\/details>/);
     } finally { vi.unstubAllGlobals(); }
   });
 

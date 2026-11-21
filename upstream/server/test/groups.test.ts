@@ -32,7 +32,7 @@ function userTexts(file: string): string[] {
 
 function addAssistant(hob: TestHob, id: string, name: string, duty: string): Assistant {
   const base = hob.runtime.store.assistant("hob")!;
-  const assistant: Assistant = { ...base, id, name, duty, primary: false, pinned: false, sprite: "page", instructions: "" };
+  const assistant: Assistant = { ...base, id, name, duty, primary: false, pinned: false, sprite: "page" };
   hob.runtime.store.saveAssistant(assistant);
   return assistant;
 }
@@ -94,7 +94,7 @@ describe("群", () => {
       await settled(hob, group.id, 1);
       const session = await hob.runtime.router.ensure("hob", group.id);
       const user = session.session!.messages.find((message) => message.role === "user");
-      expect(user?.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: "image", mimeType: "image/png" })]));
+      expect(user?.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: "image", mimeType: expect.stringMatching(/^image\//) })]));
     } finally { hob.close(); }
   });
   it("会话启动预检成功但消息未接收时不推进游标", async () => {
@@ -132,15 +132,15 @@ describe("群", () => {
       expect(userTexts(memberFile(hob, group.id, "hob")).filter((text) => text.includes("处理一次"))).toHaveLength(1);
     } finally { hob.close(); }
   });
-  it("群成员断流时显示没能回复", async () => {
+  it("群成员断流时显示未能回复", async () => {
     const { hob, group } = setup();
     try {
       hob.faux.setResponses([fauxAssistantMessage([fauxText("API Error: stream interrupted")], { stopReason: "aborted", errorMessage: "API Error: stream interrupted" })]);
       await hob.runtime.groups.send(group.id, { text: "继续" });
-      await waitFor(() => hob.runtime.groups.items(group.id).items.some((item) => item.kind === "note" && item.text.includes("没能回复")));
+      await waitFor(() => hob.runtime.groups.items(group.id).items.some((item) => item.kind === "note" && item.text.includes("未能回复")));
       expect(assistantItems(hob, group.id)).toEqual([]);
-      const note = hob.runtime.groups.items(group.id).items.find((item) => item.kind === "note" && item.text.includes("没能回复"));
-      expect(note?.text).toMatch(/^没能回复：调用模型失败（.+）。可以再发一次。$/);
+      const note = hob.runtime.groups.items(group.id).items.find((item) => item.kind === "note" && item.text.includes("未能回复"));
+      expect(note?.text).toMatch(/^未能回复：模型调用失败（.+）。可重新发送。$/);
       expect(note).toMatchObject({ speaker: "hob" });
     } finally { hob.close(); }
   });
@@ -153,15 +153,15 @@ describe("群", () => {
       const groups = hob.runtime.groups;
 
       expect(() => groups.create({ name: "", purpose: "机器", ownerId: "ops", members: ["ops", "write"] })).toThrow("群名不能为空");
-      expect(() => groups.create({ name: "家里", purpose: " ", ownerId: "ops", members: ["ops", "write"] })).toThrow("负责什么不能为空");
+      expect(() => groups.create({ name: "家里", purpose: " ", ownerId: "ops", members: ["ops", "write"] })).toThrow("职责不能为空");
       expect(() => groups.create({ name: "家里", purpose: "机器", ownerId: "ops", members: [] })).toThrow("群里至少要有一个助手");
       expect(() => groups.create({ name: "家里", purpose: "机器", ownerId: "ops", members: ["ops", "nobody"] })).toThrow("助手不存在或已归档：nobody");
-      expect(() => groups.create({ name: "家里", purpose: "机器", ownerId: "write", members: ["ops", "hob"] })).toThrow("群主要在成员里");
+      expect(() => groups.create({ name: "家里", purpose: "机器", ownerId: "write", members: ["ops", "hob"] })).toThrow("群主必须是成员之一");
 
       const group = groups.create({ name: "家里", purpose: "机器上的事", ownerId: "ops", members: ["ops", "write"] });
       expect(groups.summary(group.id)).toMatchObject({ name: "家里", purpose: "机器上的事", ownerId: "ops", members: ["ops", "write"], unread: 0, busy: [] });
 
-      expect(() => groups.update(group.id, { ownerId: "hob" })).toThrow("群主要在成员里");
+      expect(() => groups.update(group.id, { ownerId: "hob" })).toThrow("群主必须是成员之一");
       expect(() => groups.update(group.id, { name: "" })).toThrow("群名不能为空");
       const renamed = groups.update(group.id, { name: "家里的机器", purpose: "只管家里的机器", members: ["ops", "write", "hob"], ownerId: "hob" });
       expect(renamed).toMatchObject({ name: "家里的机器", ownerId: "hob", members: ["ops", "write", "hob"] });
@@ -316,7 +316,7 @@ describe("群", () => {
       const inputs = userTexts(memberFile(hob, group.id, "ops"));
       expect(inputs).toHaveLength(1);
       expect(inputs[0]!.slice(inputs[0]!.indexOf("\n\n") + 2).split("\n")).toEqual([
-        "系统：建了群「家里机器」",
+        "系统：已创建群「家里机器」",
         "用户：@服务器 第一句",
         "用户：@服务器 第二句",
       ]);
@@ -342,7 +342,7 @@ describe("群", () => {
       expect(inputs).toHaveLength(1);
       const body = inputs[0]!.slice(inputs[0]!.indexOf("\n\n") + 2);
       expect(body.split("\n\n")).toEqual([
-        "系统：建了群「家里机器」\n用户：@服务器 先别急，等我看下",
+        "系统：已创建群「家里机器」\n用户：@服务器 先别急，等我看下",
         "[hob-event] 任务「查磁盘」完成了。",
       ]);
       expect(hob.faux.getPendingResponseCount()).toBe(1);
@@ -399,7 +399,7 @@ describe("群", () => {
       await settled(hob, group.id, 2);
       const input = userTexts(memberFile(hob, group.id, "ops")).at(-1)!;
       const body = input.slice(input.indexOf("\n\n") + 2);
-      expect(body.split("\n")).toEqual(["系统：建了群「家里机器」", "用户：第一件事", "Hob：第一件事收到", "用户：第二件事 @服务器 你看"]);
+      expect(body.split("\n")).toEqual(["系统：已创建群「家里机器」", "用户：第一件事", "Hob：第一件事收到", "用户：第二件事 @服务器 你看"]);
       expect(body.endsWith("用户：第二件事 @服务器 你看")).toBe(true);
 
       // 它上次说完以后：再叫它一次，输入从它的上一条回复之后开始
@@ -447,6 +447,24 @@ describe("群", () => {
       await hob.runtime.groups.send(group.id, { text: "@服务器 看下群里的记录" });
       await settled(hob, group.id, 2);
       expect(assistantItems(hob, group.id).map((item) => item.text)).toEqual(["我先看看时间线", "看完了：只有一句问候。"]);
+    } finally {
+      hob.close();
+    }
+  });
+
+  it("群里又发了话：成员在这个群里出的、还没答的问题卡过期，别的群和单聊的不动", async () => {
+    const { hob, group } = setup();
+    try {
+      const base = { assistantId: "hob", title: "现在发布吗", options: [{ key: "A" as const, label: "发布" }], status: "pending" as const, source: "router" as const, createdAt: new Date().toISOString() };
+      hob.runtime.store.saveApproval({ ...base, id: "q-here", groupId: group.id });
+      hob.runtime.store.saveApproval({ ...base, id: "q-elsewhere", groupId: "g-other" });
+      hob.runtime.store.saveApproval({ ...base, id: "q-single" });
+      hob.faux.setResponses([text("好")]);
+      await hob.runtime.groups.send(group.id, { text: "先不管那个，看看这个" });
+      await settled(hob, group.id, 1);
+      expect(hob.runtime.store.approval("q-here")?.status).toBe("expired");
+      expect(hob.runtime.store.approval("q-elsewhere")?.status).toBe("pending");
+      expect(hob.runtime.store.approval("q-single")?.status).toBe("pending");
     } finally {
       hob.close();
     }
@@ -562,6 +580,7 @@ describe("群", () => {
       expect(ownerPrompt).toContain(expected);
       expect(ownerPrompt).toContain(GROUP_OWNER_LINE);
       expect(ownerPrompt).not.toContain("用户在一对一的对话里和你合作");
+      expect(ownerPrompt).not.toContain("message_assistant");
 
       const memberPrompt = buildSystemPrompt(hob.runtime.store, "ops", { ...options, group });
       expect(memberPrompt).toContain(expected);

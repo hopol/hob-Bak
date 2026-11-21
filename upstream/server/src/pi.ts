@@ -1,5 +1,6 @@
 import {
   createAgentSession,
+  createBashTool,
   createExtensionRuntime,
   createMcpExtension,
   createToolSearchExtension,
@@ -42,6 +43,8 @@ export interface OpenSessionOptions {
   systemPrompt: () => string;
   tools: string[];
   customTools: ToolDefinition<any, any>[];
+  /** 每次执行 bash 前注入会话级环境（云桌面 CLI 连接信息）。 */
+  bashSpawnHook?: (context: { command: string; cwd: string; env: NodeJS.ProcessEnv }) => { command: string; cwd: string; env: NodeJS.ProcessEnv };
   /** 这一轮用哪个记忆提供者：决定加载哪个捆绑插件（off = 两个都不加载） */
   memory?: MemoryProvider;
   /** 任务会话加载 MCP 服务（引擎目录的 mcp.json）；对话会话不加载。 */
@@ -361,9 +364,13 @@ export class PiHost {
     mkdirSync(dirname(options.file), { recursive: true });
     const model = await this.model(options.model);
     const manager = SessionManager.open(options.file, dirname(options.file), options.cwd);
-    const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, ...(this.options.retry ?? {}) } });
+    const settingsManager = SettingsManager.inMemory({ cacheWarming: "streaming", compaction: { enabled: true }, retry: { enabled: true, ...(this.options.retry ?? {}) } });
     const resourceLoader = await this.resourceLoader(options, settingsManager);
     const memoryTools = MEMORY_TOOL_PATTERNS[options.memory ?? "off"];
+    const customTools = [
+      ...(options.bashSpawnHook ? [createBashTool(options.cwd, { spawnHook: options.bashSpawnHook })] : []),
+      ...(options.customTools ?? []),
+    ];
     const { session } = await createAgentSession({
       cwd: options.cwd,
       agentDir: this.engineDir,
@@ -374,7 +381,7 @@ export class PiHost {
       sessionManager: manager,
       settingsManager,
       tools: [...options.tools, ...memoryTools],
-      customTools: toolFailureText(options.customTools ?? []),
+      customTools: toolFailureText(customTools),
     });
     // resources_discover 由 bindExtensions 触发；Lore 注册技能目录，MCP 连服务（都在后台）
     if (options.memory === "lore") {

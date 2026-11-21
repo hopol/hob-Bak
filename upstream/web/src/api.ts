@@ -58,7 +58,7 @@ import type {
 
 import type { KnowledgeCollection, KnowledgeEntry, KnowledgeGroup, KnowledgeOrigin, KnowledgePage, KnowledgeEntryView } from "../../shared/knowledge.ts";
 
-import type { AssistantSkill, SkillImportResult, SkillImportSource, SkillImportView, SkillsView, VisibleSkill } from "../../shared/skills.ts";
+import type { AssistantSkill, SkillImportResult, SkillImportSource, SkillImportView, SkillsView } from "../../shared/skills.ts";
 import type { SearchSettings, SearchView } from "../../shared/search.ts";
 import type { McpImportResult, McpImportView, McpSecretMutation, McpServerPatch, McpServerSave, McpServerView, McpTestResult, McpView } from "../../shared/mcp.ts";
 
@@ -151,12 +151,10 @@ export interface HobApi {
   importSkills(source: SkillImportSource, ids: string[], overwrite: boolean): Promise<SkillImportResult>;
   deleteSkill(id: string): Promise<void>;
   rollbackGeneralSkill(name: string): Promise<AssistantSkill>;
-  visibleSkills(assistantId: string, groupId?: string): Promise<VisibleSkill[]>;
   desktop(): Promise<DesktopView>;
   desktopScreens(): Promise<{ screens: DesktopScreen[]; profiles: Record<string, string> }>;
 
   saveDesktop(body: { revision: number; url: string; enabled: boolean; token?: string }): Promise<DesktopView>;
-  saveDesktopPublic(revision: number, assistants: string[]): Promise<DesktopView>;
   testDesktop(): Promise<DesktopTestResult>;
   mcp(): Promise<McpView>;
   putMcp(name: string, body: McpServerSave): Promise<McpView>;
@@ -194,7 +192,7 @@ export interface HobApi {
   createDraft(draftId: string): Promise<void>;
   dismissDraft(draftId: string): Promise<void>;
   createRoutine(body: Omit<Routine, "id" | "createdAt" | "runs">): Promise<{ routine: Routine }>;
-  patchRoutine(routineId: string, patch: Omit<Partial<Routine>, "skill"> & { skill?: string | null }): Promise<void>;
+  patchRoutine(routineId: string, patch: Partial<Routine>): Promise<void>;
   deleteRoutine(routineId: string): Promise<void>;
   runRoutine(routineId: string): Promise<RoutineTick | undefined>;
   replyJob(jobId: string, text: string): Promise<void>;
@@ -210,7 +208,7 @@ export interface HobApi {
   deleteGroupRule(groupId: string, ruleId: string): Promise<void>;
   groups(): Promise<GroupSummary[]>;
   createGroup(body: { name: string; purpose: string; ownerId: string; members: string[] }): Promise<Group>;
-  patchGroup(groupId: string, patch: { rule?: { id?: string; text?: string; mode?: "ask" | "allow" }; name?: string; purpose?: string; instructions?: string; models?: { conversation?: import("../../shared/types.ts").ModelPick | null; work?: import("../../shared/types.ts").ModelPick | null }; ownerId?: string; members?: string[] }): Promise<Group>;
+  patchGroup(groupId: string, patch: { rule?: { id?: string; text?: string; mode?: "ask" | "allow" }; name?: string; purpose?: string; listOrder?: number; models?: { conversation?: import("../../shared/types.ts").ModelPick | null; work?: import("../../shared/types.ts").ModelPick | null }; ownerId?: string; members?: string[] }): Promise<Group>;
   patchGroupMemberModels(groupId: string, assistantId: string, patch: { conversation?: import("../../shared/types.ts").ModelPick | null; work?: import("../../shared/types.ts").ModelPick | null }): Promise<Group>;
   archiveGroup(groupId: string): Promise<void>;
   /** 在群里开一个话题 */
@@ -307,11 +305,9 @@ export const realApi: HobApi = {
   importSkills: (source: SkillImportSource, ids: string[], overwrite: boolean) => req<SkillImportResult>(`/api/skills/import/${source}`, json({ ids, overwrite })),
   deleteSkill: (id) => req<void>(`/api/skills/${encodeURIComponent(id)}`, { method: "DELETE" }),
   rollbackGeneralSkill: (name) => req<AssistantSkill>(`/api/skills/${encodeURIComponent(name)}/rollback`, { method: "POST" }),
-  visibleSkills: (assistantId, groupId) => req<VisibleSkill[]>(`/api/skills/visible?assistantId=${encodeURIComponent(assistantId)}${groupId ? `&groupId=${encodeURIComponent(groupId)}` : ""}`),
   desktop: () => req<DesktopView>("/api/desktop"),
   desktopScreens: () => req<{ screens: DesktopScreen[]; profiles: Record<string, string> }>("/api/desktop/screens"),
   saveDesktop: (body) => req<DesktopView>("/api/desktop", json(body, "PUT")),
-  saveDesktopPublic: (revision, assistants) => req<DesktopView>("/api/desktop/public", json({ revision, assistants }, "PUT")),
   testDesktop: () => req<DesktopTestResult>("/api/desktop/test", json({})),
   mcp: () => req<McpView>("/api/mcp"),
   putMcp: (name, body) => req<McpView>(`/api/mcp/${encodeURIComponent(name)}`, json(body, "PUT")),

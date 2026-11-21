@@ -119,7 +119,7 @@ export function attachDesktopWebSocket(server: ReturnType<typeof serve>, runtime
     const client = requestUrl.searchParams.get("client") ?? "";
     const screen = requestUrl.searchParams.get("screen") ?? "";
     if (!CLIENT.test(client) || !/^[a-z0-9-]{1,64}$/.test(screen)) return reject("400 Bad Request");
-    if (screen !== "public" && !runtime.store.assistants().some((assistant) => desktopProfile(assistant.id) === screen)) return reject("404 Not Found");
+    if (!runtime.store.assistants().some((assistant) => desktopProfile(assistant.id) === screen)) return reject("404 Not Found");
     let connection: { url: string; token: string };
     try { connection = runtime.desktop.connection(); } catch { return reject("503 Service Unavailable"); }
     const target = new URL(`/vnc/${screen}`, connection.url);

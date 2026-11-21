@@ -28,8 +28,8 @@ describe("交回 Hob", () => {
   it("只有非主助手有工具；普通回合写入双向定位条目并触发 Hob", async () => {
     const hob = setup();
     try {
-      expect(buildRouterTools(hob.runtime, "hob").some((tool) => tool.name === "hand_back_to_hob")).toBe(false);
-      const tool = buildRouterTools(hob.runtime, "ops").find((item) => item.name === "hand_back_to_hob")!;
+      expect(buildRouterTools(hob.runtime, "hob").some((tool) => tool.name === "hand_back")).toBe(false);
+      const tool = buildRouterTools(hob.runtime, "ops").find((item) => item.name === "hand_back")!;
       expect(tool).toBeDefined();
       hob.faux.setResponses([text("我来处理代理问题")]);
       const result = await tool.execute("call", { text: "检查代理", reason: "不负责代理" }) as { terminate?: boolean };
@@ -37,7 +37,7 @@ describe("交回 Hob", () => {
       const forwarded = hob.runtime.router.items("hob").items.find((item) => item.kind === "user" && item.from?.assistantId === "ops");
       expect(forwarded).toMatchObject({ text: "检查代理", from: { assistantId: "ops", name: "服务器" } });
       const id = forwarded?.kind === "user" ? forwarded.from!.delegationId : "";
-      expect(hob.runtime.router.items("ops").items).toContainEqual(expect.objectContaining({ kind: "note", text: "已交回 Hob：不负责代理", handbackId: id }));
+      expect(hob.runtime.router.items("ops").items).toContainEqual(expect.objectContaining({ kind: "note", text: "已交回「Hob」：不负责代理", handbackId: id }));
       await waitFor(() => hob.faux.state.callCount > 0);
       await hob.runtime.router.waitIdle("hob");
     } finally { hob.close(); }
@@ -47,8 +47,8 @@ describe("交回 Hob", () => {
     const hob = setup();
     try {
       const event = vi.spyOn(hob.runtime.router, "event").mockResolvedValue();
-      hob.faux.setResponses([call("hand_back_to_hob", { text: "检查代理", reason: "不负责代理" })]);
-      const delegation = await hob.runtime.delegations.start("ops", "检查代理");
+      hob.faux.setResponses([call("hand_back", { text: "检查代理", reason: "不负责代理" })]);
+      const delegation = await hob.runtime.delegations.start("hob", "ops", "检查代理");
       await waitFor(() => Boolean(hob.runtime.store.delegation(delegation.id)?.reportedAt));
       await hob.runtime.router.waitIdle("ops");
       expect(hob.runtime.store.delegation(delegation.id)).toMatchObject({ status: "returned", reply: "退回：不负责代理" });
@@ -60,9 +60,49 @@ describe("交回 Hob", () => {
       expect(event).toHaveBeenCalledTimes(1);
     } finally { hob.close(); }
   });
-});
+  it("非 Hob 发起的委派卡、转来消息和结果都回到发起方", async () => {
+    const hob = setup();
+    try {
+      const ops = hob.runtime.store.assistant("ops")!;
+      hob.runtime.store.saveAssistant({ ...ops, id: "write", name: "写作" });
+      hob.faux.setResponses([text("写作已完成"), text("已收到")]);
+      const tool = buildRouterTools(hob.runtime, "ops").find((item) => item.name === "message_assistant")!;
+      const result = await tool.execute("call", { assistantId: "write", note: "按规范整理" }) as { terminate?: boolean };
+      expect(result.terminate).toBe(true);
+      const delegation = hob.runtime.store.delegations().find((item) => item.from === "ops" && item.to === "write")!;
+      expect(hob.runtime.router.items("ops").items).toContainEqual(expect.objectContaining({ kind: "delegation", delegationId: delegation.id }));
+      expect(hob.runtime.router.items("write").items).toContainEqual(expect.objectContaining({ kind: "user", from: { assistantId: "ops", name: "服务器", delegationId: delegation.id } }));
+      await waitFor(() => Boolean(hob.runtime.store.delegation(delegation.id)?.reportedAt));
+      expect(hob.runtime.store.delegation(delegation.id)?.reportedAt).toBeDefined();
+    } finally { hob.close(); }
+  });
 
-describe("委派", () => {
+  it("转交回合中再次转交直接报回环错误", async () => {
+    const hob = setup();
+    try {
+      const ops = hob.runtime.store.assistant("ops")!;
+      hob.runtime.store.saveAssistant({ ...ops, id: "write", name: "写作" });
+      const delegation = { ...record(), id: "dg-loop", from: "ops", to: "write" };
+      hob.runtime.store.saveDelegation(delegation);
+      vi.spyOn(hob.runtime.router, "currentDelegation").mockReturnValue("dg-loop");
+      const tool = buildRouterTools(hob.runtime, "write").find((item) => item.name === "message_assistant")!;
+      const result = await tool.execute("call", { assistantId: "hob", note: "交回主助手" }) as { isError?: boolean; error?: string };
+      expect(result).toMatchObject({ isError: true });
+      expect(result.error ?? result.content?.[0]?.text).toBe("你在处理「服务器」转来的事：不归你管就用 hand_back 交回它，由它再转。");
+    } finally { hob.close(); }
+  });
+
+  it("普通助手要交给主助手：报错让它用 hand_back", async () => {
+    const hob = setup();
+    try {
+      const tool = buildRouterTools(hob.runtime, "ops").find((item) => item.name === "message_assistant")!;
+      const result = await tool.execute("call", { assistantId: "hob", note: "交回主助手" }) as { isError?: boolean; error?: string; content?: Array<{ text: string }> };
+      expect(result).toMatchObject({ isError: true });
+      expect(result.error ?? result.content?.[0]?.text).toBe("要交给「Hob」，用 hand_back：它会接过去，转给合适的助手。");
+      expect(hob.runtime.store.delegations()).toEqual([]);
+    } finally { hob.close(); }
+  });
+
   it("交回会话不可用时保留待交回结果，恢复后只接收一次", async () => {
     const hob = setup();
     try {
@@ -108,7 +148,7 @@ describe("委派", () => {
     try {
       const event = vi.spyOn(hob.runtime.router, "event").mockResolvedValue();
       hob.faux.setResponses([call("ask_user", { title: "允许吗", options: [{ label: "允许" }, { label: "拒绝" }] })]);
-      const delegation = await hob.runtime.delegations.start("ops", "请执行");
+      const delegation = await hob.runtime.delegations.start("hob", "ops", "请执行");
       await waitFor(() => hob.runtime.store.delegation(delegation.id)?.status === "waiting");
       const approval = hob.runtime.store.approvals()[0];
       const jobApproval = { ...approval, id: "job-question", source: "job" as const, jobId: "job-1" };
@@ -126,7 +166,7 @@ describe("委派", () => {
       expect(hob.runtime.store.approval(approval.id)?.status).toBe("expired");
       expect(hob.runtime.store.approval(jobApproval.id)?.status).toBe("pending");
       expect(event).toHaveBeenCalledTimes(1);
-      expect(event).toHaveBeenCalledWith("hob", "转交给「服务器」的事已被用户接手。原请求：请执行");
+      expect(event).toHaveBeenCalledWith("hob", "转交给「服务器」的事已被用户接手。交接说明：请执行");
     } finally { hob.close(); }
   });
 
@@ -145,7 +185,7 @@ describe("委派", () => {
       hob.runtime.store.saveJob(finished);
       hob.runtime.bus.emit({ type: "job", job: finished });
       expect(event).toHaveBeenCalledTimes(1);
-      expect(event.mock.calls[0][1]).toBe("转交给「服务器」的事已被用户接手。原请求：检查");
+      expect(event.mock.calls[0][1]).toBe("转交给「服务器」的事已被用户接手。交接说明：检查");
       await hob.runtime.router.waitIdle("ops");
     } finally { hob.close(); }
   });
@@ -154,11 +194,11 @@ describe("委派", () => {
     const hob = setup();
     try {
       const description = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "message_assistant")!.description;
-      expect(description).toBe("把一件事转给另一个助手（见「助手」一节），由它负责到底。用户的原话和附件会自动转过去，对方的回复和结果会回到这里。");
+      expect(description).toBe("把一件事转给另一个助手（见「助手」一节），由它负责到底。对方只看得到你写的 note 和 files 里的文件；它的回复和结果会回到这里。");
       const { timezone, aboutYou } = hob.runtime.settings.settings.general;
       const prompt = buildSystemPrompt(hob.runtime.store, "ops", { timezone, aboutYou, memory: "local" });
       expect(prompt).not.toContain("## 转来的事");
-      expect(prompt).toContain("转来的消息带着用户的原话，等同用户本人的要求，你办完的结果会自动回到 Hob。");
+      expect(prompt).toContain("交来的消息是交接方写的交接说明，里面引用的用户原话等同用户本人的要求");
       expect(prompt).toContain("先给结论，用规范的书面中文。长短跟着事情的分量走");
       const primary = buildSystemPrompt(hob.runtime.store, "hob", { timezone, aboutYou, memory: "local" });
       expect(primary).toContain("任务只向你汇报，给用户看什么由你决定。");
@@ -174,11 +214,11 @@ describe("委派", () => {
       await hob.runtime.router.send("hob", { text: "检查服务器" });
       await hob.runtime.router.waitIdle("hob");
       const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "message_assistant")!;
-      const result = await tool.execute("call", { assistantId: "ops" }) as { terminate?: boolean };
+      const result = await tool.execute("call", { assistantId: "ops", note: "检查服务器" }) as { terminate?: boolean };
       expect(result.terminate).toBe(true);
       const delegation = hob.runtime.store.delegations()[0];
       expect(hob.runtime.router.items("hob").items).toContainEqual(expect.objectContaining({ kind: "delegation", delegationId: delegation.id }));
-      expect(delegation.text).toMatch(/^用户原话（.+）：\n检查服务器$/);
+      expect(delegation.text).toBe("检查服务器");
       expect(hob.runtime.router.items("ops").items).toContainEqual(expect.objectContaining({ kind: "user", text: delegation.text, from: expect.objectContaining({ assistantId: "hob", delegationId: delegation.id }) }));
       await waitFor(() => Boolean(hob.runtime.store.delegation(delegation.id)?.reportedAt));
     } finally { hob.close(); }
@@ -194,7 +234,7 @@ describe("委派", () => {
       hob.faux.setResponses([async () => { await gate; return text("之前的回复"); }, text("转交的回复"), text("后续的回复")]);
       await hob.runtime.router.send("ops", { text: "之前的工作" });
       await waitFor(() => hob.faux.state.callCount >= 1);
-      const delegation = await hob.runtime.delegations.start("ops", "排队请求");
+      const delegation = await hob.runtime.delegations.start("hob", "ops", "排队请求");
       expect(hob.runtime.router.items("ops").items).toContainEqual(expect.objectContaining({ kind: "user", text: "排队请求" }));
       expect(hob.runtime.router.currentDelegation("ops")).toBeUndefined();
       await new Promise((resolve) => setTimeout(resolve, 30));
@@ -214,7 +254,7 @@ describe("委派", () => {
     try {
       vi.spyOn(hob.runtime.router, "event").mockResolvedValue();
       hob.faux.setResponses([call("ask_user", { title: "允许吗", options: [{ label: "允许" }, { label: "拒绝" }] })]);
-      const delegation = await hob.runtime.delegations.start("ops", "请执行");
+      const delegation = await hob.runtime.delegations.start("hob", "ops", "请执行");
       await waitFor(() => Boolean(hob.runtime.store.delegation(delegation.id)?.turnFinished));
       const approval = hob.runtime.store.approvals()[0];
       expect(hob.runtime.store.delegation(delegation.id)).toMatchObject({ status: "waiting", approvalIds: [approval.id] });
@@ -231,7 +271,7 @@ describe("委派", () => {
         call("start_job", { title: "检查磁盘", instruction: "检查磁盘" }),
         call("report", { outcome: "done", result: "磁盘正常" }),
       ]);
-      const delegation = await hob.runtime.delegations.start("ops", "检查磁盘");
+      const delegation = await hob.runtime.delegations.start("hob", "ops", "检查磁盘");
       await waitFor(() => Boolean(hob.runtime.store.delegation(delegation.id)?.jobIds.length));
       const saved = hob.runtime.store.delegation(delegation.id)!;
       expect(hob.runtime.store.job(saved.jobIds[0])?.delegationId).toBe(delegation.id);
@@ -249,7 +289,7 @@ describe("委派", () => {
         call("start_job", { title: "检查日志", instruction: "检查日志" }),
         call("report", { outcome: "done", result: "检查完毕" }),
       ]);
-      const delegation = await hob.runtime.delegations.start("ops", "先记录规则，再检查日志");
+      const delegation = await hob.runtime.delegations.start("hob", "ops", "先记录规则，再检查日志");
       await waitFor(() => Boolean(hob.runtime.store.delegation(delegation.id)?.turnFinished));
       const saved = hob.runtime.store.delegation(delegation.id)!;
       expect(saved.jobIds).toHaveLength(1);
@@ -265,6 +305,7 @@ describe("委派", () => {
       const event = vi.spyOn(hob.runtime.router, "event").mockImplementation((id, value, details) => id === "hob" ? Promise.resolve() : originalEvent(id, value, details));
       hob.faux.setResponses([
         call("start_job", { title: "先查配置", instruction: "查配置" }),
+        text("已安排。"),
         call("report", { outcome: "stuck", result: "后台入口还能绕过" }),
         text("报告了"),
         // 任务结果回到目标助手：它接着再派一个，这时 Hob 不能收到「已结束」
@@ -272,17 +313,19 @@ describe("委派", () => {
           expect(event.mock.calls.filter(([id]) => id === "hob")).toHaveLength(0);
           return call("start_job", { title: "封后台入口", instruction: "修后台入口" });
         },
+        text("已安排。"),
         call("report", { outcome: "done", result: "后台入口已封" }),
         text("报告了"),
         text("两处都改好了"),
       ]);
-      const delegation = await hob.runtime.delegations.start("ops", "关掉主动语音");
+      const delegation = await hob.runtime.delegations.start("hob", "ops", "关掉主动语音");
       await waitFor(() => Boolean(hob.runtime.store.delegation(delegation.id)?.reportedAt));
       await hob.runtime.router.waitIdle("ops");
       const saved = hob.runtime.store.delegation(delegation.id)!;
       expect(saved.jobIds).toHaveLength(2);
       expect(saved.jobIds.map((id) => hob.runtime.store.job(id)?.delegationId)).toEqual([delegation.id, delegation.id]);
-      expect(saved).toMatchObject({ status: "stuck", reply: "两处都改好了" });
+      expect(saved.status).toBe("stuck");
+      expect(saved.reply).toContain("两处都改好了");
       const toHob = event.mock.calls.filter(([id]) => id === "hob");
       expect(toHob).toHaveLength(1);
       expect(toHob[0][1]).toContain("两处都改好了");
@@ -298,11 +341,12 @@ describe("委派", () => {
       hob.faux.setResponses([
         call("ask_user", { title: "允许重载吗", options: [{ label: "允许" }, { label: "不允许" }] }),
         call("start_job", { title: "重载插件", instruction: "重载" }),
+        text("已安排。"),
         call("report", { outcome: "done", result: "已重载" }),
         text("报告了"),
         text("重载好了"),
       ]);
-      const delegation = await hob.runtime.delegations.start("ops", "改完上线");
+      const delegation = await hob.runtime.delegations.start("hob", "ops", "改完上线");
       await waitFor(() => hob.runtime.store.delegation(delegation.id)?.status === "waiting");
       const approval = hob.runtime.store.approvals()[0];
       expect((await answerApproval(hob.runtime, approval.id, { key: "A" })).status).toBe(200);
@@ -321,7 +365,7 @@ describe("委派", () => {
     try {
       vi.spyOn(hob.runtime.router, "event").mockResolvedValue();
       hob.faux.setResponses([() => { throw new Error("模型不可用"); }]);
-      const delegation = await hob.runtime.delegations.start("ops", "处理请求");
+      const delegation = await hob.runtime.delegations.start("hob", "ops", "处理请求");
       await waitFor(() => Boolean(hob.runtime.store.delegation(delegation.id)?.turnFinished));
       expect(hob.runtime.store.delegation(delegation.id)).toMatchObject({ status: "stuck", turnFailed: true, reply: expect.stringContaining("模型不可用") });
     } finally { hob.close(); }
@@ -374,6 +418,56 @@ describe("委派", () => {
     } finally { hob.close(); }
   });
 
+  it("转交任务收尾不等待目标助手的结果回合", async () => {
+    const hob = setup();
+    let release = () => {};
+    try {
+      const gate = new Promise<boolean>((resolve) => { release = () => resolve(true); });
+      const relay = vi.spyOn(hob.runtime.router, "relay").mockImplementation(async () => gate);
+      hob.runtime.store.saveDelegation(record());
+      hob.faux.setResponses([call("report", { outcome: "done", result: "完成" })]);
+      const started = await hob.runtime.jobs.start("ops", { title: "检查", instruction: "检查", delegationId: "dg-test" });
+      await waitFor(() => hob.runtime.store.job(started.id)?.status === "done", 1_000);
+      expect(relay).toHaveBeenCalledWith("ops", expect.stringContaining(`（${started.id}）已完成`), "dg-test", expect.objectContaining({ workDone: true, job: { id: started.id, round: 0, kind: "result" } }));
+      release();
+    } finally {
+      release();
+      hob.close();
+    }
+  });
+
+  it("转交任务的结果回合里 reply_job 能启动下一轮并正常收尾", async () => {
+    const hob = setup();
+    try {
+      hob.runtime.store.saveDelegation(record());
+      let jobId = "";
+      let workerCalls = 0;
+      let eventCalls = 0;
+      const response = (context: any) => {
+        const all = JSON.stringify(context.messages ?? []);
+        const system = JSON.stringify(context.messages?.[0] ?? "");
+        if (system.includes("派出的后台任务")) {
+          workerCalls += 1;
+          if (workerCalls === 1) return call("report", { outcome: "done", result: "第一轮完成" });
+          if (workerCalls === 3) return call("report", { outcome: "done", result: "第二轮完成" });
+          return text("好，结果已经交了。");
+        }
+        if (all.includes("[hob-event]")) {
+          eventCalls += 1;
+          return eventCalls === 1 ? call("reply_job", { jobId, text: "继续做一遍" }) : text("第二轮结果也收到了。");
+        }
+        return text("收到。");
+      };
+      hob.faux.setResponses(Array.from({ length: 12 }, () => response));
+      const started = await hob.runtime.jobs.start("ops", { title: "检查", instruction: "检查", delegationId: "dg-test" });
+      jobId = started.id;
+      await waitFor(() => hob.runtime.store.job(started.id)?.rounds?.length === 1 && hob.runtime.store.job(started.id)?.summary === "第二轮完成", 3_000);
+      await hob.runtime.router.waitIdle("ops", 2_000);
+      expect(hob.runtime.store.job(started.id)).toMatchObject({ status: "done", summary: "第二轮完成", rounds: [expect.objectContaining({ summary: "第一轮完成" })] });
+      expect(hob.runtime.router.items("ops").items.filter((item) => item.kind === "job" && item.jobId === started.id)).toHaveLength(2);
+    } finally { hob.close(); }
+  });
+
   it("转交任务的提问交回目标助手，不生成用户问题卡", async () => {
     const hob = setup();
     let release = () => {};
@@ -387,7 +481,7 @@ describe("委派", () => {
       hob.runtime.delegations.addJob("dg-test", started.id);
       await waitFor(() => hob.faux.state.callCount > 0);
       const answer = hob.runtime.jobs.askQuestion(started.id, { title: "继续吗", options: [{ key: "A", label: "继续" }, { key: "B", label: "停止" }] });
-      expect(relay).toHaveBeenCalledWith("ops", `任务「检查」（${started.id}）在等你回复：继续吗。选项：A 继续、B 停止。`, "dg-test");
+      expect(relay).toHaveBeenCalledWith("ops", `任务「检查」（${started.id}）在等你回复：继续吗。选项：A 继续、B 停止。`, "dg-test", expect.objectContaining({ job: { id: started.id, round: 0, kind: "question" } }));
       expect(hob.runtime.store.delegation("dg-test")?.status).toBe("waiting");
       expect(hob.runtime.router.items("ops").items.some((item) => item.kind === "question")).toBe(false);
       await hob.runtime.jobs.reply(started.id, "继续", "router");

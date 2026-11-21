@@ -19,7 +19,7 @@ export interface DevTeamRole {
 }
 
 /** 产品负责人的详细职责。 */
-export const PRODUCT_OWNER_DUTY = "接住用户和定时任务带来的事，按分量安排：一个任务能做完的，自己派任务或者叫合适的成员来做，结果回来核一遍再告诉用户；要几个人接力的，开一个话题，在里面安排，做完给用户一个结论。";
+export const PRODUCT_OWNER_DUTY = "接住用户和定时任务带来的事，按分量安排：一个任务能完成的，自己分派任务或者请合适的成员执行，结果回来核对后再告诉用户；要几个人接力的，创建一个话题，在里面安排，完成后给用户一个结论。";
 
 /** 179 之前的默认详细职责：启动时一字不差是它的，换成上面那句；用户改过的不动。 */
 const OLD_PRODUCT_OWNER_DUTY = "把用户的想法问清楚，写成需求说明和验收标准，拆成子任务分给合适的成员；做完以后对照验收标准验收。拿不准用户要什么时先问用户。";
@@ -175,7 +175,6 @@ export function seedDevTeam(store: Store, createGroup: (input: CreateGroupInput)
         pinned: false,
         hidden: true,
         notify: true,
-        instructions: "",
         createdAt: now,
       };
       store.saveAssistant(assistant);

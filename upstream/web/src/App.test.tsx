@@ -9,8 +9,10 @@ const state = vi.hoisted(() => ({
   knowledge: { category: "all", q: "", kind: "", assistantId: "", entries: [{ id: "k-1", name: "测试文档.md", kind: "markdown", path: "/mock/test.md", size: 100, updatedAt: "2026-01-01T00:00:00Z", collections: [] }], collections: [], loading: false, hasMore: false, error: null },
 }));
 vi.mock("./store.ts", () => ({
+  loadDesktopWidth: () => undefined,
+  saveDesktopWidth: vi.fn(),
   useApp: () => state,
-  backPanel: () => { state.panelStack.pop(); }, closePanelPages: vi.fn(), closeSheet: vi.fn(),
+  backPanel: () => { state.panelStack.pop(); }, closePanelPages: vi.fn(), closeSheet: vi.fn(), collapsePanel: vi.fn(),
   fileUrl: (path: string) => path,
   photoUrl: (path: string) => path,
   fetchFileMeta: vi.fn(), setNotice: vi.fn(), togglePreviewFull: vi.fn(),

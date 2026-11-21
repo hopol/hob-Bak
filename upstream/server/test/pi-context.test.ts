@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fauxProvider, Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
+import { fauxProvider } from "@earendil-works/pi-ai";
 import { PiHost } from "../src/pi.ts";
 import { call, makeHob, text } from "./helpers.ts";
 

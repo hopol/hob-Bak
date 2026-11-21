@@ -26,6 +26,13 @@ export const STEP_EVENT_LIMIT = 4 * 1024;
 /** diff 只给看得清的一段，超长的改动不整段塞进接口。 */
 const EDIT_TEXT_LIMIT = 4_000;
 
+export const JOB_REMINDER_LEAD = "已经运行 ";
+
+/** 送进任务会话的超时提醒：过程里记成 Hob 的提醒，不算用户或助手说的话。args 里的分钟数给界面写自己的那句。 */
+export function reminderStep(id: string, at: string, text: string): JobStep {
+  const match = /^已经运行 (\d+) 分钟，超过.*?预计的 (\d+) 分钟/.exec(text);
+  return { id, kind: "text", at, from: "hob", text, ...(match ? { args: { minutes: Number(match[1]), expect: Number(match[2]) } } : {}) };
+}
 const AUTO_FOLLOW_UP = "这一轮结束了，还没有交结果。";
 
 function oneLine(value: string, max = 120): string {
@@ -82,6 +89,60 @@ export function toolArgs(name: string, raw: Record<string, unknown>, cwd = "", r
   }
 }
 
+function shellWords(command: string): string[] {
+  const words: string[] = [];
+  let word = "";
+  let quote = "";
+  let escaped = false;
+  for (const char of command) {
+    if (escaped) { word += char; escaped = false; continue; }
+    if (char === "\\" && quote !== "'") { escaped = true; continue; }
+    if (quote) {
+      if (char === quote) quote = "";
+      else word += char;
+      continue;
+    }
+    if (char === "'" || char === '"') { quote = char; continue; }
+    if (/\s/.test(char)) {
+      if (word) { words.push(word); word = ""; }
+    } else word += char;
+  }
+  if (word) words.push(word);
+  return words;
+}
+
+/** Recognize the CLI command without guessing at unrelated shell commands. */
+export function browserCommandLabel(command: string): string | undefined {
+  const words = shellWords(commandSummary(command));
+  if (!words.length || !/(?:^|\/)playwright-cli$/.test(words[0])) return undefined;
+  let index = 1;
+  while (index < words.length) {
+    const word = words[index];
+    if (word === "-s" || word === "--session") { index += 2; continue; }
+    if (/^-s=/.test(word) || /^--session=/.test(word) || word === "--raw" || word === "--json") { index += 1; continue; }
+    break;
+  }
+  const action = words[index];
+  if (!action || action.startsWith("-")) return undefined;
+  if (action === "open" || action === "goto") {
+    const target = words.slice(index + 1).find((word) => !word.startsWith("-")) ?? "";
+    let host = target;
+    try { host = new URL(target).hostname || target; } catch { /* 保留命令里的地址 */ }
+    return t("浏览器 · 打开 {target}", { target: host });
+  }
+  const fixed: Record<string, string> = {
+    snapshot: "浏览器 · 读取页面",
+    click: "浏览器 · 点击",
+    type: "浏览器 · 输入",
+    fill: "浏览器 · 输入",
+    press: "浏览器 · 按键",
+    "go-back": "浏览器 · 返回",
+    screenshot: "浏览器 · 截图",
+  };
+  const label = fixed[action];
+  return label ? t(label) : t("浏览器 · {action}", { action });
+}
+
 function memoryLabel(name: string): string | undefined {
   switch (name) {
     case "memory_search": case "lore_search": return t("搜索记忆");
@@ -91,7 +152,7 @@ function memoryLabel(name: string): string | undefined {
     case "memory_restore": return t("恢复记忆");
     case "memory_status": case "lore_list_domains": case "lore_status": return t("查看记忆状态");
     case "lore_move_node": return t("整理记忆");
-    default: return /^(memory_|lore_|scratchpad)/.test(name) ? t("翻记忆") : undefined;
+    default: return /^(memory_|lore_|scratchpad)/.test(name) ? t("搜索记忆") : undefined;
   }
 }
 
@@ -110,7 +171,7 @@ function mcpToolDisplay(name: string, mcpServers: Record<string, string> | undef
 export function toolTitle(name: string, args: Record<string, unknown>, mcpServers?: Record<string, string>): string {
   const path = String(args.path ?? "");
   switch (name) {
-    case "bash": return `${t("运行")} ${tick(commandSummary(String(args.command ?? "")))}`;
+    case "bash": return browserCommandLabel(String(args.command ?? "")) ?? `${t("运行")} ${tick(commandSummary(String(args.command ?? "")))}`;
     case "read": return `${t("读取")} ${path}${readRange(args)}`;
     case "edit": return `${t("修改")} ${path}`;
     case "write": return `${t("写入")} ${path}`;
@@ -123,8 +184,8 @@ export function toolTitle(name: string, args: Record<string, unknown>, mcpServer
     case "overview": return t("查看最近 {hours} 小时的记录", { hours: Number(args.sinceHours ?? 24) });
     case "generate_image": return t("生成图片：{prompt}", { prompt: oneLine(String(args.prompt ?? ""), 60) });
     case "web_search": return t("联网搜索：{query}", { query: oneLine(String(args.query ?? ""), 60) });
-    case "find_knowledge": return args.query ? t("找资料：{query}", { query: oneLine(String(args.query), 60) }) : t("找资料");
-    case "search_knowledge": return args.query ? t("查知识库：{query}", { query: oneLine(String(args.query), 60) }) : t("查知识库");
+    case "find_knowledge": return args.query ? t("查找资料：{query}", { query: oneLine(String(args.query), 60) }) : t("查找资料");
+    case "search_knowledge": return args.query ? t("搜索知识库：{query}", { query: oneLine(String(args.query), 60) }) : t("搜索知识库");
     case "web_fetch": return t("读取网页：{url}", { url: oneLine(String(args.url ?? ""), 60) });
     case "browser_open": {
       let target = oneLine(String(args.url ?? ""), 60);
@@ -218,7 +279,7 @@ export function withOutput(
   if (!full) return next;
   if (full.length <= options.limit) return { ...next, output: full };
   const path = options.save?.(step.id, full);
-  const note = `\n\n[${t("输出共 {total} 字，这里截到 {limit} 字。{full}", { total: full.length, limit: options.limit, full: path ? t("完整输出在 {path}", { path }) : "" })}]`;
+  const note = `\n\n[${t("输出共 {total} 字，此处截取至 {limit} 字。{full}", { total: full.length, limit: options.limit, full: path ? t("完整输出在 {path}", { path }) : "" })}]`;
   return { ...next, output: full.slice(0, options.limit) + note, ...(path ? { outputPath: path } : {}) };
 }
 
@@ -314,6 +375,10 @@ export function deriveSteps(file: string, options: DeriveOptions = {}): JobStep[
     if (message.role === "user") {
       const text = textOfContent(message.content).trim();
       if (!text || text.startsWith(AUTO_FOLLOW_UP) || text.startsWith("你还没有调用 report")) continue;
+      if (text.startsWith(JOB_REMINDER_LEAD)) {
+        steps.push(reminderStep(`r${message.timestamp ?? at}`, at, text));
+        continue;
+      }
       if (!seenUser) {
         seenUser = true; // 第一句是任务说明，详情头部已经有
         continue;

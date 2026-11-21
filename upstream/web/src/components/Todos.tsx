@@ -84,7 +84,7 @@ export function TodoStrip({ items, jobs = [], busy = false }: { items?: TodoItem
   const moving = busy || jobs.length > 0;
   return (
     <div className={`todostrip${open ? " open" : ""}`}>
-      <button className="todobar" aria-expanded={direct ? undefined : open} title={direct ? t("看任务卡") : summary} onClick={() => (direct ? toCard(one.id) : toggle())}>
+      <button className="todobar" aria-expanded={direct ? undefined : open} title={direct ? t("查看任务卡") : summary} onClick={() => (direct ? toCard(one.id) : toggle())}>
         {moving ? <Icon key="spin" name="spin" size={14} w={2.4} className="todobar-ring spin" /> : <Icon key="pause" name="pause" size={14} className="todobar-ring" />}
         {/* 展开时清单里已经有正在做的那项，这一行只写「待办」，不重复 */}
         {(() => {
@@ -110,7 +110,7 @@ export function TodoStrip({ items, jobs = [], busy = false }: { items?: TodoItem
             <ul className="todo-jobs">
               {jobs.map((job) => (
                 <li key={job.id}>
-                  <button onClick={() => toCard(job.id)} title={t("看任务卡")}>
+                  <button onClick={() => toCard(job.id)} title={t("查看任务卡")}>
                     <Icon name="spin" size={14} w={2.4} className="spin" />
                     <span className="todo-text">{job.title}</span>
                     <small>{fmtElapsed(job.since)}</small>

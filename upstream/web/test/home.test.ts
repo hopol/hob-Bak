@@ -16,7 +16,6 @@ function asst(id: string, extra: Partial<AssistantSummary> = {}): AssistantSumma
     pinned: false,
     hidden: false,
     notify: false,
-    instructions: "",
     createdAt: minsAgo(60 * 24 * 30),
     unread: 0,
     busy: false,
@@ -103,6 +102,89 @@ describe("首页分组", () => {
     expect(groups.asks.map((a) => a.id)).toEqual(["ap-new", "ap-old"]);
   });
 
+  it("最近活跃：在运行的排最前，其余按最近一条消息，不看置顶时留下的位置", () => {
+    const last = (n: number) => ({ text: "x", at: minsAgo(n) });
+    const result = homeGroups({
+      assistants: [
+        asst("old-pinned-order", { pinOrder: 0, last: last(60 * 24 * 7) }),
+        asst("recent", { last: last(5) }),
+        asst("running", { busy: true, last: last(60 * 3) }),
+        asst("middle", { last: last(60) }),
+      ],
+      jobs: {},
+      approvals: {},
+      routines: [],
+      query: "",
+    }, NOW);
+    expect(result.rows.map((row) => row.id)).toEqual(["running", "recent", "middle", "old-pinned-order"]);
+  });
+
+  it("只把未置顶的待回答助手和群提到第一节，收起的也提上来，答完回助手", () => {
+    const ask = (id: string, extra: Partial<Approval> = {}) => approval(`ap-${id}`, "pending", { assistantId: id, createdAt: minsAgo(2), ...extra });
+    const result = homeGroups({
+      assistants: [
+        asst("pin", { pinned: true }),
+        asst("ask", { last: { text: "请选", at: minsAgo(3) } }),
+        asst("folded", { hidden: true, last: { text: "请确认", at: minsAgo(1) } }),
+        asst("quiet", { last: { text: "已完成", at: minsAgo(4) } }),
+      ],
+      groups: [group("team", { last: { at: minsAgo(5), speaker: "hob", text: "请确认" } })],
+      jobs: {},
+      approvals: index([ask("ask"), ask("folded"), ask("team", { groupId: "team" }), ask("pin")]),
+      routines: [],
+      query: "",
+    }, NOW);
+    expect(result.attention.map((row) => row.id)).toEqual(["folded", "ask", "team"]);
+    expect(result.rows.map((row) => row.id)).toEqual(["quiet"]);
+    expect(result.pins.map((row) => row.id)).toEqual(["pin"]);
+    const answered = homeGroups({
+      assistants: [asst("ask")], jobs: {}, approvals: index([ask("ask", { status: "answered" })]), routines: [], query: "",
+    }, NOW);
+    expect(answered.attention).toEqual([]);
+    expect(answered.rows.map((row) => row.id)).toEqual(["ask"]);
+  });
+
+  it("受阻和完成未读进入等你处理，运行中的助手留在助手节", () => {
+    const stuck = job("stuck", "stuck", { assistantId: "stuck", endedAt: minsAgo(2) });
+    const done = job("done", "done", { assistantId: "done", endedAt: minsAgo(1) });
+    const running = job("running", "running", { assistantId: "running", startedAt: minsAgo(1) });
+    const result = homeGroups({
+      assistants: [
+        asst("stuck", { unread: 1, last: { text: "失败", at: minsAgo(3) } }),
+        asst("done", { unread: 1, last: { text: "完成", at: minsAgo(2) } }),
+        asst("running", { unread: 1, last: { text: "进行中", at: minsAgo(5) } }),
+        asst("quiet", { last: { text: "安静", at: minsAgo(6) } }),
+      ],
+      groups: [group("unread", { unread: 2, last: { at: minsAgo(1), speaker: "hob", text: "新结果" } }), group("busy", { unread: 2, busy: ["hob"], last: { at: minsAgo(4), speaker: "hob", text: "忙" } })],
+      jobs: index([stuck, done, running]),
+      approvals: {},
+      routines: [],
+      query: "",
+    }, NOW);
+    expect(result.attention.map((row) => row.id)).toEqual(["unread", "done", "stuck"]);
+    expect(result.rows.map((row) => row.id)).toEqual(["busy", "running", "quiet"]);
+  });
+  it("筛选只保留对应的首页分节", () => {
+    const base = {
+      assistants: [asst("a")], jobs: index([job("live", "running", { startedAt: minsAgo(2) })]), approvals: {}, routines: [routine("r", true)], query: "",
+    };
+    expect(homeGroups({ ...base, homeFilter: "assistants" }, NOW).rows.map((row) => row.id)).toEqual(["a"]);
+    expect(homeGroups({ ...base, homeFilter: "assistants" }, NOW).tasks).toEqual([]);
+    expect(homeGroups({ ...base, homeFilter: "jobs" }, NOW).rows).toEqual([]);
+    expect(homeGroups({ ...base, homeFilter: "jobs" }, NOW).tasks.map((item) => item.id)).toEqual(["live"]);
+    expect(homeGroups({ ...base, homeFilter: "routines" }, NOW).routines.map((item) => item.id)).toEqual(["r"]);
+  });
+
+  it("固定顺序只作用于助手节，未排过的退回最近活跃", () => {
+    const result = homeGroups({
+      assistants: [
+        asst("recent", { last: { text: "新", at: minsAgo(1) } }),
+        asst("fixed", { listOrder: 0, last: { text: "旧", at: minsAgo(10) } }),
+      ], jobs: {}, approvals: {}, routines: [], query: "", homeOrder: "custom",
+    }, NOW);
+    expect(result.rows.map((row) => row.id)).toEqual(["fixed", "recent"]);
+  });
+
   it(`最近任务只取 ${RECENT} 条、24 小时内结束的，在跑的不算`, () => {
     const done = Array.from({ length: RECENT + 2 }, (_, i) =>
       job(`t-${i}`, "done", { createdAt: minsAgo(200 + i), endedAt: minsAgo(10 + i) }),
@@ -125,6 +207,7 @@ describe("首页分组", () => {
     ]), approvals: {}, routines: [], query: "" }, NOW);
     expect(groups.live.map((j) => j.id)).toEqual(["t-routine-live"]);
     expect(groups.recent.map((j) => j.id)).toEqual(["t-routine-done"]);
+    expect(groups.tasks.map((j) => j.id)).toEqual(["t-routine-live", "t-routine-done"]);
   });
 
   it("搜索时只列匹配的助手，其它组隐藏", () => {

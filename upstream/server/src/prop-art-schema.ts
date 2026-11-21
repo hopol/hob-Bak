@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 
 export const propArtSchema = Type.Optional(Type.Object({
   art: Type.Array(Type.String(), {

@@ -2,25 +2,10 @@ import { currentLocale, t } from "../../shared/i18n.ts";
 import { Cron } from "croner";
 import type { Approval, AssistantSummary, Delegation, Job, Routine } from "../../shared/types.ts";
 import type { KnowledgeEntry } from "../../shared/knowledge.ts";
-import type { AssistantSkill, VisibleSkill } from "../../shared/skills.ts";
 
 export function followingModel(source: "group" | "assistant" | "global", name: string) {
   const label = source === "group" ? t("本群") : t("助手");
   return { text: t("跟随{label} · {name}", { label, name }), option: t("跟随{label}（{name}）", { label, name }) };
-}
-
-export function routineSkills(group: AssistantSkill[], member: AssistantSkill[]) {
-  const own = group.filter((skill) => skill.enabled);
-  return [...own.map((skill) => ({ skill, group: true })), ...member.filter((skill) => skill.enabled && !own.some((item) => item.name === skill.name)).map((skill) => ({ skill, group: false }))];
-}
-
-/** 定时任务的技能下拉：看得到的全列上，本群、自己的、通用（含只读的），通用的标「（通用）」。 */
-export function routineSkillOptions(skills: VisibleSkill[]): { value: string; label: string }[] {
-  return skills.filter((skill) => skill.enabled !== false).map((skill) => {
-    const title = skill.title ?? skill.name;
-    const scope = skill.scope === "group" ? `（${t("本群")}）` : skill.scope === "general" ? `（${t("通用")}）` : "";
-    return { value: skill.name, label: `${title}${scope}` };
-  });
 }
 
 export function nextRoutine(routines: Routine[], timezone: string, now = new Date()): { routine: Routine; at: Date } | undefined {
@@ -37,7 +22,8 @@ export function nextRoutine(routines: Routine[], timezone: string, now = new Dat
 export function assistantStatus(assistant: Pick<AssistantSummary, "id" | "busy">, jobs: Job[], approvals: Approval[], delegations: Delegation[]) {
   const own = jobs.filter((job) => job.assistantId === assistant.id);
   // 只有真等用户答的提问才算「等你确认」；任务提了问在等助手回（waiting），对用户来说还是在办
-  if (approvals.some((approval) => approval.status === "pending" && (approval.assistantId === assistant.id || own.some((job) => job.id === approval.jobId)))) return "等你确认";
+  // 群和话题里出的问题卡挂在那个群的行上，不再算到助手自己头上（不然首页同一件事出现两行）
+  if (approvals.some((approval) => approval.status === "pending" && !approval.groupId && approval.assistantId === assistant.id && approval.source !== "job")) return "等你确认";
   // 转交出去的活算在收到转交的那个助手头上：交出去的一方这一轮已经说完了，等结果时是空闲的
   if (assistant.busy || own.some((job) => job.status === "running" || job.status === "waiting") || delegations.some((d) => d.status === "running" && d.to === assistant.id)) return "执行中";
   if (own.some((job) => job.status === "queued")) return "排队中";
