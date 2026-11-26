@@ -1,3 +1,6 @@
+import { PluginHost } from "./plugin-host.ts";
+import { ProviderPluginManager, type ProviderPluginManagerOptions } from "./provider-plugins.ts";
+import { ScriptToolCredentials } from "./script-tools.ts";
 import { setLocale, type Locale } from "../../shared/i18n.ts";
 import "./i18n/en/index.ts";
 import type { Bus } from "./bus.ts";
@@ -21,7 +24,7 @@ import type { Store } from "./store.ts";
 import type { PushSender, PushService } from "./push.ts";
 import type { UsageService } from "./usage.ts";
 import { Bus as BusImpl } from "./bus.ts";
-import { seedDevTeam, migrateProductOwnerDuty } from "./dev-team.ts";
+import { seedDevTeam, seedHacker, migrateProductOwnerDuty } from "./dev-team.ts";
 import { GroupManager as GroupManagerImpl } from "./groups.ts";
 import { JobManager as JobManagerImpl } from "./jobs.ts";
 import { PushService as PushServiceImpl } from "./push.ts";
@@ -32,18 +35,24 @@ import { SettingsStore as SettingsStoreImpl } from "./settings.ts";
 import { Store as StoreImpl } from "./store.ts";
 import { UsagePrices as UsagePricesImpl } from "./usage-prices.ts";
 import { UsageService as UsageServiceImpl } from "./usage.ts";
+import { UpdateChecker } from "./update-check.ts";
+import { applyNetworkProxy } from "./network-proxy.ts";
 
 /**
  * 进程内的全部服务。构造时先建 store/bus/pi，再把 router / jobs / routines 挂上去
  * （它们互相需要：任务结束要推 Router 事件，Router 工具要开任务，定时要开任务）。
  */
 export interface HobRuntime {
+  scriptTools: ScriptToolCredentials;
   home: string;
   config: HobConfig;
   store: Store;
   bus: Bus;
   knowledge: KnowledgeStore;
   pi: PiHost;
+  plugins: PluginHost;
+  /** 带模型的插件：共享 Bun 宿主、账号凭据、五种登录流程、模型缓存与内部代理 */
+  providerPlugins: ProviderPluginManager;
   /** 界面可改的设置（settings.json），每次现读所以改完立即生效 */
   settings: SettingsStore;
   desktop: DesktopService;
@@ -65,6 +74,8 @@ export interface HobRuntime {
   push: PushService;
   /** 消耗：从会话文件统计用量，单价从 models.dev 拉 */
   usage: UsageService;
+  /** 版本检查：查 npm 上 hob-bot 最新版本，结果只放内存，定时由 main.ts 启动 */
+  update: UpdateChecker;
 }
 
 export interface CreateRuntimeOptions {
@@ -77,6 +88,8 @@ export interface CreateRuntimeOptions {
   pushSender?: PushSender;
   /** 测试注入假的服务商接口（拉模型列表用）和价格表接口（价格用） */
   fetchImpl?: typeof fetch;
+  /** 测试用：覆盖供应商插件的 Bun 下载地址、闲置超时等 */
+  providerPlugins?: Pick<ProviderPluginManagerOptions, "bunOptions" | "hostIdleMs" | "hostScriptPath">;
 }
 
 /** 建出全部服务（不包含 HTTP 和定时器启动），测试和 startHob 共用。 */
@@ -94,6 +107,7 @@ export function createRuntime(options: CreateRuntimeOptions): HobRuntime {
   const settings = new SettingsStoreImpl(options.home, {
     ...(options.legacyModels ? { legacyModels: options.legacyModels } : {}),
   });
+  applyNetworkProxy(settings.settings.general.proxy, settings.settings.general.noProxy);
   // 思考档只看 Hob 自己的设置（默认规则 + 每个模型的自定义档位），不看引擎注册表里自带的映射
   const models = new ModelCatalog(options.pi, () => settings.settings.models);
   const providers = new ProviderServiceImpl({
@@ -105,13 +119,38 @@ export function createRuntime(options: CreateRuntimeOptions): HobRuntime {
   });
   // 引擎建好、拿到之前把服务商套进去（内置的设 Key、兼容接口注册成 provider）
   options.pi.configure = (runtime) => providers.applyTo(runtime);
+  const plugins = new PluginHost(options.home, () => {
+    const { proxy, noProxy } = settings.settings.general;
+    return { proxy, noProxy };
+  });
+  try { plugins.migrationErrors = plugins.store.migrateLegacy(); plugins.store.migrateEmailService(); plugins.migrationErrors.push(...plugins.store.migrateProfiles()); }
+  catch (error) { plugins.migrationErrors = [error instanceof Error ? error.message : String(error)]; }
+  // models.dev 的价格和模型上限：消耗页算钱，供应商插件没给上下文/输出上限时也从这里补
+  const prices = new UsagePricesImpl({ home: options.home, ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}) });
+  const providerPlugins = new ProviderPluginManager({
+    catalogLimits: (modelId) => prices.limitsOf(modelId),
+    home: options.home,
+    store: plugins.store,
+    bus,
+    proxy: () => {
+      const { proxy, noProxy } = settings.settings.general;
+      return { proxy, noProxy };
+    },
+    getThinkingSettings: () => settings.settings.models.thinking,
+    onProvidersChanged: () => providers.apply(),
+    ...(options.providerPlugins ?? {}),
+  });
+  providers.setProviderPlugins(providerPlugins);
   const runtime = {
+    scriptTools: new ScriptToolCredentials(),
     home: options.home,
     config: options.config,
     store,
     bus,
     knowledge: new KnowledgeStore(options.home, bus, store, undefined, () => settings.settings.knowledge?.embedding ?? { source: "off" }),
     pi: options.pi,
+    plugins,
+    providerPlugins,
     settings,
     desktop: new DesktopService(options.home, settings),
     providers,
@@ -120,10 +159,12 @@ export function createRuntime(options: CreateRuntimeOptions): HobRuntime {
   runtime.desktopControl = new DesktopControl(runtime);
   runtime.desktopEvents = new DesktopEvents(runtime);
   runtime.router = new RouterManagerImpl(runtime);
+  plugins.onToolsChanged = () => runtime.router.releaseSessions();
   runtime.groups = new GroupManagerImpl(runtime);
   runtime.initializeLocale = (locale) => {
     runtime.store.initializeDefaults(locale);
     seedDevTeam(runtime.store, (input) => runtime.groups.create(input), locale);
+    seedHacker(runtime.store, locale);
   };
   // 单用户：服务端给用户看的文字（接口错误、对话里的提示行、推送）跟着设置里的界面语言
   setLocale(settings.settings.general.locale ?? "zh-CN");
@@ -140,7 +181,12 @@ export function createRuntime(options: CreateRuntimeOptions): HobRuntime {
     home: options.home,
     store,
     settings,
-    prices: new UsagePricesImpl({ home: options.home, ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}) }),
+    prices,
+    onPricesLoaded: () => providers.apply(),
+  });
+  runtime.update = new UpdateChecker({
+    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    onChange: (update) => bus.emit({ type: "update", update }),
   });
   return runtime;
 }

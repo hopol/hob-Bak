@@ -1,0 +1,170 @@
+#!/usr/bin/env node
+// Hob GitHub plugin wrapper for git.
+// Attaches GitHub credential helper and commit author/co-author attribution when credentials are available.
+
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  detectGitHubRemote,
+  fetchHobCredentials,
+  findRealBinary,
+  finishWith,
+  parseGitHubRemote,
+  runPassthrough,
+} from "../cli-helper.mjs";
+
+const GLOBAL_VALUE_OPTS = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--config-env",
+  "--super-prefix",
+  "--exec-path",
+  "--list-cmds",
+]);
+
+const COMMIT_VALUE_OPTS = new Set([
+  "-m", "--message",
+  "-F", "--file",
+  "-C", "--reuse-message",
+  "-c", "--reedit-message",
+  "--fixup",
+  "--squash",
+  "-t", "--template",
+  "-u", "--untracked-files",
+  "--cleanup",
+  "--date",
+  "--author",
+  "--trailer",
+  "--pathspec-from-file",
+  "-S", "--gpg-sign",
+]);
+
+function parseGitInvocation(args) {
+  let effectiveCwd = process.cwd();
+  let subcommand = null;
+  let subIndex = -1;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") break;
+    if (arg === "-C") {
+      if (i + 1 < args.length) {
+        effectiveCwd = resolve(effectiveCwd, args[i + 1]);
+        i++;
+      }
+      continue;
+    }
+    if (arg.startsWith("-C") && arg.length > 2) {
+      effectiveCwd = resolve(effectiveCwd, arg.slice(2));
+      continue;
+    }
+    if (GLOBAL_VALUE_OPTS.has(arg)) {
+      i++;
+      continue;
+    }
+    if (arg.startsWith("-c") && arg.length > 2) {
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    subcommand = arg;
+    subIndex = i;
+    break;
+  }
+
+  return { effectiveCwd, subcommand, subIndex };
+}
+
+function inspectCommitArgs(commitArgs) {
+  let hasAuthor = false;
+  let hasHelp = false;
+  for (let i = 0; i < commitArgs.length; i++) {
+    const arg = commitArgs[i];
+    if (arg === "--") break;
+    if (arg === "--author" || arg.startsWith("--author=")) {
+      hasAuthor = true;
+      if (arg === "--author") i++;
+      continue;
+    }
+    if (arg === "-h" || arg === "--help") {
+      hasHelp = true;
+      continue;
+    }
+    if (COMMIT_VALUE_OPTS.has(arg)) {
+      i++;
+      continue;
+    }
+  }
+  return { hasAuthor, hasHelp };
+}
+
+function formatCredentialHelperPath(helperPath) {
+  if (/^[A-Za-z0-9_./:-]+$/.test(helperPath)) return helperPath;
+  return `'${helperPath.replaceAll("'", "'\\''")}'`;
+}
+
+const selfDir = dirname(fileURLToPath(import.meta.url));
+const realGit = findRealBinary("git", selfDir);
+if (!realGit) {
+  process.stderr.write("git: command not found\n");
+  process.exit(127);
+}
+
+const rawArgs = process.argv.slice(2);
+const { effectiveCwd, subcommand, subIndex } = parseGitInvocation(rawArgs);
+
+// Only commits (author, co-author) and commands that talk to a remote (credentials) need the
+// plugin; everything else (status, diff, log, ...) runs the real git without a round trip.
+const NEEDS_PLUGIN = new Set(["commit", "push", "pull", "fetch", "clone", "ls-remote", "submodule", "remote"]);
+
+if (!subcommand || !NEEDS_PLUGIN.has(subcommand)) {
+  finishWith(await runPassthrough(realGit, rawArgs));
+} else {
+  let scope = detectGitHubRemote(realGit, effectiveCwd);
+  if (!scope.owner) {
+    for (const arg of rawArgs.slice(subIndex + 1)) {
+      const parsed = parseGitHubRemote(arg);
+      if (parsed.owner) {
+        scope = parsed;
+        break;
+      }
+    }
+  }
+
+  const creds = scope.foreign ? null : await fetchHobCredentials(scope);
+  if (!creds?.token) {
+    finishWith(await runPassthrough(realGit, rawArgs));
+  } else {
+    const helperPath = formatCredentialHelperPath(join(selfDir, "git-credential-hob"));
+    const credArgs = [
+      "-c", "credential.https://github.com.helper=",
+      "-c", `credential.https://github.com.helper=${helperPath}`,
+      "-c", "credential.https://github.com.useHttpPath=true",
+    ];
+
+    const finalArgs = [...credArgs, ...rawArgs];
+    const childEnv = { ...process.env };
+
+    if (subcommand === "commit") {
+      const commitSubArgs = rawArgs.slice(subIndex + 1);
+      const { hasAuthor, hasHelp } = inspectCommitArgs(commitSubArgs);
+
+      if (!hasHelp && creds.coAuthor) {
+        finalArgs.splice(credArgs.length + subIndex + 1, 0, "--trailer", `Co-authored-by: ${creds.coAuthor}`);
+      }
+
+      if (!hasAuthor && creds.authorName && creds.authorEmail) {
+        childEnv.GIT_AUTHOR_NAME = creds.authorName;
+        childEnv.GIT_AUTHOR_EMAIL = creds.authorEmail;
+        childEnv.GIT_COMMITTER_NAME = creds.authorName;
+        childEnv.GIT_COMMITTER_EMAIL = creds.authorEmail;
+      }
+    }
+
+    finishWith(await runPassthrough(realGit, finalArgs, { env: childEnv }));
+  }
+}

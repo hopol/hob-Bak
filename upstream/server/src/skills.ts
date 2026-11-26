@@ -6,7 +6,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rea
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AssistantSkill, SkillImportResult, SkillImportSource, SkillImportView, SkillSource, SkillView, VisibleSkill } from "../../shared/skills.ts";
-import { assertSkillsDirFree, assistantSkillsDir, groupSkillsDir, isSkillName, skillHead, skillIndex, listSkills, saveAssistantSkillsIndex } from "./assistant-skills.ts";
+import { assistantSkillsDir, groupSkillsDir, isSkillName, skillHead, skillIndex, listSkills, saveAssistantSkillsIndex } from "./assistant-skills.ts";
 import type { HobRuntime } from "./runtime.ts";
 import type { Group } from "../../shared/types.ts";
 
@@ -197,7 +197,7 @@ export function skillViews(home: string, disabled: string[], lorePaths: string[]
   const own = listSkills(generalSkillsDir(home)).map((skill): SkillView => ({
     id: skill.name, name: skill.name, title: skill.title, description: skill.description, source: "hob",
     content: readFileSync(skill.path, "utf8"), enabled: !disabled.includes(`hob:${skill.name}`), overridden: false,
-    version: skill.version, updatedAt: skill.updatedAt,
+    version: skill.version, updatedAt: skill.updatedAt, ...(skill.origin ? { origin: skill.origin } : {}), ...(skill.fromJobId ? { fromJobId: skill.fromJobId } : {}),
     rollbackable: existsSync(join(dirname(skill.path), ".history")) && readdirSync(join(dirname(skill.path), ".history")).some((entry) => /^\d+$/.test(entry)),
   }));
   const groups: [SkillSource, Skill[]][] = [
@@ -243,7 +243,6 @@ export function importSkills(home: string, source: SkillImportSource, ids: strin
   const list = listImportSkills(home, source, userHome);
   const result: SkillImportResult = { imported: [], skipped: [...list.skipped], errors: [] };
   const destination = generalSkillsDir(home);
-  assertSkillsDirFree(destination);
   mkdirSync(destination, { recursive: true });
   if (lstatSync(destination).isSymbolicLink()) throw new Error("Hob 技能目录不能是符号链接");
   syncGeneralIndex(destination);

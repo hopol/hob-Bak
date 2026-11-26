@@ -158,7 +158,11 @@ function memoryLabel(name: string): string | undefined {
 
 /** MCP 工具（mcp__<服务>__<工具）显示成「服务名 · 工具名」，不露原始名。 */
 function mcpToolDisplay(name: string, mcpServers: Record<string, string> | undefined): string | undefined {
-  if (!name.startsWith("mcp__")) return undefined;
+  if (!name.startsWith("mcp__")) {
+    if (mcpServers?.[name]) return mcpServers[name];
+    const prefix = Object.keys(mcpServers ?? {}).filter(key => key.startsWith("plugin:") && name.startsWith(key.slice(7))).sort((a, b) => b.length - a.length)[0];
+    return prefix ? `${mcpServers![prefix]} · ${name.slice(prefix.length - 7)}` : undefined;
+  }
   const rest = name.slice("mcp__".length);
   const split = rest.indexOf("__");
   if (split <= 0) return undefined;

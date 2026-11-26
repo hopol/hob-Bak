@@ -2,6 +2,8 @@ import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ApprovalOption } from "../../shared/types.ts";
 import { generateImage } from "./image.ts";
+import { loginCard, prepareLogin } from "./login.ts";
+import { prepareFillNewPassword } from "./new-password.ts";
 import type { HobRuntime } from "./runtime.ts";
 
 function ok(text: string) {
@@ -30,7 +32,7 @@ export function registerReportTool(runtime: HobRuntime, jobId: string, sediment 
           isError: true,
         };
       }
-      // 沉淀这一轮：不收尾任务，拿技能目录和底稿对账；校验不过就退回，这一轮接着做
+      // 回顾这一轮：只记录回顾结果，不改变任务状态。
       if (sediment) {
         const outcome = await runtime.jobs.reportSediment(jobId, String(params.result ?? ""));
         if (outcome.ok) return ok(outcome.text);
@@ -91,7 +93,7 @@ export function registerAskTool(runtime: HobRuntime, jobId: string, sediment = f
         { description: "2 到 3 个选项", minItems: 2, maxItems: 3 },
       ),
     }),
-    execute: async (_id, params: any) => {
+    execute: async (_id, params: any, signal) => {
       // 沉淀这一轮问不了：答案要现等，先把做法里的判断点写进技能
       if (sediment) return ok("沉淀时无需询问：拿不准的地方，在技能里写成执行前要确认的一步。");
       const labels: { label: string }[] = Array.isArray(params.options) ? params.options : [];
@@ -104,36 +106,75 @@ export function registerAskTool(runtime: HobRuntime, jobId: string, sediment = f
         ...(params.detail ? { detail: String(params.detail) } : {}),
         options,
         ...(recommended ? { recommended } : {}),
-      });
+      }, ...(signal ? [signal] as const : []));
       // 用户可能没选给出的选项，而是自己写了一段：answer 已经是回给模型的整句
       return ok(answer);
     },
   };
 }
 
-/** Worker 的登录交接：先把等待交给助手，由助手决定是否向用户出 ask_login 卡。 */
-export function registerAskLoginTool(runtime: HobRuntime, jobId: string, sediment = false): ToolDefinition<any, any> {
+/** Worker 的登录工具：Hob 看过页面和密码管理器以后决定出哪张卡，卡片和答复走 ask_user 的路（交给助手，由助手请用户办）。凭据只在 Hob 内存和当前页面之间经过。 */
+export function registerLoginTool(runtime: HobRuntime, jobId: string, sediment = false, credentials = false): ToolDefinition<any, any> {
   return {
-    name: "ask_login",
-    label: "请用户登录",
-    description: "请用户在桌面上登录一个网站：碰到登录页、两步验证、验证码这类只能用户本人完成的步骤时用。会出一张卡，用户登录完会告诉你；登录信息所有助手共用，登一次就行。",
+    name: "login",
+    label: "登录",
+    description: credentials
+      ? "登录云桌面浏览器里当前打开的网站，先打开网站的登录页再调用。用户的密码管理器里存了这个网站的账号时，Hob 核对网址、请用户批准后，把账号和密码直接填进页面；没存的，请用户在卡片上填一次，存进密码管理器再填；页面要扫码、第三方账号或验证码这类只能用户本人完成的，请用户在云桌面里自己登录。密码不经过你。填好以后由你点登录按钮；分两步的登录页（先填用户名、点下一步才出密码框），点完下一步再调一次。site 写网站网址或名称，比如 forum.example.net 或「Example 论坛」；同一个网站存了几个账号时，account 写要用的用户名或邮箱，不确定就不填，用户在卡上选；reason 一句话写为什么要登录，显示在卡上；self 填 true 时不填账号，直接请用户在云桌面里自己登录。"
+      : "请用户在云桌面里登录一个网站：会出一张卡，用户登录完会告诉你；登录信息所有助手共用，登一次就行。site 写哪个网站，reason 一句话写为什么要登录。",
     parameters: Type.Object({
-      site: Type.String({ description: "哪个网站" }),
+      site: Type.String({ description: "网站网址或名称" }),
       reason: Type.String({ description: "为什么要登录，一句话" }),
+      ...(credentials ? { account: Type.Optional(Type.String({ description: "用户名或邮箱，不确定就不填" })), self: Type.Optional(Type.Boolean({ description: "用户要自己登录时填 true" })) } : {}),
     }),
-    execute: async (_id, params: any) => {
+    execute: async (_id, params: any, signal) => {
       if (sediment) return ok("沉淀时无需询问：把登录这一步写进技能，交给助手处理。");
       const site = String(params.site ?? "").trim();
       const reason = String(params.reason ?? "").trim();
+      const account = typeof params.account === "string" ? params.account.trim() : undefined;
       if (!site || !reason) return { content: [{ type: "text" as const, text: "site 和 reason 都要填写清楚。" }], details: undefined, isError: true };
-      const answer = await runtime.jobs.askQuestion(jobId, {
-        title: `需要登录：${site}`,
-        detail: reason,
-        options: [{ key: "A", label: "已登录" }],
-        recommended: "A",
-        login: { site, reason },
-      });
-      return ok(answer);
+      try {
+        const prepared = await prepareLogin(runtime, runtime.store.job(jobId)?.assistantId ?? "", site, account, params.self === true);
+        if (prepared.kind === "message" || prepared.kind === "mismatch") return ok(prepared.text);
+        if (prepared.kind === "failed") return { content: [{ type: "text" as const, text: prepared.text }], details: undefined, isError: true };
+        const card = loginCard(prepared, site, reason);
+        return ok(await runtime.jobs.askQuestion(jobId, { title: card.title, ...(card.detail ? { detail: card.detail } : {}), options: card.options, login: card.login }, signal));
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }], details: undefined, isError: true };
+      }
+    },
+  };
+}
+
+/** Worker 的生成并填写新密码工具：凭据只在 Hob 内存和当前页面之间经过。 */
+export function registerFillNewPasswordTool(runtime: HobRuntime, jobId: string, sediment = false): ToolDefinition<any, any> {
+  return {
+    name: "fill_new_password",
+    label: "生成并填写新密码",
+    description: "注册新账号或修改密码时用：让用户的密码管理器按网站的要求生成一个新密码，Hob 先把它存进密码管理器，再填进云桌面浏览器当前页面的密码框（新密码和确认密码都填），密码不经过你。会先请用户批准。username 写注册或登录用的用户名或邮箱；length 和 characters 照页面上写的密码要求填，页面没写就不填（默认 20 位，含小写、大写、数字和符号）；name 是存进密码管理器时的名称，默认用网站名。",
+    parameters: Type.Object({
+      username: Type.String({ description: "注册或登录用的用户名或邮箱" }),
+      length: Type.Optional(Type.Integer({ minimum: 4, maximum: 128, description: "页面要求的密码长度；不填默认 20 位" })),
+      characters: Type.Optional(Type.Array(Type.Union([Type.Literal("lowercase"), Type.Literal("uppercase"), Type.Literal("numbers"), Type.Literal("symbols")]), { minItems: 1, maxItems: 4, description: "页面允许的字符种类；不填默认含小写、大写、数字和符号" })),
+      name: Type.Optional(Type.String({ description: "存进密码管理器时的名称；不填用网站名" })),
+    }),
+    execute: async (_id, params: any, signal) => {
+      if (sediment) return ok("沉淀时无需询问：把生成新密码这一步写进技能，交给助手处理。");
+      const username = String(params.username ?? "").trim();
+      if (!username) return { content: [{ type: "text" as const, text: "username 要填写注册或登录用的用户名或邮箱。" }], details: undefined, isError: true };
+      try {
+        const characters = Array.isArray(params.characters) ? params.characters as ("lowercase" | "uppercase" | "numbers" | "symbols")[] : undefined;
+        const prepared = await prepareFillNewPassword(runtime, runtime.store.job(jobId)?.assistantId ?? "", username, params.length === undefined ? undefined : Number(params.length), characters, typeof params.name === "string" ? params.name : undefined);
+        if (prepared.kind === "message") return ok(prepared.text);
+        const answer = await runtime.jobs.askQuestion(jobId, {
+          title: prepared.title,
+          detail: prepared.detail,
+          options: [{ key: "A", label: "不允许" }, { key: "B", label: "生成并填写" }],
+          login: { site: prepared.approval.host, reason: prepared.detail, fillNewPassword: prepared.approval },
+        }, signal);
+        return ok(answer);
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }], details: undefined, isError: true };
+      }
     },
   };
 }
@@ -154,7 +195,7 @@ export function registerImageTool(runtime: HobRuntime, jobId: string): ToolDefin
         Type.Array(Type.String(), { description: "参考图的绝对路径（改图、按图生成的时候给）" }),
       ),
     }),
-    execute: async (_id, params: any) => {
+    execute: async (_id, params: any, signal) => {
       const job = runtime.store.job(jobId);
       if (!job) return { content: [{ type: "text" as const, text: "任务不存在。" }], details: undefined, isError: true };
       try {
@@ -163,6 +204,7 @@ export function registerImageTool(runtime: HobRuntime, jobId: string): ToolDefin
             home: runtime.home,
             dir: job.cwd ?? runtime.store.workDir(jobId),
             config: runtime.settings.settings.image,
+            signal,
           },
           {
             prompt: String(params.prompt ?? ""),

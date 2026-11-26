@@ -1,0 +1,15 @@
+{
+  "name": "email",
+  "displayName": "邮箱",
+  "version": "1.0.0",
+  "description": "用邮箱地址和应用专用密码（授权码）连接，支持 Gmail、QQ 邮箱、163 邮箱和其他支持 IMAP 的邮箱。",
+  "userConfig": {
+    "EMAIL_ADDRESS": { "type": "string", "title": "邮箱地址", "required": true },
+    "EMAIL_PASSWORD": { "type": "string", "title": "应用专用密码", "description": "Gmail：账号开两步验证后，在 [应用专用密码](https://myaccount.google.com/apppasswords) 生成。QQ、163 邮箱：在邮箱设置里开启 IMAP/SMTP，生成授权码。不是邮箱的登录密码。", "required": true, "sensitive": true },
+    "IMAP_HOST": { "type": "string", "title": "IMAP 服务器", "description": "一般不用填。常见邮箱和用自己域名的企业邮箱会自动识别。" },
+    "SMTP_HOST": { "type": "string", "title": "SMTP 服务器", "description": "一般不用填。常见邮箱和用自己域名的企业邮箱会自动识别。" },
+    "IMAP_PORT": { "type": "number", "title": "IMAP 端口", "description": "一般不用填。", "min": 1, "max": 65535 },
+    "SMTP_PORT": { "type": "number", "title": "SMTP 端口", "description": "一般不用填。", "min": 1, "max": 65535 }
+  },
+  "extensions": { "com.hob.plugins": { "icon": "icon.svg", "publisher": "Hob", "categories": ["communication"], "profiles": { "title": "邮箱" } } }
+}

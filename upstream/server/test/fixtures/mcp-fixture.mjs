@@ -18,6 +18,35 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {} },
   },
 ];
+if (process.env.HOB_MCP_NEVER === "1") TOOLS.push({ name: "hang", description: "挂起的测试查询", inputSchema: { type: "object", properties: {} } });
+
+if (process.env.HOB_MCP_MANY === "1") {
+  for (let i = 0; i < 12; i++) TOOLS.push({ name: `extra_${i}`, description: `Extra test operation ${i}`, inputSchema: { type: "object", properties: {} } });
+}
+
+if (process.env.HOB_MCP_COLLISIONS === "1") {
+  TOOLS.push({ name: "search", description: "Search fixture", inputSchema: { type: "object", properties: {} } });
+  TOOLS.push({ name: "x".repeat(70), description: "Long name fixture", inputSchema: { type: "object", properties: {} } });
+}
+
+if (process.env.HOB_MCP_SLOW) {
+  TOOLS.push({ name: "instance", description: "Return process ID", inputSchema: { type: "object", properties: {} } });
+  TOOLS.push({ name: "slow", description: "Complete after a delay", inputSchema: { type: "object", properties: {} } });
+}
+
+if (process.env.HOB_MCP_CARDS === "1") {
+  TOOLS.push({
+    name: "show_card",
+    description: "显示一张凭据卡片",
+    inputSchema: { type: "object", properties: {} },
+  });
+  TOOLS.push({
+    name: "save_callback",
+    description: "保存卡片内容",
+    inputSchema: { type: "object", properties: { card_id: { type: "string" }, action: { type: "object" } } },
+    _meta: { ui: { visibility: ["app"] } },
+  });
+}
 
 let buffer = "";
 process.stdin.setEncoding("utf8");
@@ -52,6 +81,46 @@ function handle(message) {
   }
   if (message.method === "tools/call") {
     const name = message.params?.name;
+    if (name === "hang" && process.env.HOB_MCP_NEVER === "1") return;
+    if (name === "instance" && process.env.HOB_MCP_SLOW) {
+      write({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: String(process.pid) }] } });
+      return;
+    }
+    if (name === "slow" && process.env.HOB_MCP_SLOW) {
+      setTimeout(() => write({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "finished" }] } }), 300);
+      return;
+    }
+    if (name === "save_callback" && process.env.HOB_MCP_CARDS === "1") {
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          content: [{ type: "text", text: "已保存到插件" }],
+          _meta: {
+            "hob/card": { header: { title: "已保存" }, body: { elements: [{ tag: "div", text: "保存成功" }] } },
+            "hob/toast": { type: "success", content: "保存成功" },
+          },
+        },
+      });
+      return;
+    }
+    if (name === "show_card" && process.env.HOB_MCP_CARDS === "1") {
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          content: [{ type: "text", text: "请填写凭据" }],
+          _meta: {
+            "hob/card": {
+              config: { callback_tool: "save_callback" },
+              header: { title: "保存凭据" },
+              body: { elements: [{ tag: "form", name: "credential", elements: [{ tag: "input", name: "secret", label: "密码", input_type: "password" }, { tag: "button", text: "保存", form_action_type: "submit" }] }] },
+            },
+          },
+        },
+      });
+      return;
+    }
     if (name === "echo") {
       write({
         jsonrpc: "2.0",

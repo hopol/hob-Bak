@@ -15,6 +15,19 @@ describe("地址 hash", () => {
     expect(parseRoute("#/knowledge").knowledge).toBe(true);
   });
 
+  it("插件列表和详情地址可以恢复", () => {
+    expect(routeHash({ page: "plugins", pluginId: null, section: null, sel: null, mobile: "list" }, true)).toBe("#/plugins");
+    expect(routeHash({ page: "plugins", pluginId: null, pluginPage: "market", section: null, sel: null, mobile: "list" }, true)).toBe("#/plugins/market");
+    expect(routeHash({ page: "plugins", pluginId: null, pluginPage: "new", section: null, sel: null, mobile: "list" }, true)).toBe("#/plugins/new");
+    expect(parseRoute("#/plugins/market")).toMatchObject({ plugins: true, pluginId: null, pluginPage: "market" });
+    expect(parseRoute("#/plugins/new")).toMatchObject({ plugins: true, pluginId: null, pluginPage: "new" });
+    const hash = routeHash({ page: "plugins", pluginId: "custom-one", section: null, sel: null, mobile: "list" }, false);
+    expect(hash).toBe("#/plugins/custom-one");
+    expect(parseRoute(hash)).toMatchObject({ plugins: true, pluginId: "custom-one" });
+    expect(parseRoute("#/plugins")).toMatchObject({ plugins: true, pluginId: null });
+    for (const old of ["#/settings/mcp", "#/settings/mcp/service"]) expect(parseRoute(old)).toMatchObject({ settings: false, plugins: true, pluginId: null });
+  });
+
   it("手机首页列表没有 hash，桌面总带当前助手", () => {
     expect(routeHash({ page: "main", section: null, sel: "ops", mobile: "list" }, true)).toBe("");
     expect(routeHash({ page: "main", section: null, sel: "ops", mobile: "list" }, false)).toBe("#/chat/ops");

@@ -70,8 +70,8 @@ export function groupThinking(list: JobStep[]): StepRows {
 }
 
 /** 已结束时折叠合并思考后的步骤；在跑时始终全部显示。 */
-export function visibleSteps(rows: StepRow[], ended: boolean, expanded: boolean) {
-  const shown = ended && !expanded ? rows.slice(0, 8) : rows;
+export function visibleSteps(rows: StepRow[], ended: boolean) {
+  const shown = ended ? rows.slice(0, 8) : rows;
   return { rows: shown, remaining: rows.length - shown.length };
 }
 

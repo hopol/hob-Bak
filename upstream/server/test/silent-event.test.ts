@@ -258,3 +258,56 @@ describe("系统事件那一轮可以只回 NO_REPLY", () => {
     } finally { hob.close(); }
   });
 });
+
+describe("收到用户消息却回了 NO_REPLY：系统替助手挂 👀", () => {
+  const reactionsOf = (items: Item[], id?: string) => items.find((item) => item.kind === "user" && (!id || item.id === id)) as Extract<Item, { kind: "user" }> | undefined;
+
+  it("单聊：用户消息那一轮回 NO_REPLY，那条消息挂上助手的 👀", async () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
+      hob.faux.setResponses([text("NO_REPLY")]);
+      const sent = await hob.runtime.router.send("hob", { text: "周四的会改到下午三点了" });
+      await hob.runtime.router.waitIdle("hob");
+      expect(reactionsOf(hob.runtime.router.items("hob").items, sent.id)?.reactions).toEqual([{ by: "hob", emoji: "👀" }]);
+    } finally { hob.close(); }
+  });
+
+  it("单聊：自己点过表情就不再挂；正常回话不挂；纯事件那一轮回 NO_REPLY 也不挂", async () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
+      hob.faux.setResponses([
+        fauxAssistantMessage([fauxToolCall("react", { emoji: "👍" })], { stopReason: "toolUse" }), text("NO_REPLY"),
+        text("好，周四下午三点。"),
+        text("NO_REPLY"),
+      ]);
+      const first = await hob.runtime.router.send("hob", { text: "周四的会改到下午三点了" });
+      await hob.runtime.router.waitIdle("hob");
+      const second = await hob.runtime.router.send("hob", { text: "记一下" });
+      await hob.runtime.router.waitIdle("hob");
+      await hob.runtime.router.event("hob", "任务超过预计时间", undefined);
+      await hob.runtime.router.waitIdle("hob");
+      const items = hob.runtime.router.items("hob").items;
+      expect(reactionsOf(items, first.id)?.reactions).toEqual([{ by: "hob", emoji: "👍" }]);
+      expect(reactionsOf(items, second.id)?.reactions).toBeUndefined();
+    } finally { hob.close(); }
+  });
+
+  it("群：收到用户消息的那一轮回 NO_REPLY，那条消息挂上它的 👀；纯事件那一轮不挂", async () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
+      const group = hob.runtime.groups.create({ name: "家里机器", purpose: "机器上的事", ownerId: "hob", members: ["hob"] });
+      hob.faux.setResponses([text("NO_REPLY"), text("NO_REPLY")]);
+      const sent = hob.runtime.groups.send(group.id, { text: "备份盘换好了" });
+      await waitFor(() => hob.faux.state.callCount === 1 && hob.runtime.groups.summary(group.id).busy.length === 0);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const item = (await sent) as { id: string };
+      expect(reactionsOf(hob.runtime.groups.items(group.id).items, item.id)?.reactions).toEqual([{ by: "hob", emoji: "👀" }]);
+
+      hob.runtime.store.saveGroupState(group.id, { reactions: {} });
+      await hob.runtime.groups.deliverEvent(group.id, "hob", "任务超过预计时间");
+      await waitFor(() => hob.runtime.groups.summary(group.id).busy.length === 0);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(reactionsOf(hob.runtime.groups.items(group.id).items, item.id)?.reactions).toBeUndefined();
+    } finally { hob.close(); }
+  });
+});

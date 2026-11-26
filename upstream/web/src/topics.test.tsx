@@ -24,7 +24,7 @@ vi.mock("./store.ts", () => ({
 vi.mock("react-dom", async (importOriginal) => ({ ...(await importOriginal<typeof import("react-dom")>()), createPortal: (node: unknown) => node }));
 
 import { topicFace, topicGroups, topicPreview, groupSidebarFor } from "../src/topics.ts";
-import { ClosedTopic, GroupSidebar, PlaceJobs, TopicRow, membersLine } from "./components/Topics.tsx";
+import { ClosedTopic, GroupSidebar, NewTopicDialog, PlaceJobs, TopicRow, membersLine } from "./components/Topics.tsx";
 import { TopicCard } from "./components/Items.tsx";
 
 const at = (h: number, m = 0) => new Date(2026, 10, 8, h, m).toISOString();
@@ -231,5 +231,35 @@ describe("关了的话题", () => {
     expect(html).toContain("4 条完成标准都过了，已上线");
     expect(html).toContain("重新打开");
     expect(html).not.toContain("<textarea");
+  });
+});
+
+describe("新建话题弹窗的工作目录", () => {
+  const renderDialog = (g: GroupSummary) => {
+    vi.stubGlobal("document", { body: null });
+    try {
+      return render(<NewTopicDialog group={g} onClose={() => undefined} />);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  };
+
+  it("所属群已绑定工作目录时，只读提示跟随群且不渲染工作目录输入框", () => {
+    const bound = group("g-bound", { name: "Hob 开发", cwd: "/workspace/hob" });
+    const html = renderDialog(bound);
+    expect(html).toContain("工作目录");
+    expect(html).toContain("跟随群（/workspace/hob）");
+    expect(html).toContain('class="field ro"');
+    expect(html).not.toContain("工作目录（可选）");
+    expect(html.match(/<input\b/g)).toHaveLength(1);
+  });
+
+  it("所属群未绑定工作目录时，展示可选工作目录输入框", () => {
+    const unbound = group("g-unbound", { name: "家里机器" });
+    const html = renderDialog(unbound);
+    expect(html).toContain("工作目录（可选）");
+    expect(html).toContain("如 /workspace/app，创建后不可修改");
+    expect(html).not.toContain("跟随群（");
+    expect(html.match(/<input\b/g)).toHaveLength(2);
   });
 });

@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { indexPrices, UsagePrices } from "../src/usage-prices.ts";
+import { indexLimits, indexPrices, UsagePrices } from "../src/usage-prices.ts";
 
 /** models.dev 的 api.json 形状：服务商 id → { models: { 模型 id: { cost } } }，单价是美元 / 百万 token。 */
 const CATALOG = {
@@ -107,6 +107,35 @@ describe("价格表", () => {
       await table.ensure();
       expect(table.table()).toMatchObject({ fetchedAt: null, error: "HTTP 500" });
       expect(table.table().prices).toEqual({});
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("同一份数据记下每个模型的上下文和输出上限，厂商自己那家优先；旧文件没有上限时重拉一次补上", async () => {
+    const withLimits = {
+      someproxy: { models: { "big-model": { id: "big-model", limit: { context: 200_000, output: 8_000 } } } },
+      google: { models: { "big-model": { id: "big-model", limit: { context: 1_048_576, output: 65_536 }, cost: { input: 3, output: 15 } } } },
+      other: { models: { "no-output": { id: "no-output", limit: { context: 32_000 } }, "no-limit": { id: "no-limit" } } },
+    };
+    expect(indexLimits(withLimits)).toEqual({ "big-model": { context: 1_048_576, output: 65_536 }, "no-output": { context: 32_000, output: 0 } });
+
+    const home = tempHome();
+    try {
+      // 旧版本写的文件：今天刚拉过，但没有 limits 这一项
+      mkdirSync(join(home, "cache"), { recursive: true });
+      writeFileSync(join(home, "cache", "usage-prices.json"), JSON.stringify({ fetchedAt: "2026-11-01T00:00:00.000Z", attemptAt: "2026-11-01T00:00:00.000Z", error: null, prices: {} }));
+      const calls = { n: 0 };
+      const table = new UsagePrices({ home, fetchImpl: okFetch(withLimits, calls), now: () => Date.parse("2026-11-01T01:00:00.000Z") });
+      expect(table.limitsOf("big-model")).toBeUndefined();
+      await table.ensure();
+      expect(calls.n).toBe(1);
+      expect(table.limitsOf("big-model")).toEqual({ context: 1_048_576, output: 65_536 });
+      // 重启后直接用存下来的，不再拉
+      const again = new UsagePrices({ home, fetchImpl: okFetch(withLimits, calls), now: () => Date.parse("2026-11-01T02:00:00.000Z") });
+      await again.ensure();
+      expect(calls.n).toBe(1);
+      expect(again.limitsOf("big-model")).toEqual({ context: 1_048_576, output: 65_536 });
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

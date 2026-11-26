@@ -5,7 +5,7 @@ import { t } from "../../../shared/i18n.ts";
 import { homeGroups } from "../home.ts";
 import { Icon } from "../icons.tsx";
 import { Avatar } from "../sprites.tsx";
-import { select, send, setText, useApp } from "../store.ts";
+import { select, send, useApp } from "../store.ts";
 import { sendName } from "./Chat.tsx";
 
 function greeting(hour = new Date().getHours()): string {
@@ -28,9 +28,8 @@ export function Home() {
     const body = text.trim();
     if (!body || !primary) return;
     void select(primary.id);
-    setText(body);
     setDraft("");
-    void send();
+    void send(body);
   };
 
   return (

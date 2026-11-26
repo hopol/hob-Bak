@@ -37,6 +37,7 @@ function hits(files: string[], words: string[]): string[] {
         if (file.endsWith("server/src/prompt.ts") && word === "派活" && line.includes("你的技能是做同类事的做法，派活时可以让任务照着做。")) continue;
         if ((file.endsWith("server/src/router-tools.ts") || file.endsWith("server/src/worker-tools.ts")) && word === "直接做" && (line.includes("同类事以后可以不再问时，填这类事的简称") || line.includes("以后「${remember}」直接做") || line.includes("记下用户对某类事的确认方式：ask 先问，allow 直接做。"))) continue;
         if (file.endsWith("server/src/worker-tools.ts") && word === "拍板" && line.includes("done 做完 / stuck 做不下去（写明缺什么）/ need_approval 需要用户拍板")) continue;
+        if (file.endsWith("server/src/follow-up.ts") && word === "拍板" && line.includes("不替他拍板")) continue;
         if (file.endsWith("server/src/jobs.ts") && word === "干活" && line.includes("不能在 Hob 的数据目录里干活；不填 cwd 就在任务自己的目录里做。")) continue;
         if (file.endsWith("server/src/jobs.ts") && word === "派活" && line.includes('"派活时估的"')) continue;
         if (file.endsWith("server/src/jobs.ts") && word === "派活" && line.includes("超过派活时预计的")) continue;

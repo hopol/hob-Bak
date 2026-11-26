@@ -22,6 +22,22 @@ async function appWithCookie(runtime: HobRuntime, home: string) {
   return { app, cookie: await signIn(app) };
 }
 
+describe("助手说明接口", () => {
+  it("PATCH 保存几万字、换行和空值，拒绝非文字", async () => {
+    const hob = makeHob();
+    try {
+      const { app, cookie } = await appWithCookie(hob.runtime, hob.home);
+      const text = `首行\n${"整理资料并保留格式。".repeat(5000)}\n末行`;
+      const patch = (instructions: unknown) => app.request("/api/assistants/hob", { method: "PATCH", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ instructions }) });
+      expect((await patch(`  ${text}  `)).status).toBe(200);
+      expect(hob.runtime.store.assistant("hob")?.instructions).toBe(text);
+      expect((await patch(null)).status).toBe(400);
+      expect((await patch("  ")).status).toBe(200);
+      expect(hob.runtime.store.assistant("hob")?.instructions).toBeUndefined();
+    } finally { hob.close(); }
+  });
+});
+
 describe("全局规则", () => {
   it("文件缺失时读取为空且不重建，提示词仍可构建", async () => {
     const hob = makeHob();

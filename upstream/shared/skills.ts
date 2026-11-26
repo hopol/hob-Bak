@@ -1,6 +1,8 @@
 export type SkillSource = "hob" | "lore" | "common";
 export type SkillImportSource = "pi" | "claude" | "codex";
 
+export type SkillOrigin = { kind: "job"; jobId: string } | { kind: "assistant"; assistantId: string; groupId?: string };
+
 export interface SkillView {
   id: string;
   name: string;
@@ -15,6 +17,8 @@ export interface SkillView {
   version?: number;
   updatedAt?: string;
   rollbackable?: boolean;
+  origin?: SkillOrigin;
+  fromJobId?: string;
 }
 
 export interface SkillsView {
@@ -56,7 +60,8 @@ export interface AssistantSkill {
   version: number; // 每次修补 +1，旧版在 skills/<name>/.history/<版本>/
   createdAt: string;
   updatedAt: string;
-  fromJobId?: string; // 最近一次从哪个任务沉淀或修补
+  fromJobId?: string; // 旧数据：最近一次从哪个任务沉淀或修补
+  origin?: SkillOrigin; // 最近一次保存的来源
   uses: number; // 被任务读过几次
   lastUsedAt?: string;
   enabled: boolean;

@@ -1,12 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { Approval, ApprovalQuestion, Item, JobStatus, SedimentStatus } from "../../../shared/types.ts";
+import type { Approval, ApprovalQuestion, Draft, Item, JobStatus, SedimentStatus } from "../../../shared/types.ts";
 import { ROUTINE_DUE_TEXT_LEGACY } from "../../../shared/routine-note.ts";
 
-const state = vi.hoisted(() => ({ sediment: undefined as SedimentStatus | undefined, status: "done" as JobStatus, statusReason: undefined as string | undefined, approvals: {} as Record<string, Approval> }));
+const state = vi.hoisted(() => ({ sediment: undefined as SedimentStatus | undefined, status: "done" as JobStatus, statusReason: undefined as string | undefined, approvals: {} as Record<string, Approval>, drafts: {} as Record<string, Draft> }));
 
 vi.mock("../store.ts", () => ({
-  useApp: () => ({ assistants: [], approvals: state.approvals, drafts: {}, delegations: {}, livePages: {}, sel: "hob", jobs: { "t-1": { id: "t-1", title: "测试任务", status: state.status, statusReason: state.statusReason, sediment: state.sediment, assistantId: "hob", createdAt: "2026-01-01T00:00:00Z", stats: { reads: 0, commands: 0, edits: 0 } } } }),
+  useApp: () => ({ assistants: [], approvals: state.approvals, drafts: state.drafts, delegations: {}, livePages: {}, sel: "hob", jobs: { "t-1": { id: "t-1", title: "测试任务", status: state.status, statusReason: state.statusReason, sediment: state.sediment, assistantId: "hob", createdAt: "2026-01-01T00:00:00Z", stats: { reads: 0, commands: 0, edits: 0 } } } }),
   photoUrl: (path: string) => path, fileUrl: (path: string) => path,
 }));
 vi.mock("./ImageGen.tsx", () => ({ ImageGenCard: ({ itemId }: { itemId: string }) => <div data-item-id={itemId}>生成的图片</div> }));
@@ -62,7 +62,7 @@ describe("对话卡片出处", () => {
     vi.unstubAllGlobals();
   });
 
-  it("一张卡问几个问题：待答的默认选推荐，答过的标出推荐的是哪个", () => {
+  it("一张卡问几个问题：用卡片组件渲染，待答的默认选推荐，答过和过期按卡片状态锁住", () => {
     vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
     const questions: ApprovalQuestion[] = [
       { title: "筛选放在哪？", why: "决定改哪个页面。", options: [{ key: "A", label: "导出对话框" }, { key: "B", label: "页面上" }], recommended: "A" },
@@ -78,27 +78,27 @@ describe("对话卡片出处", () => {
     };
 
     const pending = html(ask({}));
+    expect(pending).toContain("b q hc");
     expect(pending).toContain("筛选放在哪？");
     expect(pending).toContain("决定改哪个页面。");
-    expect(pending).toContain("推荐");
     expect(pending).toContain("自己写");
     // 每题都能自己写，卡上不另设补充框
     expect(pending).not.toContain("补充说明（可选）");
-    // 推荐的那项默认选中（第一题 A「导出对话框」），另一题也是 A
-    expect(pending).toContain('class="opt chosen"');
-    expect(pending.match(/class="opt chosen"/g)).toHaveLength(2);
+    // 推荐的那项默认选中（两题默认均选中 A）
+    expect(pending.match(/class="hc-option active"/g)).toHaveLength(2);
 
     const answered = html(
       ask({ status: "answered", answers: [{ key: "B" }, { text: "按季度给" }], answerText: "先按这个做" }),
     );
-    expect(answered).toContain("B");
+    expect(answered).toContain("hc-disabled");
+    expect(answered).toContain("hc-result-list");
     expect(answered).toContain("页面上");
-    expect(answered).toContain("推荐的是 A：导出对话框");
     expect(answered).toContain("按季度给");
-    expect(answered).toContain("补充：先按这个做");
+    expect(answered).toContain("先按这个做");
     expect(answered).not.toContain("补充说明（可选）");
 
     const expired = html(ask({ status: "expired" }));
+    expect(expired).toContain("hc-disabled");
     expect(expired).toContain("已结束");
     expect(expired).not.toContain("补充说明（可选）");
     state.approvals = {};
@@ -142,7 +142,8 @@ describe("对话卡片出处", () => {
       const at = "2026-01-01T00:00:00Z";
       const failed: Item = { kind: "note", id: "n4", at, icon: "info", text: "「创建任务」执行失败", detail: "备注 401 字，最多 400 字。" };
       const html = renderToStaticMarkup(<ItemList items={[failed]} />);
-      expect(html).toMatch(/<details><summary>「创建任务」执行失败<\/summary><div class="why">备注 401 字，最多 400 字。<\/div><\/details>/);
+      expect(html).toContain('<div class="why">备注 401 字，最多 400 字。</div>');
+      expect(html).not.toContain('<details>');
     } finally { vi.unstubAllGlobals(); }
   });
 
@@ -155,6 +156,38 @@ describe("对话卡片出处", () => {
     expect(html).toContain("旧文件.pdf");
     expect(html).toContain("12 KB");
     vi.unstubAllGlobals();
+  });
+
+  it("草稿卡仅在绑定了工作目录时只读展示，未绑定不渲染", () => {
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
+    const at = "2026-01-01T00:00:00Z";
+    const base: Draft = {
+      id: "d-1",
+      assistantId: "hob",
+      status: "pending",
+      name: "前端助手",
+      sprite: "page",
+      duty: "负责前端开发",
+      dutyLong: "负责前端开发与单测",
+      routines: [],
+      routinesText: "",
+      askFirst: [],
+      createdAt: at,
+    };
+    try {
+      state.drafts = { "d-1": { ...base, cwd: "/workspace/hob-web" } };
+      const bound = renderToStaticMarkup(<ItemList items={[{ kind: "draft", id: "di-1", at, draftId: "d-1" }]} />);
+      expect(bound).toContain("工作目录");
+      expect(bound).toContain("/workspace/hob-web");
+      expect(bound).not.toContain("<input");
+
+      state.drafts = { "d-1": base };
+      const unbound = renderToStaticMarkup(<ItemList items={[{ kind: "draft", id: "di-2", at, draftId: "d-1" }]} />);
+      expect(unbound).not.toContain("工作目录");
+    } finally {
+      state.drafts = {};
+      vi.unstubAllGlobals();
+    }
   });
 });
 

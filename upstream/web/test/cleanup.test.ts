@@ -12,11 +12,12 @@ beforeAll(async () => {
   server = await createServer({
     server: { port: 0, host: "127.0.0.1", proxy: {} },
     plugins: [{ name: "cleanup-test-exports", enforce: "pre", transform(code, id) {
-      if (id.endsWith("/components/Items.tsx")) return `${code}\nexport { SingleQuestionCard, JobCard };`;
-      if (id.endsWith("/components/Settings.tsx")) return `${code}\nexport { McpDetail };`;
+      if (id.endsWith("/components/Items.tsx")) return `${code}\nexport { QuestionCard, JobCard };`;
     } }],
   });
   await server.listen();
+  await server.transformRequest("/src/main.tsx");
+  await server.transformRequest("/test/cleanup-fixture.jsx");
   const address = server.httpServer!.address();
   if (!address || typeof address === "string") throw new Error("测试服务器没有端口");
   base = `http://127.0.0.1:${address.port}`;
@@ -183,16 +184,76 @@ describe("前端失败路径", () => {
       expect(actual).toBe(expected);
     }
   }, BROWSER_TEST_TIMEOUT);
-  it("F30 工具开关失败回原状态并以服务端返回为准", async () => {
+  it("插件配置按类型显示，密钥留空不提交，OAuth 窗口保留 opener", async () => {
     await fixture("mcp");
-    const toggle = page.getByRole("button", { name: "tool启用" });
+    const connect = page.getByRole("button", { name: "连接", exact: true });
+    await expect.poll(() => connect.isDisabled()).toBe(true);
+    expect(await page.getByText("还差：名称。填好保存后自动连接。").isVisible()).toBe(true);
+    expect(await page.getByLabel("密钥").getAttribute("type")).toBe("password");
+    expect(await page.getByLabel("数量").getAttribute("min")).toBe("1");
+    expect(await page.getByLabel("数量").getAttribute("max")).toBe("10");
+    expect(await page.getByLabel("开关").isChecked()).toBe(true);
+    expect(await page.getByLabel("选项").inputValue()).toBe("a");
+    await page.getByLabel("名称").fill("example");
+    await page.locator('input[type="file"]').setInputFiles({ name: "example-file", mimeType: "text/plain", buffer: Buffer.from("/tmp/example-file") });
+    await page.getByLabel("目录路径").fill("/tmp/example-dir");
+    await page.evaluate(() => { (window as any).open = (...args: unknown[]) => { (window as any).popupArgs = args; return { location: {}, closed: true, close() {} }; }; });
+    await connect.click();
+    await expect.poll(() => calls("oauth")).toBe(1);
+    await expect.poll(() => calls("plugins")).toBeGreaterThanOrEqual(3);
+    expect(await page.evaluate(() => (window as any).popupArgs)).toEqual(["", "_blank"]);
+    const saved = await page.evaluate(() => (window as any).savedPluginValues);
+    expect(saved).toEqual({ NAME: "example", FILE: "/tmp/example-file", DIR: "/tmp/example-dir" });
+    expect(saved).not.toHaveProperty("SECRET");
+  }, BROWSER_TEST_TIMEOUT);
+  it("助手设置与手机入口使用插件范围", async () => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${base}/?mock=1&scene=plugin-demo&lang=zh-CN#/chat/hob/assistant`);
+    const prompt = page.getByRole("button", { name: "暂不开启" });
+    if (await prompt.isVisible()) await prompt.click();
+    const toggle = page.getByRole("switch", { name: "GitHub" });
+    await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
     await toggle.click();
+    await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("false");
+    await page.getByRole("button", { name: "插件", exact: true }).first().click();
+    await page.locator(".plugin-content").getByRole("button", { name: /GitHub/ }).click();
+    await expect.poll(() => page.locator(".plugin-content").getByRole("switch", { name: "Hob" }).getAttribute("aria-checked")).toBe("false");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${base}/?mock=1&scene=plugin-demo&lang=zh-CN`);
+    const dismiss = page.getByRole("button", { name: "暂不开启" });
+    if (await dismiss.isVisible()) await dismiss.click();
+    await page.getByRole("button", { name: "插件", exact: true }).click();
+    await expect.poll(() => new URL(page.url()).hash).toBe("#/plugins");
+  }, BROWSER_TEST_TIMEOUT);
+  it("工具开关和助手范围保存到插件，没有提供方式的选项", async () => {
+    await fixture("mcp");
+    const tool = page.getByRole("switch", { name: "read" });
+    await tool.click();
     await expect.poll(() => calls("mcp")).toBe(1);
-    await expect.poll(() => toggle.getAttribute("aria-pressed")).toBe("true");
-    await toggle.click();
+    expect(await tool.getAttribute("aria-checked")).toBe("true");
+    await tool.click();
+    await expect.poll(() => tool.getAttribute("aria-checked")).toBe("false");
+    expect(await page.evaluate(() => (window as any).lastPluginPatch.tools.read.enabled)).toBe(false);
+    expect(await page.getByText("提供方式").count()).toBe(0);
+    await page.getByRole("switch", { name: "示例助手" }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).lastPluginPatch.assistants)).toEqual(["hob"]);
+  }, BROWSER_TEST_TIMEOUT);
+  it("插件开关失败保留原状态并以服务端返回为准", async () => {
+    await fixture("mcp");
+    const openMenu = async () => {
+      await page.getByRole("button", { name: "更多", exact: true }).click();
+    };
+    const toggle = () => page.getByRole("button", { name: /^(停用|启用)$/ }).first();
+    await openMenu();
+    await toggle().click();
+    await expect.poll(() => calls("mcp")).toBe(1);
+    await expect.poll(() => page.getByRole("alert").textContent()).toBe("测试失败");
+    expect(await toggle().isVisible()).toBe(true);
+    await toggle().click();
     await expect.poll(() => calls("mcp")).toBe(2);
-    expect(await toggle.getAttribute("aria-pressed")).toBe("true");
-    await toggle.click();
-    await expect.poll(() => toggle.getAttribute("aria-pressed")).toBe("false");
+    expect(await toggle().isVisible()).toBe(true);
+    await toggle().click();
+    await expect.poll(() => calls("mcp")).toBe(3);
+    expect(await toggle().textContent()).toBe("启用");
   }, BROWSER_TEST_TIMEOUT);
 });

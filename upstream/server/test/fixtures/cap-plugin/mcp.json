@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "cap": {
+      "command": "node",
+      "args": ["${hob.plugin_root}/server.mjs"],
+      "env": {
+        "CAP_DATA_DIR": "${hob.plugin_data}"
+      }
+    }
+  }
+}

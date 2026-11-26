@@ -93,6 +93,24 @@ describe("mock：话题和待办", () => {
     expect(created.members).toEqual(["hob"]);
   });
 
+  it("建群和开话题支持可选工作目录并校验边界", async () => {
+    const { api } = mock("s1");
+    expect(await error(() => api.createGroup({ name: "坏路径", purpose: "", ownerId: "hob", members: ["hob"], cwd: "relative/path" }))).toContain("绝对路径");
+    const boundGroup = await api.createGroup({ name: "Hob 项目", purpose: "仓库维护", ownerId: "hob", members: ["hob"], cwd: "/workspace/hob" });
+    expect(boundGroup.cwd).toBe("/workspace/hob");
+    // 群已设 cwd 时，话题不能单独指定 cwd，且创建出的话题自身 cwd 保持未定义（跟随群）
+    expect(await error(() => api.createTopic(boundGroup.id, { title: "覆盖目录", cwd: "/tmp/other" }))).toContain("所属群已绑定工作目录");
+    const followTopic = await api.createTopic(boundGroup.id, { title: "跟随群" });
+    expect(followTopic.cwd).toBeUndefined();
+
+    // 群未设 cwd 时，话题可单独绑定绝对路径，拒绝相对路径
+    const unboundGroup = await api.createGroup({ name: "家用群", purpose: "", ownerId: "hob", members: ["hob"] });
+    expect(unboundGroup.cwd).toBeUndefined();
+    expect(await error(() => api.createTopic(unboundGroup.id, { title: "坏目录", cwd: "foo/bar" }))).toContain("绝对路径");
+    const topicWithCwd = await api.createTopic(unboundGroup.id, { title: "脚本维护", cwd: "/srv/scripts" });
+    expect(topicWithCwd.cwd).toBe("/srv/scripts");
+  });
+
   it("归档群时，每个话题各发一个 group_removed", async () => {
     const { api, events } = mock("topics");
     events.length = 0;

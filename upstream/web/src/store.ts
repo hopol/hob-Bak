@@ -4,8 +4,12 @@ import { parseRoute, type SettingsSection } from "./route.ts";
 import { useRef, useSyncExternalStore } from "react";
 import { currentLocale, localeFromBrowser, setLocale as setSharedLocale, t, type Locale } from "../../shared/i18n.ts";
 import type {
+  PluginModelOverridePatch,
+  StarredMessage,
+  ConversationRef,
   AnswerApprovalBody,
   Approval,
+  CardRecord,
   Assistant,
   AssistantSummary,
   Bootstrap,
@@ -33,6 +37,8 @@ import type {
   MemoryConfig,
   MemoryProvider,
   PageLive,
+  PluginInstallProgress,
+  PluginSignInSessionView,
   ModelThinkingView,
   Profile,
   ProviderImportView,
@@ -47,6 +53,7 @@ import type {
   SettingsPatch,
   ThinkingLevelMapSetting,
   TokenPrice,
+  UpdateCheck,
   UsageModelPrice,
   UsageView,
 } from "../../shared/types.ts";
@@ -62,6 +69,7 @@ import { isImagePath } from "../../shared/media.ts";
 import { createMock, SCENE_UI, type SceneId } from "./mock.ts";
 import { currentSubscription, deviceLabel, subscribePush } from "./push.ts";
 import { mergeStep, mergeSteps } from "./steps.ts";
+import { applyPalette, flashThemeSwitch, readStoredPalette, storePalette, type Palette } from "./palette.ts";
 import { isNarrow, resolveTheme, updateManifest, updateStatusColor } from "./theme.ts";
 import { popPage, pushPage, removeMissingLivePages, replacePage, selectPanelStack, type PanelPage } from "./panel-stack.ts";
 export type { FilePreviewState, PanelPage } from "./panel-stack.ts";
@@ -80,6 +88,7 @@ export interface WorklogState {
   hasMore: boolean;
   loading: boolean;
 }
+export type PluginPage = "installed" | "market" | "new";
 export type MobilePage = "list" | "topics" | "chat";
 export type { SettingsSection } from "./route.ts";
 
@@ -92,13 +101,10 @@ export type SettingsSub =
   | { kind: "importProviders"; title: string }
   | { kind: "skill"; key: string; title: string }
   | { kind: "importSkills"; title: string }
-  | { kind: "mcpServer"; name: string; title: string }
-  | { kind: "addMcp"; title: string }
-  | { kind: "importMcp"; title: string }
   | { kind: "searchProvider"; name: SearchProviderName; title: string };
 
 const EMPTY_SETTINGS: Settings = {
-  general: { theme: "system", timezone: "UTC", aboutYou: { name: "", language: "", notes: "" } },
+  general: { theme: "system", timezone: "UTC", proxy: "", noProxy: "localhost,127.0.0.1,::1", aboutYou: { name: "", language: "", notes: "" } },
   providers: [],
   models: {
     roster: [],
@@ -122,7 +128,17 @@ export interface GroupPrefs {
   pinOrder?: number;
 }
 
+interface ComposerDraft {
+  text: string;
+  quote: NonNullable<SendMessageBody["quote"]> | null;
+  attachments: Attachment[];
+}
+
+const EMPTY_COMPOSER: ComposerDraft = { text: "", quote: null, attachments: [] };
+
 export interface State {
+  stars: StarredMessage[];
+  starsError: string | null;
   phase: "loading" | "login" | "ready" | "error";
   error: string | null; // 致命错误（无法连接后端）
   notice: string | null; // 一次性的操作失败提示
@@ -139,10 +155,16 @@ export interface State {
   routines: Routine[];
   approvals: Record<string, Approval>;
   drafts: Record<string, Draft>;
+  cards: Record<string, CardRecord>;
   settings: SettingsFile;
   locale: Locale;
   globalRules: { rules: Rule[] | null; error: string | null; busy: boolean };
-  page: "main" | "settings" | "knowledge";
+  page: "main" | "settings" | "knowledge" | "plugins" | "stars";
+  pluginId: string | null;
+  pluginPage: PluginPage;
+  pluginInstall: Record<string, PluginInstallProgress>;
+  pluginProviderTick: number;
+  pluginSignIn: Record<string, PluginSignInSessionView>;
   knowledge: { category: string; q: string; kind: KnowledgeGroup | ""; assistantId: string; entries: (KnowledgeEntry & { snippet?: string })[]; collections: KnowledgeCollection[]; collectionsLoaded: boolean; hasMore: boolean; loading: boolean; error: string | null };
   section: SettingsSection | null; // 设置页当前分栏；null = 手机上的列表（桌面当通用看）
   sub: SettingsSub | null; // 分栏里再进一层（模型详情、添加模型）；null = 分栏本身
@@ -167,12 +189,11 @@ export interface State {
   sideCollapsed: boolean;
   nowWide: boolean; // 右栏「正在做」展开成宽栏
   theme: Theme;
+  palette: Palette;
   query: string;
   homeFilter: "all" | "assistants" | "jobs" | "routines";
   homeOrder: "recent" | "custom";
-  quote: { itemId: string; text: string } | null;
-  text: string;
-  attachments: Attachment[]; // 输入框里待发的附件（选了就出现，后台在传）
+  composerDrafts: Map<string, ComposerDraft>; // 和发件箱共用会话键，只在当前页面保留
   pending: Record<string, PendingMessage[]>; // 发件箱：点了发送还没被服务端那条顶替的消息
   nonce: number; // 让输入框重新聚焦／重新量高度
   mobile: MobilePage;
@@ -180,6 +201,7 @@ export interface State {
   search: boolean; // 手机上的搜索框
   menu: { id: string; x: number; y: number } | null; // 助手右键 / 长按菜单（视口坐标）
   tick: number; // 定时刷新“进行中 · N 分钟”
+  update: UpdateCheck | null; // 服务端 npm 版本检查结果
   updateReady: boolean; // 新版本装好了，等用户点「刷新」
   loggingIn: boolean;
   desktopLogin: { approvalId: string; assistantId: string } | null;
@@ -187,7 +209,7 @@ export interface State {
 
 const params = new URLSearchParams(location.search);
 export const MOCK = params.get("mock") === "1";
-const SCENES: SceneId[] = ["g-owns", "g-owns-dark", "readme-chat", "readme-cards", "readme-desktop", "readme-knowledge", "readme-profile", "readme-group-now", "readme-mobile-list", "readme-mobile-chat", "readme-mobile-todos", "image", "act-demo", "act-think", "act-tool", "act-dark", "act-home", "boot", "bubbles", "bubbles-dark", "card-130", "card-130-dark", "job-after", "job-after-dark", "routine-check-dark", "routine-once", "routine-once-dark", "routine-once-list", "ask-rounds", "ask-rounds-answered", "ask-rounds-group", "ask-rounds-dark", "ask-rounds-mobile", "s1", "home-attention", "s2", "s3", "s4", "s6", "mlist", "mchat", "d-running", "d-waiting", "d-done", "d-dark", "d-source", "d-mobile", "h-hob", "h-dark", "h-source", "h-settings", "h-mobile", "g-chat", "g-mention", "g-mobile", "g-dark", "g-team", "todo-chat", "todo-topic", "todo-job", "topics", "topics-plain"];
+const SCENES: SceneId[] = ["cards-demo", "cards-gallery", "cards-gallery-dark", "ask-cards-single", "ask-cards-multi", "ask-cards-multi-answered", "ask-cards-job", "ask-cards-mobile", "ask-cards-dark", "login-cards", "plugin-demo", "tool-login-signed-out", "tool-login-device", "tool-login-signed-in", "tool-login-optional", "provider-demo", "provider-install-progress", "provider-install-done", "provider-errors", "provider-login-device", "provider-login-web", "provider-login-paste", "provider-login-apikey", "provider-login-cli", "provider-update-confirm", "vault", "vault-empty", "g-owns", "g-owns-dark", "readme-chat", "readme-cards", "readme-interactive-cards", "readme-plugins", "readme-desktop", "readme-knowledge", "readme-profile", "readme-group-now", "readme-mobile-list", "readme-mobile-chat", "readme-mobile-todos", "image", "act-demo", "act-think", "act-tool", "act-dark", "act-home", "boot", "bubbles", "bubbles-dark", "card-130", "card-130-dark", "job-after", "job-after-dark", "routine-check-dark", "routine-once", "routine-once-dark", "routine-once-list", "ask-rounds", "ask-rounds-answered", "ask-rounds-group", "ask-rounds-dark", "ask-rounds-mobile", "s1", "home-attention", "s2", "s3", "s4", "s6", "mlist", "mchat", "d-running", "d-waiting", "d-done", "d-dark", "d-source", "d-mobile", "h-hob", "h-dark", "h-source", "h-settings", "h-mobile", "g-chat", "g-mention", "g-mobile", "g-dark", "g-team", "todo-chat", "todo-topic", "todo-job", "topics", "topics-plain", "read-receipt", "read-receipt-hub", "read-receipt-chat", "workspace-cwd", "workspace-cwd-dark", "group-reply-all", "group-reply-all-dark"];
 const sceneParam = params.get("scene") as SceneId | null;
 const scene: SceneId = sceneParam && SCENES.includes(sceneParam) ? sceneParam : "s1";
 const THEME_KEY = "hob.theme";
@@ -303,10 +325,18 @@ function initial(): State {
     routines: [],
     approvals: {},
     drafts: {},
+    cards: {},
     settings: { revision: 0, settings: EMPTY_SETTINGS },
     locale: initialLocale,
     globalRules: { rules: null, error: null, busy: false },
+    stars: [],
+    starsError: null,
     page: "main",
+    pluginId: null,
+    pluginPage: "installed",
+    pluginInstall: {},
+    pluginProviderTick: 0,
+    pluginSignIn: {},
     knowledge: { category: "all", q: "", kind: "", assistantId: "", entries: [], collections: [], collectionsLoaded: false, hasMore: false, loading: false, error: null },
     section: null,
     sub: null,
@@ -330,12 +360,11 @@ function initial(): State {
     sideCollapsed: loadSideCollapsed(),
     nowWide: false,
     theme: storedTheme() ?? "system",
+    palette: readStoredPalette() ?? "default",
     query: "",
     homeFilter: storedHomeFilter(),
     homeOrder: storedHomeOrder(),
-    quote: null,
-    text: "",
-    attachments: [],
+    composerDrafts: new Map(),
     pending: {},
     nonce: 0,
     mobile: "list",
@@ -343,6 +372,7 @@ function initial(): State {
     search: false,
     menu: null,
     tick: 0,
+    update: null,
     updateReady: false,
     loggingIn: false,
     desktopLogin: null,
@@ -356,7 +386,8 @@ function initial(): State {
     state.collapsed = ui.collapsed;
     state.mobile = ui.mobile;
     state.theme = ui.dark ? "dark" : "light";
-    if (ui.text) state.text = ui.text;
+    const key = pendingKeyOf(state);
+    if (key && ui.text) state.composerDrafts.set(key, { ...EMPTY_COMPOSER, text: ui.text });
   }
   const aParam = params.get("a");
   if (aParam) state.sel = aParam;
@@ -367,6 +398,12 @@ function initial(): State {
   }
   if (bootRoute.sel) state.sel = bootRoute.sel;
   if (bootRoute.panel) state.panelStack = [bootRoute.panel];
+  if (bootRoute.plugins) {
+    state.page = "plugins";
+    state.pluginId = bootRoute.pluginId ?? null;
+    state.pluginPage = bootRoute.pluginPage ?? "installed";
+  }
+  if (bootRoute.stars) state.page = "stars";
   if (bootRoute.knowledge) state.page = "knowledge";
   if (bootRoute.settings) {
     state.page = "settings";
@@ -488,6 +525,7 @@ function mergeSettings(base: Settings, patch: SettingsPatch): Settings {
       roster: models.roster ?? base.models.roster,
       conversation: models.conversation ?? base.models.conversation,
       work: models.work ?? base.models.work,
+      ...(models.suggest !== undefined ? { suggest: models.suggest } : base.models.suggest !== undefined ? { suggest: base.models.suggest } : {}),
       thinkingChoice: models.thinkingChoice ?? base.models.thinkingChoice,
       ...(models.thinking ?? base.models.thinking ? { thinking: models.thinking ?? base.models.thinking } : {}),
     },
@@ -515,13 +553,16 @@ async function writeSettings(patch: SettingsPatch): Promise<boolean> {
   const optimisticLocale = optimistic.settings.general.locale;
   set({ settings: optimistic, ...(optimisticLocale ? { locale: optimisticLocale } : {}), theme: optimistic.settings.general.theme });
   if (optimisticLocale) applyLocale(optimisticLocale);
-  if (patch.general?.theme) applyTheme(patch.general.theme);
+  if (patch.general?.theme) {
+    flashThemeSwitch();
+    applyLook(patch.general.theme, state.palette);
+  }
   try {
     const next = await api.putSettings(before.revision, patch);
     const nextLocale = next.settings.general.locale;
     set({ settings: next, ...(nextLocale ? { locale: nextLocale } : {}), theme: next.settings.general.theme });
     if (nextLocale) applyLocale(nextLocale);
-    applyTheme(next.settings.general.theme);
+    applyLook(next.settings.general.theme, state.palette);
     if (patch.models) refreshGroupProfiles();
     localStorage.setItem(THEME_KEY, next.settings.general.theme);
     return true;
@@ -532,6 +573,7 @@ async function writeSettings(patch: SettingsPatch): Promise<boolean> {
         const freshLocale = fresh.settings.general.locale;
         set({ settings: fresh, ...(freshLocale ? { locale: freshLocale } : {}), theme: fresh.settings.general.theme });
         if (freshLocale) applyLocale(freshLocale);
+        applyLook(fresh.settings.general.theme, state.palette);
       } catch {
         set({ settings: before });
       }
@@ -539,7 +581,7 @@ async function writeSettings(patch: SettingsPatch): Promise<boolean> {
       return false;
     }
     set({ settings: before, theme: before.settings.general.theme, notice: t("保存失败：{error}", { error: errText(e) }) });
-    applyTheme(before.settings.general.theme);
+    applyLook(before.settings.general.theme, state.palette);
     return false;
   }
 }
@@ -740,15 +782,59 @@ export async function saveDesktop(body: { revision: number; url: string; enabled
   return view;
 }
 export const testDesktop = () => api.testDesktop();
-export const loadMcp = () => api.mcp();
-export const putMcpServer = (name: string, body: import("../../shared/mcp.ts").McpServerSave) => api.putMcp(name, body);
-export const patchMcpServer = (name: string, patch: import("../../shared/mcp.ts").McpServerPatch) => api.patchMcp(name, patch);
-export const deleteMcpServer = (name: string) => api.deleteMcp(name);
-export const testMcpServer = (name: string, refresh = true) => api.testMcp(name, refresh);
-export const loadMcpImports = () => api.mcpImports();
-export const importMcpServers = (ids: string[]) => api.importMcp(ids);
+export const loadPlugins = () => api.plugins();
+export const loadPluginCatalog = () => api.pluginCatalog();
+export const installPlugin = (id: string, source?: string) => api.installPlugin(id, source);
+export const addPluginSource = (url: string) => api.addPluginSource(url);
+export const deletePluginSource = (id: string) => api.deletePluginSource(id);
+export const refreshPluginSources = () => api.refreshPluginSources();
+export const updatePlugin = (id: string) => api.updatePlugin(id);
+export const savePluginConfig = (id: string, values: Record<string, unknown>) => api.savePluginConfig(id, values);
+export const addPluginProfile = (id: string, name: string) => api.addPluginProfile(id, name);
+export const updatePluginProfile = (id: string, profileId: string, name: string) => api.updatePluginProfile(id, profileId, name);
+export const deletePluginProfile = (id: string, profileId: string) => api.deletePluginProfile(id, profileId);
+export const savePluginProfileConfig = (id: string, profileId: string, values: Record<string, unknown>) => api.savePluginProfileConfig(id, profileId, values);
+export const startPluginOAuth = (id: string, service: string) => api.startPluginOAuth(id, service);
+export const disconnectPluginOAuth = (id: string, service: string) => api.disconnectPluginOAuth(id, service);
+export const loadPluginToolLoginStatus = (id: string, service?: string) => api.pluginLoginStatus(id, service);
+export const startPluginToolLogin = (id: string, service?: string) => api.startPluginToolLogin(id, service);
+export const pollPluginToolLogin = (id: string, service?: string) => api.pollPluginToolLogin(id, service);
+export const logoutPluginToolLogin = (id: string, service?: string) => api.logoutPluginToolLogin(id, service);
+export const removePluginLoginAuto = (id: string, host: string, username: string) => api.removePluginLoginAuto(id, host, username);
+export const loadPluginLogins = (id: string, service?: string) => api.pluginLogins(id, service);
+export const loadPluginLoginSecret = (id: string, loginId: string, service?: string) => api.pluginLoginSecret(id, loginId, service);
+export const savePluginLogin = (id: string, body: Parameters<typeof api.savePluginLogin>[1]) => api.savePluginLogin(id, body);
+export const deletePluginLogin = (id: string, loginId: string, service?: string) => api.deletePluginLogin(id, loginId, service);
+export const addCustomPlugin = (id: string, server: Record<string, unknown>) => api.addCustomPlugin(id, server);
+export const patchPlugin = (id: string, patch: import("../../shared/types.ts").PluginPatch) => api.patchPlugin(id, patch);
+export const deletePlugin = (id: string) => api.deletePlugin(id);
+export const loadPluginProviderHost = () => api.pluginProviderHost();
+export const approvePlugin = (id: string) => api.approvePlugin(id);
+export const loadPluginProviders = (id: string, load = false) => api.pluginProviders(id, load);
+export const refreshPluginModels = (id: string, providerId: string, accountId?: string) => api.refreshPluginModels(id, providerId, accountId);
+export const setPluginModelOverride = (id: string, providerId: string, body: PluginModelOverridePatch) => api.setPluginModelOverride(id, providerId, body);
+export const loadPluginProviderUsage = (id: string, providerId: string, accountId?: string) => api.pluginProviderUsage(id, providerId, accountId);
+export const setPluginActiveAccount = (id: string, providerId: string, accountId: string) => api.setPluginActiveAccount(id, providerId, accountId);
+export const deletePluginAccount = (id: string, providerId: string, accountId: string) => api.deletePluginAccount(id, providerId, accountId);
+export const promptPluginAuth = (id: string, providerId: string, body: Parameters<typeof api.pluginAuthPrompt>[2]) => api.pluginAuthPrompt(id, providerId, body);
+export const signInPluginApiKey = (id: string, providerId: string, body: Parameters<typeof api.pluginAuthApiKey>[2]) => api.pluginAuthApiKey(id, providerId, body);
+export const startPluginSignIn = (id: string, providerId: string, body: Parameters<typeof api.pluginAuthStart>[2]) => api.pluginAuthStart(id, providerId, body);
+export const pollPluginSignIn = (id: string, providerId: string, sessionId: string) => api.pluginAuthSession(id, providerId, sessionId);
+export const pastePluginSignIn = (id: string, providerId: string, body: { sessionId: string; url: string }) => api.pluginAuthPaste(id, providerId, body);
+export const submitPluginSignInCode = (id: string, providerId: string, body: { sessionId: string; code: string }) => api.pluginAuthCode(id, providerId, body);
+export const cancelPluginSignIn = (id: string, providerId: string, sessionId: string) => api.pluginAuthCancel(id, providerId, sessionId);
+export const checkPluginProviderCli = (id: string, providerId: string) => api.pluginProviderCli(id, providerId);
+export const installPluginProviderCli = (id: string, providerId: string) => api.installPluginProviderCli(id, providerId);
+export function clearPluginInstallProgress(pluginId: string) {
+  set((s) => {
+    if (!s.pluginInstall[pluginId]) return {};
+    const next = { ...s.pluginInstall };
+    delete next[pluginId];
+    return { pluginInstall: next };
+  });
+}
 export const loadSearch = () => api.search();
-export const testSearch = (name: string, baseUrl?: string, apiKey?: string) => api.testSearch(name, baseUrl, apiKey);
+export const testSearch = (name: string, baseUrl?: string, apiKey?: string, extra?: { providerId?: string; model?: string }) => api.testSearch(name, baseUrl, apiKey, extra);
 export async function saveSearch(providers: SearchSettings, keys?: Record<string, string>) {
   try { const saved = await api.putSearch(state.settings.revision, providers, keys); set({ settings: saved }); return null; }
   catch (e) { if (e instanceof ApiError && e.status === 409) set({ settings: await api.settings() }); return errText(e); }
@@ -959,14 +1045,38 @@ function applyTheme(theme: Theme) {
   updateStatusColor(state, isNarrow());
 }
 
-export function setTheme(theme: Theme) {
+/**
+ * 两件事分开做：深浅（.dark 类）和配色（data-palette）。
+ * 换配色时开一次全页颜色过渡，深浅切换也跟着过渡一下——都是同一个「整体换色」的感觉。
+ */
+function applyLook(theme: Theme, palette: Palette) {
+  applyPalette(palette);
   applyTheme(theme);
+}
+
+export function setTheme(theme: Theme) {
+  flashThemeSwitch();
+  applyLook(theme, state.palette);
   set({ theme });
   localStorage.setItem(THEME_KEY, theme); // 只是下次打开时先按它刷一下，避免闪白
   void saveSettings({ general: { theme } });
 }
 
-darkQuery.addEventListener("change", () => applyTheme(state.theme));
+/** 换配色只改这台浏览器：只写 localStorage，不调 saveSettings，服务端的设置一个字都不动。 */
+export function setPalette(palette: Palette) {
+  if (palette === state.palette) return;
+  flashThemeSwitch();
+  applyPalette(palette);
+  set({ palette });
+  storePalette(palette);
+  // 状态栏和 meta theme-color 跟着新底色走
+  updateStatusColor(state, isNarrow());
+}
+
+darkQuery.addEventListener("change", () => {
+  flashThemeSwitch();
+  applyLook(state.theme, state.palette);
+});
 
 /* ---------------- 启动与事件 ---------------- */
 
@@ -976,10 +1086,11 @@ let stopEvents: (() => void) | null = null;
 export async function start() {
   if (started) return;
   started = true;
-  applyTheme(state.theme);
+  applyLook(state.theme, state.palette);
   if (MOCK) {
     if (scene === "boot") return;
     await loadBootstrap();
+    if (scene === "read-receipt-chat" && params.get("play") === "1") playReceiptDemo();
     return;
   }
   try {
@@ -993,6 +1104,13 @@ export async function start() {
     return;
   }
   await loadBootstrap();
+}
+
+/** 效果图：模型在这一轮里给你的消息点了个赞（还在接着回），表情弹出来 */
+function playReceiptDemo() {
+  setTimeout(() => {
+    set((s) => ({ items: { ...s.items, hob: (s.items.hob ?? []).map((it) => (it.id === "rc-4" && it.kind === "user" ? { ...it, reactions: [{ by: "hob", emoji: "👍" }] } : it)) } }));
+  }, 1200);
 }
 
 export async function login(password: string) {
@@ -1019,7 +1137,7 @@ export async function logout() {
   } catch {
     /* 后端没有退出接口时也要能把界面退回登录页 */
   }
-  set({ phase: "login", assistants: [], items: {}, profiles: {}, assistantSkills: {}, jobs: {}, routines: [] });
+  set({ phase: "login", assistants: [], items: {}, profiles: {}, assistantSkills: {}, jobs: {}, routines: [], approvals: {}, drafts: {}, cards: {}, composerDrafts: new Map() });
 }
 
 let groupRetry: ReturnType<typeof setTimeout> | undefined;
@@ -1048,7 +1166,9 @@ async function loadBootstrap(reconnect = false) {
       delegations: index(boot.delegations ?? []),
       routines: boot.routines,
       approvals: index(boot.approvals),
+      cards: {},
       settings: boot.settings,
+      update: boot.update ?? null,
       ...(boot.settings.settings.general.locale ? { locale: boot.settings.settings.general.locale } : {}),
       theme: boot.settings.settings.general.theme,
     });
@@ -1058,7 +1178,7 @@ async function loadBootstrap(reconnect = false) {
       // 默认内容是存下语言时才建的，建完重拉一遍，界面上的助手和群才是新建的那份
       void saveSettings({ general: { locale: state.locale } }).then((saved) => { if (saved) void loadBootstrap(true); });
     }
-    applyTheme(boot.settings.settings.general.theme);
+    applyLook(boot.settings.settings.general.theme, state.palette);
     localStorage.setItem(THEME_KEY, boot.settings.settings.general.theme);
     if (!stopEvents) {
       stopEvents = api.events(
@@ -1074,6 +1194,7 @@ async function loadBootstrap(reconnect = false) {
       );
       watchVisibility();
     }
+    void loadStars();
     const sel =
       state.sel && boot.assistants.some((a) => a.id === state.sel)
         ? state.sel
@@ -1087,7 +1208,7 @@ async function loadBootstrap(reconnect = false) {
     // 群地址代表综合时间线；手机刷新也应直接回到综合。
     else if (state.gsel && state.groups.some((g) => g.id === state.gsel)) await selectGroup(state.gsel, true, false, Boolean(bootRoute.group));
     // 没指定对话就停在首页
-    else if (sel && state.sel) await select(sel, mobileWantsChat());
+    else if (state.page === "main" && sel && state.sel) await select(sel, mobileWantsChat());
     if (state.page === "knowledge") void loadKnowledge();
     // 刷新前开着的任务页：内容要自己拉
     const top = state.panelStack.at(-1);
@@ -1103,6 +1224,9 @@ export function applyEvent(ev: HobEvent) {
   if (ev.type === "item" || ev.type === "delta") itemEvents.get(ev.assistantId)?.push(ev);
   if (ev.type === "group-item" || ev.type === "group-delta") groupEvents.get(ev.groupId)?.push(ev);
   switch (ev.type) {
+    case "stars":
+      void loadStars();
+      break;
     case "rules":
       if (state.page === "settings" && state.section === "rules") void loadRules();
       break;
@@ -1137,6 +1261,7 @@ export function applyEvent(ev: HobEvent) {
     case "assistant_removed":
       set((s) => ({
         assistants: s.assistants.filter((a) => a.id !== ev.id),
+        composerDrafts: updatedDrafts(s, EMPTY_COMPOSER, ev.id),
         sel: s.sel === ev.id ? (s.assistants.find((a) => a.primary)?.id ?? null) : s.sel,
       }));
       break;
@@ -1196,6 +1321,9 @@ export function applyEvent(ev: HobEvent) {
     case "draft":
       set((s) => ({ drafts: { ...s.drafts, [ev.draft.id]: ev.draft } }));
       break;
+    case "card":
+      set((s) => ({ cards: { ...s.cards, [ev.card.id]: ev.card } }));
+      break;
     case "routine":
       set((s) => ({ routines: upsert(s.routines, ev.routine) }));
       break;
@@ -1225,9 +1353,10 @@ export function applyEvent(ev: HobEvent) {
       dropGroupPrefs(ev.id);
       set((s) => {
         const groups = s.groups.filter((g) => g.id !== ev.id);
-        if (s.gsel !== ev.id) return { groups };
+        const composerDrafts = updatedDrafts(s, EMPTY_COMPOSER, `group:${ev.id}`);
+        if (s.gsel !== ev.id) return { groups, composerDrafts };
         const primary = s.assistants.find((a) => a.primary)?.id ?? s.assistants[0]?.id ?? null;
-        return { groups, gsel: null, sel: primary ?? s.sel, mobile: "list" as const, panelStack: [] };
+        return { groups, composerDrafts, gsel: null, sel: primary ?? s.sel, mobile: "list" as const, panelStack: [] };
       });
       break;
     case "group-item": {
@@ -1272,6 +1401,22 @@ export function applyEvent(ev: HobEvent) {
       break;
     case "profile":
       void loadProfile(ev.assistantId);
+      break;
+    case "plugin-install": {
+      const { type: _type, ...progress } = ev;
+      set((s) => ({ pluginInstall: { ...s.pluginInstall, [progress.pluginId]: progress } }));
+      break;
+    }
+    case "plugin-providers":
+      set((s) => ({
+        pluginProviderTick: s.pluginProviderTick + 1,
+        ...(ev.signIn
+          ? { pluginSignIn: { ...s.pluginSignIn, [`${ev.signIn.pluginId}:${ev.signIn.providerId}`]: ev.signIn } }
+          : {}),
+      }));
+      break;
+    case "update":
+      set({ update: ev.update });
       break;
   }
 }
@@ -1385,9 +1530,16 @@ function dropGroupPrefs(id: string) {
 }
 
 /** 建群：建好直接进这个群。 */
-export async function createGroup(body: { name: string; purpose: string; ownerId: string; members: string[] }): Promise<string | null> {
+export async function createGroup(body: { name: string; purpose: string; ownerId: string; members: string[]; cwd?: string }): Promise<string | null> {
   try {
-    const group = await api.createGroup(body);
+    const cwd = body.cwd?.trim();
+    const group = await api.createGroup({
+      name: body.name,
+      purpose: body.purpose,
+      ownerId: body.ownerId,
+      members: body.members,
+      ...(cwd ? { cwd } : {}),
+    });
     set((s) => ({ groups: upsert(s.groups, { ...group, unread: 0, busy: [] }) }));
     await selectGroup(group.id);
     return null;
@@ -1415,9 +1567,10 @@ export async function patchGroupMemberModels(groupId: string, assistantId: strin
 }
 
 /** 开一个话题：建好直接进这个话题。 */
-export async function openTopic(groupId: string, title: string): Promise<string | null> {
+export async function openTopic(groupId: string, title: string, cwd?: string): Promise<string | null> {
   try {
-    const topic = await api.createTopic(groupId, { title });
+    const trimmedCwd = cwd?.trim();
+    const topic = await api.createTopic(groupId, { title, ...(trimmedCwd ? { cwd: trimmedCwd } : {}) });
     set((s) => ({ groups: upsert(s.groups, { ...topic, unread: 0, busy: [] }) }));
     await selectGroup(topic.id);
     return null;
@@ -1486,7 +1639,6 @@ export async function selectGroup(id: string, nav = true, keepStack = false, for
     panelStack: selectPanelStack(s.panelStack, previous, id, keepStack),
     ...(s.gsel !== id && !keepStack ? { worklog: null } : {}),
     ...(nav ? { mobile: (opensTopics ? "topics" : "chat") as MobilePage, ...(!keepStack ? { sheet: false } : {}), search: false } : {}),
-    quote: null,
   }));
   if (group && group.unread > 0 && !opensTopics) {
     set((s) => ({ groups: s.groups.map((x) => (x.id === id ? { ...x, unread: 0 } : x)) }));
@@ -1533,7 +1685,6 @@ export async function select(id: string, nav = true, keepStack = false) {
     panelStack: selectPanelStack(s.panelStack, s.gsel ?? s.sel, id, keepStack),
     ...(s.sel !== id && !keepStack ? { worklog: null } : {}),
     ...(nav ? { mobile: "chat" as const, ...(!keepStack ? { sheet: false } : {}), search: false } : {}),
-    quote: null,
   }));
   const a = state.assistants.find((x) => x.id === id);
   if (a && a.unread > 0) {
@@ -1574,6 +1725,7 @@ async function loadItems(id: string) {
       jobs: mergePage(s.jobs, page.jobs),
       approvals: mergePage(s.approvals, page.approvals),
       drafts: mergePage(s.drafts, page.drafts),
+      cards: mergePage(s.cards, page.cards ?? []),
       delegations: mergePage(s.delegations, page.delegations ?? []),
     }));
     for (const event of events) applyEvent(event);
@@ -1603,6 +1755,7 @@ export function loadOlderItems(id: string, retry = false): Promise<void> {
           items: { ...s.items, [id]: [...page.items.filter((item) => !known.has(item.id)), ...current] },
           itemPages: { ...s.itemPages, [id]: { hasMore: page.hasMore, loading: false, error: null } },
           jobs: { ...index(page.jobs), ...s.jobs }, approvals: { ...index(page.approvals), ...s.approvals },
+          cards: { ...index(page.cards ?? []), ...s.cards },
           drafts: { ...index(page.drafts), ...s.drafts }, delegations: { ...index(page.delegations ?? []), ...s.delegations },
         };
       });
@@ -1637,6 +1790,7 @@ async function loadGroupItems(id: string) {
       groupPages: { ...s.groupPages, [id]: { hasMore: page.hasMore, loading: false, error: null } },
       jobs: mergePage(s.jobs, page.jobs),
       approvals: mergePage(s.approvals, page.approvals),
+      cards: mergePage(s.cards, page.cards ?? []),
     }));
     for (const event of events) applyEvent(event);
   } catch (e) {
@@ -1665,6 +1819,7 @@ export function loadOlderGroupItems(id: string, retry = false): Promise<void> { 
           groupPages: { ...s.groupPages, [id]: { hasMore: page.hasMore, loading: false, error: null } },
           jobs: { ...index(page.jobs), ...s.jobs },
           approvals: { ...index(page.approvals), ...s.approvals },
+          cards: { ...index(page.cards ?? []), ...s.cards },
         };
       });
     } catch (e) {
@@ -1687,12 +1842,27 @@ export async function loadProfile(id: string) {
 
 /* ---------------- 发消息 ---------------- */
 
-export function setText(text: string) {
-  set({ text });
+export function composerDraft(s: State, key = pendingKeyOf(s)): ComposerDraft {
+  if (!key) return EMPTY_COMPOSER;
+  return s.composerDrafts.get(key) ?? EMPTY_COMPOSER;
 }
 
-export function setQuote(quote: { itemId: string; text: string } | null) {
-  set({ quote, nonce: state.nonce + 1 });
+function updatedDrafts(s: State, patch: Partial<ComposerDraft>, key = pendingKeyOf(s)) {
+  if (!key) return s.composerDrafts;
+  const draft = { ...composerDraft(s, key), ...patch };
+  const drafts = new Map(s.composerDrafts);
+  if (draft.text || draft.quote || draft.attachments.length) drafts.set(key, draft);
+  else drafts.delete(key);
+  return drafts;
+}
+
+/** 推荐提问不跟着打字清：发出去时（send）才清，服务端也在新一轮开始时清。 */
+export function setText(text: string) {
+  set((s) => ({ composerDrafts: updatedDrafts(s, { text }) }));
+}
+
+export function setQuote(quote: ComposerDraft["quote"]) {
+  set((s) => ({ composerDrafts: updatedDrafts(s, { quote }), nonce: s.nonce + 1 }));
 }
 
 /* ---------------- 附件和发件箱 ---------------- */
@@ -1711,26 +1881,35 @@ export function localImage(path: string): string | undefined {
   return previews.get(path);
 }
 
-function patchAttachment(id: string, patch: Partial<Attachment>) {
+function patchAttachment(key: string, id: string, patch: Partial<Attachment>) {
   const fix = (list: Attachment[]) => (list.some((a) => a.id === id) ? list.map((a) => (a.id === id ? { ...a, ...patch } : a)) : list);
-  set((s) => ({
-    attachments: fix(s.attachments),
-    pending: Object.fromEntries(Object.entries(s.pending).map(([k, list]) => [k, list.map((p) => ({ ...p, attachments: fix(p.attachments) }))])),
-  }));
+  set((s) => {
+    const draft = composerDraft(s, key);
+    const attachments = fix(draft.attachments);
+    const queued = s.pending[key];
+    return {
+      composerDrafts: attachments === draft.attachments ? s.composerDrafts : updatedDrafts(s, { attachments }, key),
+      pending: queued?.length ? {
+        ...s.pending,
+        [key]: queued.map((message) => ({ ...message, attachments: fix(message.attachments) })),
+      } : s.pending,
+    };
+  });
 }
 
-function startUpload(att: Attachment, target: { assistantId?: string; groupId?: string }): Promise<string> {
+function startUpload(att: Attachment, target: { assistantId: string } | { groupId: string }): Promise<string> {
+  const key = "groupId" in target ? `group:${target.groupId}` : target.assistantId;
   const file = uploadFiles.get(att.id)!;
   const job = api.upload(file, target).then(
     (path) => {
       const preview = previews.get(localPath(att));
       if (preview) previews.set(path, preview);
-      patchAttachment(att.id, { status: "done", path });
+      patchAttachment(key, att.id, { status: "done", path });
       return path;
     },
     (e: unknown) => {
       uploads.delete(att.id);
-      patchAttachment(att.id, { status: "failed" });
+      patchAttachment(key, att.id, { status: "failed" });
       throw e;
     },
   );
@@ -1749,12 +1928,12 @@ export function attach(files: FileList | File[]) {
     if (isImagePath(file.name)) previews.set(localPath(att), URL.createObjectURL(file));
     return att;
   });
-  set((s) => ({ attachments: [...s.attachments, ...added] }));
+  set((s) => ({ composerDrafts: updatedDrafts(s, { attachments: [...composerDraft(s).attachments, ...added] }) }));
   added.forEach((att) => void startUpload(att, target));
 }
 
 export function removeAttachment(id: string) {
-  set((s) => ({ attachments: s.attachments.filter((a) => a.id !== id) }));
+  set((s) => ({ composerDrafts: updatedDrafts(s, { attachments: composerDraft(s).attachments.filter((a) => a.id !== id) }) }));
 }
 
 /** 等这条消息的附件都传好（失败过的重传），拿到服务器路径。 */
@@ -1796,12 +1975,14 @@ async function deliver(p: PendingMessage) {
   }
 }
 
-export async function send() {
+/** 首页输入框传自己的文字；对话输入框发送并清空当前会话的整份草稿。 */
+export async function send(standaloneText?: string) {
   const groupId = state.gsel;
   const id = state.sel;
-  const text = state.text.trim();
+  const draft = standaloneText === undefined ? composerDraft(state) : EMPTY_COMPOSER;
+  const text = (standaloneText ?? draft.text).trim();
   // 只发图片 / 文件不写字也行（和 Telegram 一样）
-  if ((!groupId && !id) || (!text && !state.attachments.length)) return;
+  if ((!groupId && !id) || (!text && !draft.attachments.length)) return;
   const key = groupId ? `group:${groupId}` : id!;
   const p: PendingMessage = {
     localId: `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1809,12 +1990,18 @@ export async function send() {
     ...(groupId ? { group: true as const } : {}),
     at: new Date().toISOString(),
     text,
-    ...(state.quote ? { quote: state.quote } : {}),
-    attachments: state.attachments,
+    ...(draft.quote ? { quote: draft.quote } : {}),
+    attachments: draft.attachments,
     status: "sending",
   };
   markFresh([p.localId]);
-  set((s) => ({ text: "", quote: null, attachments: [], nonce: s.nonce + 1, pending: { ...s.pending, [key]: [...(s.pending[key] ?? []), p] } }));
+  set((s) => ({
+    ...(standaloneText === undefined ? { composerDrafts: updatedDrafts(s, EMPTY_COMPOSER, key) } : {}),
+    nonce: s.nonce + 1,
+    pending: { ...s.pending, [key]: [...(s.pending[key] ?? []), p] },
+    assistants: groupId ? s.assistants : s.assistants.map((assistant) => assistant.id === id ? { ...assistant, suggestions: undefined } : assistant),
+    groups: groupId ? s.groups.map((group) => group.id === groupId ? { ...group, suggestions: undefined } : group) : s.groups,
+  }));
   await deliver(p);
 }
 
@@ -1879,6 +2066,41 @@ export async function answer(approvalId: string, answer: AnswerApprovalBody) {
     return true;
   } catch (e) {
     set({ approvals: { ...state.approvals, [approvalId]: ap }, notice: t("提交失败：{error}", { error: errText(e) }) });
+    return false;
+  }
+}
+
+export async function answerCard(cardId: string, action: import("../../shared/cards.ts").CardActionRequest) {
+  const card = state.cards[cardId];
+  if (!card) return false;
+  try {
+    const result = await api.answerCard(cardId, action);
+    if (result.card) applyEvent({ type: "card", card: result.card });
+    return true;
+  } catch (e) {
+    set({ notice: t("提交失败：{error}", { error: errText(e) }) });
+    return false;
+  }
+}
+
+/** 登录卡上点「我自己登录」：同一张卡换成自己登录卡的样子，不先把它标成已答（卡还挂着等用户登完） */
+export async function switchLoginSelf(approvalId: string) {
+  try {
+    await api.answerApproval(approvalId, { self: true });
+    return true;
+  } catch (e) {
+    set({ notice: t("提交失败：{error}", { error: errText(e) }) });
+    return false;
+  }
+}
+
+/** 录入卡「保存并登录」：密码只在这次请求里经过；没存上时服务端回原因，卡不动，表单保持可填 */
+export async function saveLoginEntry(approvalId: string, input: { username: string; password: string; provider: string }) {
+  try {
+    await api.answerApproval(approvalId, { key: "B", ...input });
+    return true;
+  } catch (e) {
+    set({ notice: errText(e) });
     return false;
   }
 }
@@ -2392,7 +2614,8 @@ export function newAssistant() {
   const primary = state.assistants.find((a) => a.primary);
   if (!primary) return;
   void select(primary.id);
-  set({ text: t("我想创建一个专属助手，负责："), nonce: state.nonce + 1, mobile: "chat", sheet: false });
+  setText(t("我想创建一个专属助手，负责："));
+  focusComposer();
 }
 
 export async function jumpToJob(assistantOrJobId: string, requestedJobId?: string) {
@@ -2542,6 +2765,44 @@ export async function uploadKnowledge(collection: string, files: File[]) {
   try { await api.uploadKnowledge(collection, files); await loadKnowledge(false, true); }
   catch (e) { set({ notice: t("上传失败：{error}", { error: errText(e) }) }); }
 }
+export async function loadStars() {
+  try { const { stars } = await api.stars(); set({ stars, starsError: null }); }
+  catch (error) { set({ starsError: errText(error) }); }
+}
+
+export async function toggleStar(conversation: ConversationRef, itemId: string) {
+  try {
+    const exists = state.stars.some((star) => star.conversation.kind === conversation.kind && star.conversation.id === conversation.id && star.itemId === itemId);
+    if (exists) await api.deleteStar({ conversation, itemId }); else await api.addStar({ conversation, itemId });
+    await loadStars();
+  } catch (error) { set({ notice: t("收藏操作失败：{error}", { error: errText(error) }) }); }
+}
+
+export function searchHistory(query: string) { return api.searchHistory(query); }
+
+export function openStars() { set({ page: "stars", panelStack: [], sheet: false }); void loadStars(); }
+
+export async function jumpToHistory(conversation: ConversationRef, itemId: string) {
+  if (conversation.kind === "assistant" && !state.assistants.some((a) => a.id === conversation.id) || conversation.kind === "group" && !state.groups.some((g) => g.id === conversation.id)) { set({ notice: t("原消息已不在") }); return; }
+  set({ page: "main", panelStack: [] });
+  try {
+    if (conversation.kind === "group") await selectGroup(conversation.id, true, false, true); else await select(conversation.id);
+    const found = conversation.kind === "group" ? await findGroupItem(conversation.id, (item) => item.id === itemId) : await findConversationItem(conversation.id, (item) => item.id === itemId);
+    if (!found) { set({ notice: t("原消息已不在") }); return; }
+    const deadline = performance.now() + 1500;
+    const locate = () => {
+      if (state.page !== "main" || (conversation.kind === "group" ? state.gsel : state.sel) !== conversation.id) return;
+      const row = Array.from(document.querySelectorAll<HTMLElement>("[data-item-id]")).find((node) => node.dataset.itemId === itemId);
+      if (row) flashItem(row); else if (performance.now() < deadline) requestAnimationFrame(locate); else set({ notice: t("未能定位到这条消息") });
+    };
+    requestAnimationFrame(locate);
+  } catch (error) { set({ notice: t("无法定位对话消息：{error}", { error: errText(error) }) }); }
+}
+
+export function openPlugins(pluginId: string | null = null, pluginPage: PluginPage = "installed") {
+  set({ page: "plugins", pluginId, pluginPage: pluginId ? "installed" : pluginPage, panelStack: [], sheet: false, search: false });
+}
+export function closePlugins() { goHome(); }
 export function openKnowledge() {
   set({ page: "knowledge", panelStack: [], sheet: false });
   void loadKnowledge();

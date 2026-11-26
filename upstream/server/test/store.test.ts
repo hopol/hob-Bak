@@ -158,8 +158,9 @@ describe("store", () => {
     try {
       const again = hob.runtime.store.ensurePrimary();
       expect(again.id).toBe("hob");
-      // 自带的敏捷团队是收起的助手，不算在列表里
-      expect(hob.runtime.store.assistants().filter((assistant) => !assistant.hidden)).toHaveLength(1);
+      // 自带的敏捷团队是收起的助手，不算在列表里；另外自带一个置顶的 Hacker，主助手只有一个
+      expect(hob.runtime.store.assistants().filter((assistant) => !assistant.hidden).map((assistant) => assistant.id)).toEqual(["hob", "hacker"]);
+      expect(hob.runtime.store.assistants().filter((assistant) => assistant.primary).map((assistant) => assistant.id)).toEqual(["hob"]);
       expect(hob.runtime.store.assistant("hob")).toMatchObject({ primary: true, pinned: true, sprite: "hob" });
     } finally {
       hob.close();
@@ -236,7 +237,7 @@ describe("登录和接口鉴权", () => {
       const bootstrap = await app.request("/api/bootstrap", { headers: { cookie } });
       expect(bootstrap.status).toBe(200);
       const body = (await bootstrap.json()) as { assistants: { id: string; primary: boolean; hidden: boolean }[] };
-      expect(body.assistants.filter((item) => !item.hidden).map((item) => item.id)).toEqual(["hob"]);
+      expect(body.assistants.filter((item) => !item.hidden).map((item) => item.id)).toEqual(["hob", "hacker"]);
       expect(body.assistants.find((item) => item.id === "hob")?.primary).toBe(true);
     } finally {
       hob.close();

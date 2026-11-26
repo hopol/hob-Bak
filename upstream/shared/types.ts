@@ -1,6 +1,353 @@
 // Hob 前后端共用的契约。改这里 = 两边一起改。说明见 docs/architecture.md。
 import type { SearchSettings } from "./search.ts";
 import type { Locale } from "./i18n.ts";
+import type { CardRecord } from "./cards.ts";
+export type {
+  Card,
+  CardActionRequest,
+  CardActionResult,
+  CardBehavior,
+  CardButton,
+  CardButtonType,
+  CardChecker,
+  CardCollapsiblePanel,
+  CardColumn,
+  CardColumnSet,
+  CardDatePicker,
+  CardDateTimePicker,
+  CardDiv,
+  CardElement,
+  CardFeedback,
+  CardForm,
+  CardHeader,
+  CardImg,
+  CardInput,
+  CardInputType,
+  CardInteractiveContainer,
+  CardMarkdown,
+  CardMultiSelectStatic,
+  CardOwner,
+  CardOwnerAssistant,
+  CardOwnerPlugin,
+  CardOverflow,
+  CardOverflowOption,
+  CardRecord,
+  CardSelectOption,
+  CardSelectStatic,
+  CardTable,
+  CardTableColumn,
+  CardText,
+  CardTimePicker,
+  CardValidationError,
+  CardValidationMode,
+  CardValidationResult,
+  ValidatedCard,
+} from "./cards.ts";
+
+export type PluginServiceStatus = "pending_config" | "connecting" | "idle" | "connected" | "needs_login" | "needs_relogin" | "error";
+export type PluginCredentialRole = "list" | "secret" | "generate" | "save" | "delete";
+export type PluginLoginRole = "status" | "start" | "poll" | "logout";
+export interface PluginToolLoginStatus {
+  signedIn: boolean;
+  /** 不登录插件也能用（比如已经填了令牌）：登录只是附加选项，不提示「未登录」 */
+  optional?: boolean;
+  /** 登录按钮上的字，比如「改用 xx 登录」；不给就是「登录」 */
+  startLabel?: string;
+  account?: string;
+  detail?: string;
+  error?: string;
+}
+export type PluginToolLoginStartResult =
+  | { kind: "device_code"; url: string; userCode: string; expiresAt?: Iso; interval?: number }
+  | { kind: "done" };
+export interface PluginToolLoginPollResult {
+  state: "pending" | "done" | "error";
+  message?: string;
+}
+export interface PluginToolLoginView {
+  service: string;
+  roles: PluginLoginRole[];
+  status?: PluginToolLoginStatus;
+}
+export interface PluginToolView {
+  name: string;
+  toolName: string;
+  enabled: boolean;
+  title?: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+  annotations?: { title?: string; readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean };
+}
+export interface PluginServiceView { pluginId: string; name: string; status: PluginServiceStatus; missing?: string[]; error?: string; toolErrors?: { name: string; reason: string }[]; tools: PluginToolView[]; oauth?: { declared: boolean; loggedIn: boolean } }
+export interface PluginProfilesDeclaration {
+  title?: string;
+}
+
+export interface PluginProfileView {
+  id: string;
+  name: string;
+  config: Record<string, Record<string, unknown>>;
+  missing: string[];
+}
+
+/** plugin.json 中 extensions["com.hob.plugins"].providers 的一项。 */
+export interface PluginProviderSpec {
+  package: string;
+  version: string;
+  integrity: string;
+  /** 可选：非 npm 包（如 magpie-community dist 分支）的固定 tarball 地址 */
+  tarball?: string;
+}
+
+/** 共享 Bun 宿主进程的状态。 */
+export type ProviderHostStatus = "stopped" | "starting" | "running" | "error";
+
+export interface ProviderHostStatusView {
+  status: ProviderHostStatus;
+  bunVersion: string;
+  bunInstalled: boolean;
+  pid?: number;
+  idleMs: number;
+  lastError?: string;
+}
+
+/** 供应商插件声明的登录方式里的表单问题。 */
+export interface PluginAuthPromptOption {
+  label: string;
+  value: string;
+  hint?: string;
+  labels?: Record<string, string>;
+  hints?: Record<string, string>;
+}
+
+export interface PluginAuthPromptView {
+  type: "text" | "select";
+  key: string;
+  message: string;
+  messages?: Record<string, string>;
+  placeholder?: string;
+  options?: PluginAuthPromptOption[];
+}
+
+/** 供应商插件声明的一种登录方式。 */
+export interface PluginAuthMethodView {
+  index: number;
+  type: "oauth" | "api";
+  label: string;
+  labels?: Record<string, string>;
+  keyless?: boolean;
+  placeholder?: string;
+  hasPrompts?: boolean;
+}
+
+/** 供应商插件的一个已登录账号（不含任何密钥或令牌）。 */
+export type PluginProviderAccountStatus = "logged_in" | "needs_relogin" | "expired" | "error";
+
+export interface PluginProviderAccountView {
+  id: string;
+  providerId: string;
+  displayName: string;
+  authType: "oauth" | "api";
+  active: boolean;
+  status: PluginProviderAccountStatus;
+  plan?: string;
+  hint?: string;
+  lastError?: string;
+  expiresAt?: Iso;
+  createdAt: Iso;
+  updatedAt: Iso;
+}
+
+/** 进行中或已结束的供应商插件登录会话。 */
+export type PluginSignInKind = "api" | "keyless" | "device_code" | "server_poll" | "loopback_paste" | "code" | "local_cli";
+export type PluginSignInStatus = "pending" | "waiting" | "completed" | "failed" | "cancelled" | "expired";
+
+export interface PluginSignInSessionView {
+  sessionId: string;
+  pluginId: string;
+  providerId: string;
+  methodIndex: number;
+  kind: PluginSignInKind;
+  status: PluginSignInStatus;
+  url?: string;
+  userCode?: string;
+  instructions?: string;
+  opened?: boolean;
+  /** 是否允许提交浏览器停住的本机回调地址（仅限本次登录发出的 loopback 端口） */
+  loopbackPasteAllowed?: boolean;
+  /** 本机 CLI 登录时的提示：明确说明检测和登录发生在跑 Hob 的那台机器 */
+  localCliNote?: string;
+  error?: string;
+  accountId?: string;
+  createdAt: Iso;
+  expiresAt: Iso;
+}
+
+/** 供应商插件声明的本机 CLI 检测状态（如 agy CLI）。 */
+export interface PluginCliStatusView {
+  declared: boolean;
+  name?: string;
+  manual?: string;
+  installed?: boolean;
+  installing?: boolean;
+  error?: string;
+}
+
+/** 供应商插件提供的单个模型视图。 */
+export interface PluginProviderModelView {
+  id: string;
+  apiId: string;
+  name: string;
+  api: ProviderApi;
+  reasoning: boolean;
+  /** 插件显式声明的思考档名（variants）；未声明则按 reasoning 判定 */
+  variants: string[];
+  thinkingLevels: ThinkingLevel[];
+  input: ("text" | "image")[];
+  contextWindow: number;
+  maxTokens: number;
+  cost?: { input: number; output: number };
+  free?: boolean;
+  /** 用户在插件页改过这个模型的参数（可以恢复插件给的） */
+  overridden?: boolean;
+  /** 思考档（插件页编辑思考档用，和设置 → 服务商里的一样） */
+  thinking?: ModelThinkingView;
+}
+
+/** 供应商插件里一个模型手动改的参数；没写的项用插件给的。 */
+export interface PluginModelOverride {
+  input?: ("text" | "image")[];
+  reasoning?: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
+/** PUT /api/plugins/:id/providers/:providerId/model：改一个模型的参数，override 为 null 恢复插件给的。 */
+export interface PluginModelOverridePatch {
+  modelId: string;
+  override: PluginModelOverride | null;
+}
+
+/** 供应商插件额度窗口（来自 Magpie 扩展 auth.usage）。 */
+export interface PluginUsageWindowView {
+  name: string;
+  used: number | null;
+  resetsAt?: Iso;
+  resetSecs?: number;
+  display?: string;
+  amount?: number;
+  limit?: number;
+  unit?: string;
+  span?: number;
+  model?: string;
+  models?: string[];
+  aside?: boolean;
+  balance?: number | null;
+}
+
+export interface PluginProviderUsageView {
+  plan?: string;
+  user?: string;
+  until?: Iso;
+  renew?: "auto" | "off" | "";
+  balance?: string;
+  error?: string;
+  resets?: {
+    count: number;
+    until?: Iso;
+    byWindow?: boolean;
+    fiveHour?: number;
+    weekly?: number;
+    team?: boolean;
+  } | null;
+  windows: PluginUsageWindowView[];
+  fetchedAt: Iso;
+}
+
+/** 插件详情页里一个供应商（模型提供者）的完整视图。 */
+export interface PluginProviderView {
+  /** 注册进 Hob / 引擎的服务商 id，如 plugin-zen-free */
+  hobProviderId: string;
+  /** 插件内部声明的 provider id，如 opencode-zen-free */
+  providerId: string;
+  name: string;
+  icon?: string;
+  single: boolean;
+  methods: PluginAuthMethodView[];
+  accounts: PluginProviderAccountView[];
+  activeAccountId?: string;
+  models: PluginProviderModelView[];
+  modelsCachedAt?: Iso;
+  modelsError?: string;
+  modelsFellBack?: boolean;
+  usageSupported: boolean;
+  usage?: PluginProviderUsageView;
+  cli?: PluginCliStatusView;
+  signIn?: PluginSignInSessionView;
+  error?: string;
+}
+
+/** 安装或更新带模型插件时的实时进度（通过 SSE 推送）。 */
+export type PluginInstallStage =
+  | "downloading_bun"
+  | "verifying_bun"
+  | "extracting_bun"
+  | "installing_package"
+  | "verifying_package"
+  | "done"
+  | "error";
+
+export interface PluginInstallProgress {
+  pluginId: string;
+  stage: PluginInstallStage;
+  package?: string;
+  downloadedBytes?: number;
+  totalBytes?: number;
+  percent?: number;
+  message?: string;
+  error?: string;
+}
+
+export interface PluginView {
+  plugin: { id: string; version: string; source: string; sourceName?: string; enabled: boolean; assistants?: string[]; tools: Record<string, { enabled?: boolean }>; config: Record<string, unknown>; profiles?: { id: string; name: string; config: Record<string, unknown> }[]; needsApproval?: boolean; capabilityChanges?: string[]; updateError?: string };
+  manifest: Record<string, unknown>;
+  config: Record<string, Record<string, unknown>>;
+  profiles?: PluginProfileView[];
+  missing: string[];
+  credentialRoles?: PluginCredentialRole[];
+  /** 工具插件通过 _meta["hob/login"] 声明的登录能力与状态 */
+  login?: PluginToolLoginView;
+  skills?: string[];
+  services: PluginServiceView[];
+  autoLogins?: LoginAutoEntry[];
+  /** 插件声明的模型供应商（有 providers 贡献时存在） */
+  providers?: PluginProviderView[];
+  /** 共享 Bun 宿主状态（有 providers 贡献时存在） */
+  providerHost?: ProviderHostStatusView;
+}
+export interface PluginsView { plugins: PluginView[]; migrationErrors: string[]; providerHost?: ProviderHostStatusView }
+export interface PluginSourceView { id: string; name: string; url: string; updatedAt?: string; error?: string; refreshing?: boolean }
+export interface PluginCatalogView { plugins: { id: string; version: string; manifest: Record<string, unknown>; installed: boolean; hasProviders?: boolean; source?: string; sourceName?: string; error?: string }[]; sources?: PluginSourceView[] }
+export interface PluginLoginView {
+  id: string;
+  name: string;
+  username: string;
+  uris: string[];
+  folder?: string;
+  hasPassword: boolean;
+  hasTotp: boolean;
+}
+export interface PluginLoginsView { service: string; logins: PluginLoginView[]; folders: string[] }
+
+export interface PluginPatch { enabled?: boolean; assistants?: string[] | null; tools?: Record<string, { enabled?: boolean }> }
+
+export interface LoginAutoEntry {
+  provider: string;
+  itemId: string;
+  host: string;
+  username: string;
+  at: Iso;
+}
 
 export type Iso = string; // ISO 8601 时间
 
@@ -50,6 +397,8 @@ export interface ModelSettings {
   roster: RosterEntry[]; // Hob 能用的模型
   conversation: ModelPick; // 对话（助手本身）
   work: ModelPick; // 任务执行（分派任务不指定就用它）
+  /** 推荐提问模型：undefined 跟随对话模型，null 关闭 */
+  suggest?: ModelPick | null;
   thinkingChoice?: "auto" | "fixed"; // 缺省 auto：助手按任务选择；fixed：使用模型默认档
   /** 每个模型的自定义思考档，键是模型 ref（"服务商/模型"）；没存就用 Hob 的默认规则 */
   thinking?: Record<string, ThinkingLevelMapSetting>;
@@ -149,9 +498,25 @@ export interface ClaudeCodeStatus {
   error?: string;
 }
 
+/** 设置 → 服务商页里来自插件的服务商一行（只读展示，点击跳到插件页）。 */
+export interface PluginProviderSummary {
+  id: string; // Hob 服务商 id，如 plugin-copilot
+  pluginId: string;
+  pluginName: string;
+  providerId: string;
+  name: string;
+  enabled: boolean;
+  loggedIn: boolean;
+  activeAccount?: string;
+  modelCount: number;
+  error?: string;
+}
+
 /** GET /api/providers：已配的服务商、引擎自带的服务商目录、跟着一起回的整份设置（前端要新 revision）。 */
 export interface ProvidersView {
   providers: ProviderView[];
+  /** 来自插件的模型服务商（不在 settings.providers 中编辑） */
+  pluginProviders?: PluginProviderSummary[];
   builtin: { id: string; name: string }[];
   settings: SettingsFile;
   /** 每个已配置服务商的模型和思考档，键是服务商 id；服务商详情里列模型、编辑思考档 */
@@ -221,6 +586,7 @@ export interface Assistant {
   name: string; // 显示名，如 "写作"
   duty: string; // 一句话职责，左栏大头像下的小字，如 "周报和文章"；主助手为 "主助手"
   dutyLong?: string; // 详细职责
+  instructions?: string; // 用户写的说明
   sprite: SpriteId;
   /** sprite 是 custom / custom:* 时的画法；换成内置道具后保留，随时能换回来 */
   prop?: CustomProp;
@@ -242,6 +608,8 @@ export interface Assistant {
   abilities?: { exec: boolean; write: boolean; image: boolean };
   /** 知识库二期：绑定的用户知识库 id。缺省 = 没绑定：不自动查，也没有 search_knowledge */
   knowledge?: string[];
+  /** 可选工作目录（主助手不支持；普通助手仅创建时可绑定，创建后不可修改） */
+  cwd?: string;
   createdAt: Iso;
   splitFrom?: { from: string; at: Iso; readonly conversations?: number }; // conversations 仅供读取旧数据
 }
@@ -255,6 +623,7 @@ export interface AssistantSummary extends Assistant {
   busy: boolean; // Router 正在回复（在跑的任务不算，任务状态看任务卡）
   activity?: RouterActivity | null;
   todos?: TodoItem[]; // 这个助手单聊里的待办，按做的先后
+  suggestions?: string[]; // 最近一轮生成的推荐提问，进程内保存
 }
 
 /**
@@ -262,16 +631,22 @@ export interface AssistantSummary extends Assistant {
  * 话题是挂在群下面的群（有 parentId）：一件事一条时间线，成员在每个话题里各有一份会话；
  * 群自己的那条时间线就是「综合」。话题的成员、群主、负责什么都取所属的群。
  */
+export type GroupReplyMode = "owner" | "all";
+
 export interface Group {
   id: string; // "g-" + 短 id；话题也是
   name: string; // 话题：话题名
   purpose: string; // 负责什么，一句话
   ownerId: string; // 群主，必须在 members 里
   members: string[]; // assistantId，含群主，顺序就是成员列表的顺序
+  /** 用户没点名的消息谁来回应：缺省为 owner（群主回应）；all 为全员依次回应。群和话题各自一份。 */
+  replyMode?: GroupReplyMode;
   models?: { conversation?: ModelPick; work?: ModelPick }; // 本群模型默认值
   memberModels?: Record<string, { conversation?: ModelPick; work?: ModelPick }>; // 各成员在本群的模型覆盖
   /** 首页助手/群列表的固定顺序：小的在前；没排过的按最近活跃排。 */
   listOrder?: number;
+  /** 可选工作目录（创建时绑定，不可修改；群绑定时其下所有话题沿用） */
+  cwd?: string;
   createdAt: Iso;
   parentId?: string; // 有它的是话题：所属的群
   createdBy?: string; // 话题：谁开的，"user" 或成员 assistantId
@@ -318,6 +693,7 @@ export interface GroupSummary extends Group {
   unread: number;
   busy: string[]; // 正在这个群（话题）里说话、或者有任务在跑的成员
   todos?: TodoItem[]; // 这个会话（综合、话题）的待办，按做的先后
+  suggestions?: string[]; // 最近一轮生成的推荐提问，进程内保存
   activity?: Record<string, RouterActivity>; // 正在说话的成员现在在做什么：页面刚打开时用，之后跟 group-activity 事件
 }
 
@@ -364,6 +740,7 @@ export interface RoutineChecks {
   hits: number; // 触发了几次
   failing?: string; // 最近一次失败的原因，下次成功就清掉
   lastAt?: Iso; // 上次检查的时间
+  history?: { at: Iso; outcome: "quiet" | "hit" | "failed"; tools: string[] }[]; // 每次检查的工具调用
 }
 
 /** 定时到点（或点「立即运行」）这一次的结果。 */
@@ -472,8 +849,10 @@ export interface JobsPage {
   hasMore: boolean;
 }
 
+export interface SavedSkill { name: string; title: string; version: number; updated: boolean }
+
 export type SedimentStatus =
-  | { status: "running" }
+  | { status: "running"; saved?: SavedSkill[] }
   | { status: "saved"; name: string; title: string; version: number; updated: boolean }
   | { status: "empty"; reason: string }
   | { status: "failed"; reason: string };
@@ -533,18 +912,80 @@ export interface ApprovalOption {
   always?: boolean; // 选中后写一条 allow 规则
 }
 
-/** 一张卡里的一个问题（ask_user 的 questions）：选项 key 照旧 A、B、C。 */
+export type ApprovalQuestionInput = "text" | "multiline" | "number" | "date" | "time";
+
+/** 一张卡里的一个问题（ask_user 的 questions）：选择题选项 key 照旧 A、B、C；填空题带 input、options 为空数组。 */
 export interface ApprovalQuestion {
   title: string; // 问题
   why?: string; // 为什么要定它
-  options: ApprovalOption[]; // 2 到 3 个
-  recommended?: ApprovalOption["key"]; // 推荐哪个选项
+  options: ApprovalOption[]; // 选择题 2 到 3 个；填空题为空数组
+  recommended?: ApprovalOption["key"]; // 推荐哪个选项（仅选择题）
+  input?: ApprovalQuestionInput; // 填空题类型
+  placeholder?: string; // 填空题提示文字
 }
 
 /** 一个问题答了什么：选了选项（key），或者自己写了一句（text）。 */
 export interface ApprovalAnswer {
   key?: ApprovalOption["key"];
   text?: string;
+}
+
+export interface FillLoginCandidate {
+  provider: string;
+  providerName: string;
+  id: string;
+  name: string;
+  username: string;
+  folder?: string;
+  uris: string[];
+}
+
+export type PasswordCharacter = "lowercase" | "uppercase" | "numbers" | "symbols";
+
+export interface FillNewPasswordApproval {
+  host: string;
+  pageUrl: string;
+  username: string;
+  mode: "register" | "change";
+  provider: string;
+  providerName: string;
+  length: number;
+  characters: PasswordCharacter[];
+  name: string;
+  origin: string;
+  folders: string[];
+  folder?: string;
+  candidate?: FillLoginCandidate;
+  state?: "pending" | "filled" | "rejected" | "failed";
+  result?: string;
+}
+export interface FillLoginApproval {
+  host: string;
+  currentHost?: string;
+  candidates: FillLoginCandidate[];
+  chosenId?: string;
+  /** self：用户在卡上点了「我自己登录」，卡换成「自己登录」卡的样子，等用户登完 */
+  state?: "pending" | "filled" | "rejected" | "mismatch" | "failed" | "self";
+  result?: string;
+}
+export interface LoginEntryProvider {
+  provider: string;
+  providerName: string;
+}
+/** 登录录入卡：密码管理器里没有这个网站的账号，用户在卡上填一次，Hob 存进密码管理器再填进页面。密码不进这张记录。 */
+export interface LoginEntryApproval {
+  host: string;
+  account?: string; // 预填的用户名（助手给的 account）
+  providers: LoginEntryProvider[]; // 带 save 角色的提供者，第一个是默认（自带密码库）
+  provider?: string; // 用户选的提供者 id
+  username?: string; // 提交后记下的用户名，收起后显示
+  /** self：用户在卡上点了「我自己登录」 */
+  state?: "pending" | "filled" | "rejected" | "failed" | "self";
+  /** 保存失败时只在当前卡片上显示一次，重试成功后清掉；不包含密码。 */
+  error?: string;
+  /** 录入卡存好后是否只填了用户名，下一步再调用 login 填密码 */
+  twoStep?: boolean;
+  result?: string; // 收起后那一行：填写失败的原因
 }
 
 export interface Approval {
@@ -567,7 +1008,7 @@ export interface Approval {
   jobId?: string;
   groupId?: string; // 在群里提的问题：卡片进群的时间线
   ruleText?: string; // always 选项要写进规则的文字，如 "发布公众号"
-  login?: { site: string; reason: string }; // ask_login 的登录交接信息
+  login?: { site: string; reason: string; fillLogin?: FillLoginApproval; entry?: LoginEntryApproval; fillNewPassword?: FillNewPasswordApproval }; // login 工具的交接信息：自己登录卡、批准卡、录入卡，或新密码批准卡
   createdAt: Iso;
   answeredAt?: Iso;
 }
@@ -582,6 +1023,9 @@ export interface Draft {
   prop?: CustomProp;
   duty: string; // 一句话职责
   dutyLong: string; // 草稿卡 "职责" 行
+  instructions?: string; // 用户写的说明
+  /** 可选工作目录（创建后不可修改） */
+  cwd?: string;
   routines: { name: string; instruction: string; schedule: string }[]; // 草稿卡 "定时任务" 行
   routinesText: string; // 草稿卡 "定时任务" 行的展示文字
   askFirst: string[]; // 执行前确认的事项
@@ -593,7 +1037,7 @@ export interface Draft {
 export type NoteIcon = "memory" | "rule" | "routine" | "split" | "info" | "skill";
 
 export type Item = (
-  | { kind: "user"; id: string; at: Iso; text: string; quote?: { itemId: string; text: string }; files?: string[]; from?: { assistantId: string; name: string; delegationId: string } }
+  | { kind: "user"; id: string; at: Iso; text: string; quote?: { itemId: string; text: string }; files?: string[]; from?: { assistantId: string; name: string; delegationId: string }; reactions?: { by: string; emoji: string }[] }
   | { kind: "assistant"; id: string; at: Iso; text: string; streaming?: boolean; routine?: { id: string; name: string; jobId?: string }; quote?: { itemId: string; text: string } }
   | { kind: "note"; id: string; at: Iso; icon: NoteIcon; text: string; request?: string; routineId?: string; handbackId?: string; path?: string; targetGroupId?: string; detail?: string } // request：定时任务到点时交给群主的全文，界面不显示，转进话题、派任务时带上 // path：点了预览这个文件（如技能的 SKILL.md） // detail：点开才看的原因（工具报错的原文） // 居中灰色一行，如 "记忆已更新 · 不看融资新闻"
   | { kind: "todos"; id: string; at: Iso; items: TodoItem[]; why: TodoArchiveWhy } // 老数据：以前收起的一份待办。现在不再写入，界面不显示（对话里只放用户需要看的东西）
@@ -604,6 +1048,7 @@ export type Item = (
   | { kind: "image"; id: string; at: Iso; prompt: string; size?: string; startedAt: Iso; status: "pending" | "done" | "failed"; path?: string; error?: string }
   | { kind: "file"; id: string; at: Iso; path: string; name: string; meta?: string } // meta 如 "3200 字 · 4 张图"
   | { kind: "topic"; id: string; at: Iso; topicId: string } // 综合时间线里的话题卡：开了话题、立事项开的话题
+  | { kind: "card"; id: string; at: Iso; cardId: string } // 通用卡片，卡片正文由服务端按引用提供
 ) & {
   /** 这条开启新的一组，前端在它上面拉开间距：事件触发的新一轮回复，或任务直接发进对话的图片、提问卡 */
   lead?: true;
@@ -620,12 +1065,39 @@ export interface PageLive {
   error?: string;
 }
 
+export type ConversationRef = { kind: "assistant" | "group"; id: string };
+
+/** 收藏保存消息快照，原消息消失后仍可查看。 */
+export interface StarredMessage {
+  conversation: ConversationRef;
+  itemId: string;
+  speaker: string;
+  at: Iso;
+  starredAt: Iso;
+  text: string;
+}
+
+export interface HistoryMatch {
+  conversation: ConversationRef;
+  conversationName: string;
+  itemId: string;
+  speaker: string;
+  speakerName: string;
+  at: Iso;
+  snippet: string;
+  starred: boolean;
+}
+export interface HistorySearchResult { results: HistoryMatch[]; total: number }
+
+export interface StarRequest { conversation: ConversationRef; itemId: string }
+
 export interface ItemsPage {
   pageLive?: PageLive[];
   items: Item[]; // 旧 → 新
   approvals: Approval[];
   jobs: Job[];
   drafts: Draft[];
+  cards?: CardRecord[];
   delegations?: Delegation[];
   hasMore: boolean;
 }
@@ -672,6 +1144,10 @@ export interface GeneralSettings {
   theme: Theme;
   locale?: Locale;
   timezone: string; // IANA 时区名，默认系统时区
+  /** 出站 HTTP(S) 连接使用的代理；空字符串 = 不使用 Hob 设置的代理。 */
+  proxy: string;
+  /** 逗号分隔的 NO_PROXY 主机列表。 */
+  noProxy: string;
   aboutYou: { name: string; language: string; notes: string }; // 空字符串 = 没填，提示词里就不出这一节
 }
 
@@ -843,10 +1319,17 @@ export interface PushSubscriptionJson {
   keys: { p256dh: string; auth: string };
 }
 
+/** 版本更新检查结果（服务端查 npm registry，只放内存）。 */
+export type UpdateCheck =
+  | { status: "available"; latest: string }
+  | { status: "up-to-date"; latest: string }
+  | { status: "error"; error: string };
+
 /** GET /api/about：设置 → 关于 里显示的那几项。 */
 export interface AboutInfo {
   version: string; // Hob 的版本（package.json）
   home: string; // 数据目录
+  update?: UpdateCheck; // 最近一次版本检查结果（尚未检查完成时省略）
 }
 
 /** 文件预览的种类（按扩展名判定，见 shared/files.ts）；不认识的扩展名服务端嗅探内容后归成 code/text/other。 */
@@ -898,9 +1381,11 @@ export interface Bootstrap {
   approvals: Approval[]; // pending
   settings: SettingsFile;
   delegations?: Delegation[];
+  update?: UpdateCheck;
 }
 
 export type HobEvent =
+  | { type: "stars" }
   | { type: "rules" }
   | { type: "desktop-control"; screen: string; taken: boolean }
   | { type: "desktop-screens"; screens: DesktopScreen[] }
@@ -920,12 +1405,16 @@ export type HobEvent =
   | { type: "router-activity"; assistantId: string; activity: RouterActivity | null }
   | { type: "activity"; jobId: string; line: ActivityLine; stats: Job["stats"] }
   | { type: "approval"; approval: Approval }
+  | { type: "card"; card: CardRecord }
   | { type: "draft"; draft: Draft }
   | { type: "routine"; routine: Routine }
   | { type: "routine_removed"; id: string }
   | { type: "profile"; assistantId: string } // rules/memories/worklog 变了，前端重拉 profile
   | { type: "knowledge" } // 知识库有变化，打开着的知识库页面重拉
-  | { type: "skills"; assistantId: string }; // 这个助手的技能有变化，打开着的技能列表重拉
+  | { type: "skills"; assistantId: string } // 这个助手的技能有变化，打开着的技能列表重拉
+  | { type: "update"; update: UpdateCheck } // 版本检查结果变化
+  | ({ type: "plugin-install" } & PluginInstallProgress) // 安装/更新带模型插件时的 Bun/包进度
+  | { type: "plugin-providers"; pluginId?: string; providerId?: string; host?: ProviderHostStatusView; signIn?: PluginSignInSessionView }; // 供应商插件宿主、账号、登录或模型有变化
 
 /** POST /api/assistants/:id/messages 的请求体 */
 export interface SendMessageBody {
@@ -937,8 +1426,16 @@ export interface SendMessageBody {
 /** POST /api/approvals/:id 的请求体：选一个选项（key），或者用户自己写的一段（text）。 */
 export interface AnswerApprovalBody {
   key?: ApprovalOption["key"];
+  candidateId?: string;
+  folder?: string;
   /** 单问题卡：用户自己写的一段；多问题卡：整张卡的补充说明（可选） */
   text?: string;
   /** 多问题卡：每个问题的答案，和 questions 一一对应 */
   answers?: ApprovalAnswer[];
+  /** 登录卡：用户点了「我自己登录」，卡就地换成自己登录卡的样子，这一轮不回模型 */
+  self?: boolean;
+  /** 登录录入卡「保存并登录」：用户填的用户名、密码和存到哪个提供者。密码只在这一次请求里经过 */
+  username?: string;
+  password?: string;
+  provider?: string;
 }

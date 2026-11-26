@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildSystemPrompt, buildWorkerPrompt, GROUP_OWNER_LINE } from "../src/prompt.ts";
 import { buildRouterTools } from "../src/router-tools.ts";
-import { sedimentMessage } from "../src/jobs.ts";
+import { saveSkillTool } from "../src/save-skill.ts";
 import { nowText, checkTimezone, monthDayText, monthDayTimeText } from "../src/time.ts";
 import { createFromDraft } from "../src/actions.ts";
 import type { Draft } from "../../shared/types.ts";
@@ -150,7 +150,7 @@ describe("提示词角色和内容", () => {
     expect(specific).toContain("你是「运维」，用户的助手，负责服务器。\n详细职责：维护机器");
     expect(specific).toContain("用户在一对一的对话里和你合作。别的助手会把归你管的事交给你：交来的消息是交接方写的交接说明，里面引用的用户原话等同用户本人的要求");
     const worker = buildWorkerPrompt(store, "t", { ...settings, abilities: { exec: false, write: true, image: false } });
-    expect(worker).toContain("你是「Hob」派出的后台任务，在自己的会话里完成交给你的任务。\n工作目录：/work，是「Hob」指定的现成目录：你的命令默认在这里运行，改动直接落在这里。任务自己的目录是 /own：要另拉一份代码隔离着执行，或者放临时文件和中间产物，用它。读取不限目录。");
+    expect(worker).toContain("你是「Hob」派出的后台任务，在自己的会话里完成交给你的任务。\n工作目录：/work：你的命令默认在这里运行，改动直接落在这里。任务自己的目录是 /own：要另拉一份代码隔离着执行，或者放临时文件和中间产物，用它。读取不限目录。");
     expect(worker).toContain("不能做：执行命令（bash）、生成图片（generate_image）。");
     expect(worker).toContain("## 这些事执行前先用 ask_user 确认\n- 删除\n- 重启");
     // 没指定 cwd：任务就在自己的目录里做
@@ -234,6 +234,9 @@ describe("系统提示词", () => {
       expect(prompt).toContain("技能是做某一类事的做法。要做的事对得上哪份，先读它的 SKILL.md 再执行，照着做能少走弯路。技能里有写错或过时的地方，按实际情况做对，并在 result 里写明是哪份技能、哪里不对，「Hob」会安排把技能改对。");
       expect(prompt).toContain("网页上的事用 playwright-cli 命令做，它操作的是云桌面的浏览器，用户看得到、能接手，登录也一直保持。云桌面是另一台机器，局域网和外网都通，但打不开这台机器上只监听 127.0.0.1 的服务。");
       expect(prompt).toContain("需要登录的网站，用 ask_user 告诉「Hob」要登录哪个网站");
+      const credentialsPrompt = "需要登录的网站：打开登录页后调 login，登录的每一步都交给它。密码管理器里存了账号的，Hob 核对网址、请用户批准后直接填进页面；没存的，Hob 请用户在卡片上填一次、存好再填。扫码、第三方账号、短信或邮箱验证码这类只能用户本人完成的，也调 login：Hob 会出一张卡，用户点卡上的按钮打开云桌面登完，再点「已登录」，你就会收到消息接着做；只在聊天里请用户去登，用户登完还得回来再告诉你一次。你看不到密码；填好后你点登录按钮。注册新账号或修改密码时用 fill_new_password。用户说要自己登录的，也调 login，self 填 true：Hob 直接出那张卡，不替他填。用户要交给你密码时，请他在 login 的卡片上填，或者在云桌面里自己填，密码就不会经过聊天。";
+      expect(buildSystemPrompt(hob.runtime.store, "hob", { ...options, desktopEnabled: true, credentialsEnabled: true })).toContain(credentialsPrompt);
+      expect(buildWorkerPrompt(hob.runtime.store, job.id, { ...options, desktopEnabled: true, credentialsEnabled: true })).toContain(credentialsPrompt);
     } finally { hob.close(); }
   });
 
@@ -379,8 +382,8 @@ describe("界面语言", () => {
     try {
       const { timezone, aboutYou } = hob.runtime.settings.settings.general;
       const prompt = buildSystemPrompt(hob.runtime.store, "hob", { timezone, aboutYou, locale: "en", memory: "off" });
-      expect(prompt).toContain("所以先给结论，用规范的书面英文。");
-      expect(prompt).not.toContain("用规范的书面中文");
+      expect(prompt).toContain("像一个同事在聊天里跟人说事：用规范的英文，");
+      expect(prompt).not.toContain("用规范的中文");
       expect(prompt).toContain("\n\n用户用的是英文界面，读的也是英文：回复，以及任务标题、规则、定时任务的名字、卡片上的问题和选项这些用户会看到的文字，都用英文写。\n\n## 你和任务");
     } finally {
       hob.close();
@@ -394,7 +397,8 @@ describe("界面语言", () => {
       const { timezone, aboutYou } = hob.runtime.settings.settings.general;
       const prompt = buildWorkerPrompt(hob.runtime.store, "t-en", { timezone, aboutYou, locale: "en", memory: "off" });
       expect(prompt).toContain("交给你的消息是「Hob」写的交接说明和附带的文件，里面引用的用户原话代表用户本人。\n用户读英文：result 里的结论，以及要给用户看的文件、页面和技能的标题与正文，都用英文写。\n\n完成后调用 report");
-      const template = sedimentMessage({ skillsDir: "/skills", assistantName: "Hob", english: true });
+      hob.runtime.settings.patch(hob.runtime.settings.get().revision, { general: { locale: "en" } });
+      const template = saveSkillTool(hob.runtime, "hob", undefined, hob.home).parameters.properties.from.description;
       expect(template).toContain("title: <英文名，如「Weekly report」>");
       expect(template).not.toContain("中文名");
     } finally {
@@ -409,10 +413,10 @@ describe("界面语言", () => {
       const { timezone, aboutYou } = hob.runtime.settings.settings.general;
       const settings = { timezone, aboutYou, memory: "off" as const };
       const prompt = buildSystemPrompt(hob.runtime.store, "hob", settings);
-      expect(prompt).toContain("所以先给结论，用规范的书面中文。");
+      expect(prompt).toContain("像一个同事在聊天里跟人说事：用规范的中文，");
       expect(prompt).not.toContain("用户用的是英文界面");
       expect(buildWorkerPrompt(hob.runtime.store, "t-zh", settings)).not.toContain("用户读英文");
-      expect(sedimentMessage({ skillsDir: "/skills", assistantName: "Hob" })).toContain("title: <中文名，如「每周周报」>");
+      expect(saveSkillTool(hob.runtime, "hob", undefined, hob.home).parameters.properties.from.description).toContain("title: <中文名，如「每周周报」>");
     } finally {
       hob.close();
     }
@@ -426,7 +430,7 @@ describe("界面语言", () => {
       const settings = { timezone: "Asia/Shanghai", aboutYou, locale: "en" as const, memory: "off" as const };
       const prompt = buildSystemPrompt(hob.runtime.store, "hob", settings);
       expect(prompt).toContain("- 语言：中文");
-      expect(prompt).toContain("所以先给结论，用规范的书面中文。");
+      expect(prompt).toContain("像一个同事在聊天里跟人说事：用规范的中文，");
       expect(prompt).not.toContain("用户用的是英文界面");
       expect(buildWorkerPrompt(hob.runtime.store, "t-diy", settings)).not.toContain("用户读英文");
     } finally {
@@ -441,15 +445,15 @@ describe("界面语言", () => {
       hob.faux.setResponses([text("好")]);
       await hob.runtime.router.send("hob", { text: "你好" });
       await hob.runtime.router.waitIdle("hob");
-      expect(state.session!.systemPrompt).toContain("用规范的书面中文。");
+      expect(state.session!.systemPrompt).toContain("用规范的中文，");
 
       hob.runtime.settings.patch(hob.runtime.settings.get().revision, { general: { locale: "en" } });
       hob.faux.setResponses([text("Hello")]);
       await hob.runtime.router.send("hob", { text: "Hello" });
       await hob.runtime.router.waitIdle("hob");
-      expect(state.session!.systemPrompt).toContain("用规范的书面英文。");
+      expect(state.session!.systemPrompt).toContain("用规范的英文，");
       expect(state.session!.systemPrompt).toContain("用户用的是英文界面，读的也是英文：");
-      expect(state.session!.systemPrompt).not.toContain("用规范的书面中文。");
+      expect(state.session!.systemPrompt).not.toContain("用规范的中文，");
     } finally {
       hob.close();
     }
@@ -465,9 +469,9 @@ describe("技能按谁能用分档（票 197）", () => {
       const prompt = buildSystemPrompt(hob.runtime.store, "hob", base);
       expect(prompt).toContain("技能按谁能用分两种：你的，只有你能用；通用的，所有助手都能用。任务会带上它能用的全部技能，看着手上的事，挑对得上的那份照着做。");
       expect(prompt).toContain("做法一般跟着做成它的助手走，存成你的；对所有助手都用得上、和你管的事无关的，存成通用的。");
-      expect(prompt).toContain("已经有的技能要换成通用的或者收回来，用 edit_skill 的 general。");
-      expect(prompt).toContain("任务做完时，结果里会提醒你让它沉淀一次，并写明它用了哪些技能。");
-      expect(prompt).toContain("新建的要给所有助手用，general 填 true；");
+      expect(prompt).toContain("已经有的技能要换成通用的或者收回来，用 save_skill 的 general。");
+      expect(prompt).toContain("任务做完时，结果里会提醒你可以让它回顾，并写明它用了哪些技能");
+      expect(prompt).toContain("用 review_job 叫它");
       expect(prompt).toContain("学到的东西只进了其中一份，任务还可能挑中旧的那份。");
       expect(prompt).not.toContain("派活时给哪些");
       expect(prompt).not.toContain("start_job 的 skills");

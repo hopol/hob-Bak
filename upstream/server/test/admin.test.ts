@@ -1,11 +1,14 @@
 // 票 153：主助手管理助手、群和话题。工具级测试，不走真实模型。
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import type { Store } from "../src/store.ts";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Assistant, Group } from "../../shared/types.ts";
 import { saveAssistantSkill } from "../src/assistant-skills.ts";
 import { buildRouterTools } from "../src/router-tools.ts";
-import { ADMIN_LINE, buildSystemPrompt } from "../src/prompt.ts";
+import { ADMIN_LINE, MEMBER_ADMIN_LINE, buildSystemPrompt, buildWorkerPrompt } from "../src/prompt.ts";
+import { updateAssistant } from "../src/actions.ts";
 import { makeHob, text, type TestHob } from "./helpers.ts";
 
 interface Result {
@@ -75,13 +78,13 @@ describe("只有主助手有管理工具", () => {
       expect(properties.abilities).toBeUndefined();
       expect(properties.name).toBeDefined();
       // 七个老工具还在，但没有 assistantId 参数
-      for (const name of ["set_rule", "remove_rule", "create_routine", "update_routine", "delete_routine", "edit_skill", "delete_skill"]) {
+      for (const name of ["set_rule", "remove_rule", "create_routine", "update_routine", "delete_routine", "save_skill", "delete_skill"]) {
         const tool = other.find((item) => item.name === name)!;
         expect(tool, name).toBeTruthy();
         expect((tool.parameters as { properties: Record<string, unknown> }).properties.assistantId, name).toBeUndefined();
       }
       // 主助手的这七个都有
-      for (const name of ["set_rule", "remove_rule", "create_routine", "update_routine", "delete_routine", "edit_skill", "delete_skill"]) {
+      for (const name of ["set_rule", "remove_rule", "create_routine", "update_routine", "delete_routine", "save_skill", "delete_skill"]) {
         const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === name)!;
         expect((tool.parameters as { properties: Record<string, unknown> }).properties.assistantId, name).toBeTruthy();
       }
@@ -93,7 +96,7 @@ describe("只有主助手有管理工具", () => {
     try {
       const primary = await hob.runtime.router.ensure("hob", group.id);
       const names = primary.session!.getActiveToolNames();
-      for (const name of ["show_assistant", "show_group", "create_assistant", "update_assistant", "create_group", "update_group", "manage_topic", "set_rule", "create_routine", "edit_skill", "delete_skill"]) {
+      for (const name of ["show_assistant", "show_group", "create_assistant", "update_assistant", "create_group", "update_group", "manage_topic", "set_rule", "create_routine", "save_skill", "delete_skill"]) {
         expect(names, name).toContain(name);
       }
       expect(names).not.toContain("message_assistant");
@@ -102,7 +105,7 @@ describe("只有主助手有管理工具", () => {
       expect(memberNames).toContain("set_rule");
       expect(memberNames).toContain("remove_rule");
       expect(memberNames).toContain("create_routine");
-      expect(memberNames).toContain("edit_skill");
+      expect(memberNames).toContain("save_skill");
       expect(memberNames).toContain("delete_skill");
       for (const name of ["show_assistant", "create_group", "manage_topic"]) {
         expect(memberNames, name).not.toContain(name);
@@ -202,7 +205,7 @@ describe("show_assistant", () => {
       expect(text).toContain("写作（write）");
       expect(text).toContain("职责：周报和文章");
       expect(text).toContain("详细职责：每周写周报。");
-      expect(text).not.toContain("说明：");
+      expect(text).not.toContain("补充提示词：");
       expect(text).toContain("对话模型：hob-faux/faux-1 · 思考 关闭");
       expect(text).toContain("任务模型：跟随设置");
       expect(text).toContain("能力：修改文件、图像生成");
@@ -302,6 +305,64 @@ describe("show_group", () => {
       const only = said(await run(hob, "hob", "show_group", { groupId: topic.id, query: "备份" }));
       expect(only).toContain("（相册备份）");
       expect(only).not.toContain("（综合）");
+    } finally { hob.close(); }
+  });
+});
+
+describe("助手说明", () => {
+  it("没有说明的主助手提示词保持本版快照", () => {
+    const assistant = { id: "hob", name: "Hob", duty: "主助手", primary: true };
+    const store = { assistant: () => assistant, rules: () => [], globalRules: () => [], routines: () => [], assistants: () => [assistant], groups: () => [] } as unknown as Store;
+    const prompt = buildSystemPrompt(store, "hob", { timezone: "UTC", aboutYou: { name: "", language: "", notes: "" }, memory: "off" });
+    expect(createHash("sha256").update(prompt).digest("hex")).toBe("b8943901c838ae13207795a92907634535e13b33c427268b5d879806b8bb0f42");
+  });
+  it("创建、查看、替换和清空说明，长文本在重启迁移后保留", async () => {
+    const { hob } = setup();
+    try {
+      const instructions = `第一行\n${"格式要求与写作方法。".repeat(4000)}\n末行`;
+      await run(hob, "hob", "create_assistant", { name: "插画顾问", duty: "插画", dutyLong: "审阅插画", sprite: "page", instructions: `  ${instructions}  ` });
+      const draft = hob.runtime.store.drafts().find((item) => item.name === "插画顾问")!;
+      const id = draft.createdAssistantId!;
+      expect(draft.instructions).toBe(instructions);
+      expect(hob.runtime.store.assistant(id)?.instructions).toBe(instructions);
+      hob.runtime.store.migrateInstructions();
+      expect(hob.runtime.store.assistant(id)?.instructions).toBe(instructions);
+      expect(said(await run(hob, "hob", "show_assistant", { assistantId: id }))).toContain(instructions);
+      await run(hob, "hob", "update_assistant", { assistantId: id, instructions: "  一行\n二行  " });
+      expect(hob.runtime.store.assistant(id)?.instructions).toBe("一行\n二行");
+      await run(hob, id, "update_assistant", { instructions: "" });
+      expect(hob.runtime.store.assistant(id)?.instructions).toBeUndefined();
+      expect((await updateAssistant(hob.runtime, id, { instructions: 17 })).status).toBe(400);
+    } finally { hob.close(); }
+  });
+
+  it("说明只进入对应助手和任务，删除新增段后其余提示词保持一致", () => {
+    const { hob, group } = setup();
+    try {
+      const store = hob.runtime.store;
+      const settings = { timezone: "UTC", aboutYou: { name: "", language: "", notes: "" }, memory: "off" as const };
+      const before = buildSystemPrompt(store, "ops", settings);
+      const assistant = store.assistant("ops")!;
+      const instructions = "说明第一行\n说明第二行";
+      store.saveAssistant({ ...assistant, instructions });
+      const section = `
+
+${instructions}
+`;
+      const prompt = buildSystemPrompt(store, "ops", settings);
+      expect(prompt.replace(section, "")).toBe(before);
+      expect(prompt).not.toContain("用户给你的说明");
+      expect(prompt.indexOf(instructions)).toBeLessThan(prompt.indexOf("用户在一对一"));
+      expect(buildSystemPrompt(store, "ops", { ...settings, group })).toContain(section);
+      const topic = hob.runtime.groups.createTopic(group.id, "资料整理", "user");
+      expect(buildSystemPrompt(store, "ops", { ...settings, group: topic })).toContain(section);
+      expect(buildSystemPrompt(store, "hob", settings)).not.toContain(instructions);
+      expect(MEMBER_ADMIN_LINE).toContain("你自己的名字、职责和补充提示词，用户要你修改就修改。");
+      store.saveJob({ id: "t-instructions", assistantId: "ops", title: "测试", instruction: "", status: "done", createdAt: "", stats: { reads: 0, commands: 0, edits: 0 }, activity: [] });
+      const worker = buildWorkerPrompt(store, "t-instructions", settings);
+      expect(worker).toContain(`## 「服务器」的补充提示词\n用户给「服务器」写了下面这份补充提示词。里面关于怎么做事、做出来的东西什么样的要求，你执行任务时照着做；关于怎么跟用户说话的部分归「服务器」自己，你的结果是交给它的。\n\n${instructions}`);
+      store.saveAssistant(assistant);
+      expect(buildWorkerPrompt(store, "t-instructions", settings)).not.toContain("## 「服务器」的补充提示词");
     } finally { hob.close(); }
   });
 });
@@ -533,7 +594,7 @@ describe("七个老工具带 assistantId", () => {
       expect(hob.runtime.store.routine(created.id)).toBeUndefined();
 
       saveAssistantSkill(hob.home, "write", { name: "weekly", title: "每周周报", description: "写周报", content: "步骤一" });
-      expect(said(await run(hob, "hob", "edit_skill", { name: "weekly", edits: [{ old: "步骤一", new: "步骤二" }], assistantId: "write" }))).toBe("已更新技能「每周周报」，第 2 版。");
+      expect(said(await run(hob, "hob", "save_skill", { name: "weekly", edits: [{ old: "步骤一", new: "步骤二" }], assistantId: "write" }))).toBe("已存技能「每周周报」（weekly），第 2 版，是你的。");
       expect(said(await run(hob, "hob", "delete_skill", { name: "weekly", assistantId: "write" }))).toContain("已删除技能");
       expect(await run(hob, "hob", "set_rule", { text: "别的", mode: "ask", assistantId: "nope" })).toMatchObject({ isError: true, content: [{ text: "没有这个助手：nope" }] });
       expect(said(await run(hob, "hob", "remove_rule", { ruleId: "r-x", assistantId: "write" }))).toBe("没有这条规则。");

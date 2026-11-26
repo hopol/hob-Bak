@@ -28,6 +28,7 @@ import { checkProvider } from "./providers.ts";
 import { checkTimezone } from "./time.ts";
 import { systemDir } from "./config.ts";
 import { checkPrice } from "./usage-prices.ts";
+import { checkProxy, DEFAULT_NO_PROXY, normalizeNoProxy, normalizeProxy } from "./network-proxy.ts";
 import type { Locale } from "../../shared/i18n.ts";
 
 const FILE = "settings.json";
@@ -90,7 +91,7 @@ export function systemTimezone(): string {
 
 export function defaultSettings(timezone = systemTimezone(), models: ModelSettings = seedModels()): Settings {
   return {
-    general: { theme: "system", timezone, showPage: true, avatarBackground: true, aboutYou: { name: "", language: "", notes: "" } },
+    general: { theme: "system", timezone, showPage: true, avatarBackground: true, proxy: "", noProxy: DEFAULT_NO_PROXY, aboutYou: { name: "", language: "", notes: "" } },
     providers: [],
     models,
     image: { source: "off" },
@@ -166,11 +167,18 @@ function normalizeModels(raw: unknown, base: ModelSettings): ModelSettings {
       thinking: isThinkingLevel(raw.thinking) ? raw.thinking : fallback.thinking,
     };
   };
+  const rawSuggest = input.suggest;
+  const rawSuggestRef = rawSuggest && typeof rawSuggest === "object" && !Array.isArray(rawSuggest) ? (rawSuggest as Partial<ModelPick>).ref : undefined;
+  const suggestRef = typeof rawSuggestRef === "string" ? rawSuggestRef.trim() : "";
+  const suggest = rawSuggest === null
+    ? null
+    : suggestRef ? pick(rawSuggest, base.conversation) : rawSuggest === undefined ? base.suggest : undefined;
   const thinking = input.thinking === undefined ? undefined : normalizeThinking(input.thinking);
   return {
     roster,
     conversation: pick(input.conversation, base.conversation),
     work: pick(input.work, base.work),
+    ...(suggest !== undefined ? { suggest } : {}),
     ...(input.thinkingChoice === "auto" || input.thinkingChoice === "fixed" ? { thinkingChoice: input.thinkingChoice } : {}),
     ...(thinking ? { thinking } : {}),
   };
@@ -228,6 +236,8 @@ function normalize(raw: unknown, base: Settings): Settings {
       timezone: checkTimezone(text(general.timezone, "") || base.general.timezone),
       showPage: typeof general.showPage === "boolean" ? general.showPage : base.general.showPage !== false,
       avatarBackground: typeof general.avatarBackground === "boolean" ? general.avatarBackground : base.general.avatarBackground !== false,
+      proxy: normalizeProxy(general.proxy, base.general.proxy),
+      noProxy: normalizeNoProxy(general.noProxy, base.general.noProxy),
       aboutYou: {
         name: text(about.name, base.general.aboutYou.name),
         language: text(about.language, base.general.aboutYou.language),
@@ -381,6 +391,7 @@ export class SettingsStore {
     const current = this.settings;
     const general = patch.general ?? {};
     const models = patch.models ?? {};
+    if (general.proxy !== undefined) checkProxy(general.proxy);
     if (models.thinkingChoice !== undefined && models.thinkingChoice !== "auto" && models.thinkingChoice !== "fixed") {
       throw new Error("任务思考档选择方式无效：可选值为 auto 或 fixed。");
     }
@@ -401,6 +412,7 @@ export class SettingsStore {
           roster: models.roster ?? current.models.roster,
           conversation: models.conversation ?? current.models.conversation,
           work: models.work ?? current.models.work,
+          ...(models.suggest !== undefined ? { suggest: models.suggest } : current.models.suggest !== undefined ? { suggest: current.models.suggest } : {}),
           thinkingChoice: models.thinkingChoice ?? current.models.thinkingChoice,
           ...((models.thinking ?? current.models.thinking) ? { thinking: models.thinking ?? current.models.thinking } : {}),
         },

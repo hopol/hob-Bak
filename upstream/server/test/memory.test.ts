@@ -7,6 +7,7 @@ import {
   filterMemoryExtensions,
   PiHost,
   bundledPluginEntry,
+  stabilizeMemorySnapshot,
 } from "../src/pi.ts";
 import {
   isPlainHttpAllowedHost,
@@ -186,6 +187,42 @@ describe("插件加载", () => {
     expect(bundledPluginEntry("pi-memory")).toMatch(/node_modules\/pi-memory\/index\.ts$/);
     expect(bundledPluginEntry("@local/lore-pi-extension")).toMatch(/lore-pi-extension\/index\.ts$/);
   });
+
+  it("本地记忆快照去掉原因和时间戳，保留指引和记忆正文里的条目时间标记", async () => {
+    const body = [
+      "The following memory files have been loaded.",
+      "",
+      "## MEMORY.md (long-term)",
+      "<!-- 2026-11-24 06:02:18 [01a20d38] -->",
+      "User prefers tea.",
+    ].join("\n");
+    const first = `base prompt\n\n## Memory\n(Snapshot before_agent_start at 2026-11-24 06:02:19. Use memory_read / memory_search for the authoritative latest state; recent writes may also be visible in tool-call history.)\n${body}`;
+    const second = `base prompt\n\n## Memory\n(Snapshot long_term_write at 2026-11-24 09:45:01. Use memory_read / memory_search for the authoritative latest state; recent writes may also be visible in tool-call history.)\n${body}`;
+    expect(stabilizeMemorySnapshot(first)).toBe(stabilizeMemorySnapshot(second));
+    expect(stabilizeMemorySnapshot(first)).toContain("(Use memory_read / memory_search for the authoritative latest state; recent writes may also be visible in tool-call history.)");
+    expect(stabilizeMemorySnapshot(first)).toContain("<!-- 2026-11-24 06:02:18 [01a20d38] -->");
+    expect(stabilizeMemorySnapshot(first)).not.toContain("Snapshot before_agent_start");
+    expect(stabilizeMemorySnapshot(first)).not.toContain("06:02:19");
+
+    // 经 filterMemoryExtensions 包装后，before_agent_start 返回的 systemPrompt 同样稳定且不改动 base
+    const result = {
+      extensions: [{
+        path: "/x/pi-memory",
+        tools: new Map([["memory_write", {}]]),
+        handlers: new Map([["before_agent_start", [
+          async (event: { systemPrompt: string }) => ({
+            systemPrompt: `${event.systemPrompt}\n\n## Memory\n(Snapshot session_start at 2026-11-24 10:11:12. Use memory_read / memory_search for the authoritative latest state; recent writes may also be visible in tool-call history.)\n${body}`,
+          }),
+        ]]]),
+      }],
+      errors: [],
+      runtime: {},
+    } as unknown as Parameters<typeof filterMemoryExtensions>[0];
+    const filtered = filterMemoryExtensions(result, "local");
+    const handler = filtered.extensions[0].handlers.get("before_agent_start")![0];
+    const out = await handler({ systemPrompt: "base prompt" }, {} as never) as { systemPrompt: string };
+    expect(out.systemPrompt).toBe(stabilizeMemorySnapshot(first));
+  });
 });
 
 describe("Lore 连接配置", () => {
@@ -339,7 +376,7 @@ describe("提示词的「记忆」一节", () => {
 });
 
 describe("补充说明迁移", () => {
-  it("启动时把非空助手和群说明写进档案并从资料移除，空说明不建档案", async () => {
+  it("启动时保留助手和草稿说明，旧群说明仍写进档案", async () => {
     const { createRuntime } = await import("../src/runtime.ts");
     const home = mkdtempSync(join(tmpdir(), "hob-migrate-"));
     const assistantDir = join(home, "assistants", "hob");
@@ -360,11 +397,9 @@ describe("补充说明迁移", () => {
       pi,
     });
     try {
-      expect(runtime.store.assistant("hob")).not.toHaveProperty("instructions");
-      expect(runtime.store.assistant("ops")).not.toHaveProperty("instructions");
-      expect(JSON.parse(readFileSync(join(assistantDir, "profile.json"), "utf8"))).not.toHaveProperty("instructions");
-      expect(readFileSync(join(assistantDir, "instructions.archived.md"), "utf8")).toBe("标题不超过 20 字\n少用感叹号");
-      expect(JSON.parse(readFileSync(join(emptyAssistantDir, "profile.json"), "utf8"))).not.toHaveProperty("instructions");
+      expect(runtime.store.assistant("hob")?.instructions).toBe("标题不超过 20 字\n少用感叹号");
+      expect(runtime.store.assistant("ops")?.instructions).toBe("   ");
+      expect(() => statSync(join(assistantDir, "instructions.archived.md"))).toThrow();
       expect(() => statSync(join(emptyAssistantDir, "instructions.archived.md"))).toThrow();
       expect(runtime.store.group("g-test")).not.toHaveProperty("instructions");
       expect(readFileSync(join(groupDir, "instructions.archived.md"), "utf8")).toBe("群里的约定");

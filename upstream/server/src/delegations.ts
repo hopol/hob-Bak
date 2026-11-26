@@ -21,15 +21,18 @@ export class DelegationManager {
     });
   }
 
-  async start(from: string, to: string, text: string, files: string[] = []): Promise<Delegation> {
+  async start(from: string, to: string, text: string, files: string[] = [], signal?: AbortSignal): Promise<Delegation> {
     const source = this.runtime.store.assistant(from);
     const target = this.runtime.store.assistant(to);
     if (!source || !target || from === to) throw new Error("目标助手不存在或不能转交给自己。");
+    signal?.throwIfAborted();
     const delegation: Delegation = { id: newId("dg-"), from, to, text, createdAt: new Date().toISOString(), status: "running", jobIds: [], approvalIds: [] };
     this.runtime.store.saveDelegation(delegation);
-    await this.runtime.router.addItem(from, { kind: "delegation", delegationId: delegation.id });
     try {
+      await this.runtime.router.addItem(from, { kind: "delegation", delegationId: delegation.id });
+      signal?.throwIfAborted();
       await this.runtime.router.addForwarded(to, text, delegation.id, from, files);
+      signal?.throwIfAborted();
     } catch (error) {
       this.turnEnded(delegation.id, error instanceof Error ? error.message : String(error), true);
       throw error;

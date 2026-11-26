@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type ThinkingLevelMap } from "@earendil-works/pi-ai";
@@ -10,6 +10,15 @@ import { PiHost } from "../src/pi.ts";
 import { hashPassword } from "../src/password.ts";
 import { createRuntime, type HobRuntime } from "../src/runtime.ts";
 import { defaultSettings } from "../src/settings.ts";
+
+export function seedPluginSource(home: string): void {
+  const destination = join(home, "cache/plugin-sources/official");
+  mkdirSync(destination, { recursive: true });
+  const source = new URL("./fixtures/hob-plugins/", import.meta.url);
+  for (const path of ["index.json", "github", "gmail", "email"]) cpSync(new URL(path, source), join(destination, path), { recursive: true });
+  mkdirSync(join(home, "system"), { recursive: true });
+  writeFileSync(join(home, "system/plugin-sources.json"), JSON.stringify([{ id: "official", url: "https://github.com/FFatTiger/hob-plugins", name: "Hob 官方", updatedAt: new Date().toISOString() }]));
+}
 
 export interface TestHob {
   runtime: HobRuntime;
@@ -24,6 +33,8 @@ export interface MakeHobOptions {
   tokensPerSecond?: number;
   /** 假模型注册表里的模型（第一个是默认）；thinkingLevelMap 模拟引擎注册表里自带的映射（Hob 不读它） */
   models?: { id: string; input?: ("text" | "image")[]; reasoning?: boolean; thinkingLevelMap?: ThinkingLevelMap }[];
+  /** 测试是否显式开启推荐提问；默认关闭以隔离旧测试的模型响应队列 */
+  followUpSuggestions?: boolean;
   /** 不去写 settings.json（测迁移用） */
   keepSettings?: boolean;
   /** 记忆提供者：写进 settings.json 的 memory 键（不写就按有没有配好 Lore 推） */
@@ -82,6 +93,7 @@ export function makeHob(overrides: Partial<HobConfig> = {}, options: MakeHobOpti
     roster: [{ ref: defaultModel, note: "" }],
     conversation: { ref: defaultModel, thinking: "off" },
     work: { ref: defaultModel, thinking: "off" },
+    ...(options.followUpSuggestions ? {} : { suggest: null }),
   };
   const merged = {
     general: { ...settings.general, locale: "zh-CN", ...(options.settings?.general ?? {}) },
@@ -132,7 +144,9 @@ export function text(value: string) {
 }
 
 export function call(name: string, args: Record<string, unknown>) {
-  const handoff = ["start_job", "message_assistant", "message_group", "open_topic"].includes(name) && !("note" in args) ? { ...args, note: "测试交接说明" } : args;
+  // 老用例写的 instruction 就是现在的交接说明 note（工具现在拒绝没声明的参数）
+  const { instruction, ...rest } = args;
+  const handoff = ["start_job", "message_assistant", "message_group", "open_topic"].includes(name) && !("note" in args) ? { ...rest, note: instruction ?? "测试交接说明" } : args;
   return fauxAssistantMessage([fauxToolCall(name, handoff)], { stopReason: "toolUse" });
 }
 

@@ -7,7 +7,7 @@ import { PiHost } from "../src/pi.ts";
 import { call, makeHob, text } from "./helpers.ts";
 
 describe("Router 上下文边界", () => {
-  it("仅 Router 对大工具结果落盘，保留图片和错误状态；read 和小结果不截", async () => {
+  it("仅 Router 对大工具结果落盘，read、助手资料和小结果不截", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
       const full = "甲".repeat(6000) + "乙".repeat(4000);
@@ -18,8 +18,9 @@ describe("Router 上下文边界", () => {
         name: "large", label: "large", description: "test", parameters: Type.Object({}),
         execute: async () => ({ content: [{ type: "text" as const, text: full.slice(0, 6000) }, { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }, { type: "text" as const, text: full.slice(6000) }], details: {} }),
       };
+      const showAssistant = { ...tool, name: "show_assistant", label: "show_assistant" };
       const run = async (name: string, spillDir?: string) => {
-        const opened = await hob.runtime.pi.open({ file: join(hob.home, `${name}.jsonl`), cwd: hob.home, model: "hob-faux/faux-1", thinking: "off", memory: "off", systemPrompt: () => "测试", tools: ["large", "read"], customTools: [tool], spillDir });
+        const opened = await hob.runtime.pi.open({ file: join(hob.home, `${name}.jsonl`), cwd: hob.home, model: "hob-faux/faux-1", thinking: "off", memory: "off", systemPrompt: () => "测试", tools: ["large", "read", "show_assistant"], customTools: [tool, showAssistant], spillDir });
         return opened.session;
       };
       const router = await run("router", dir);
@@ -40,6 +41,11 @@ describe("Router 上下文边界", () => {
       await router.prompt("读文件");
       const read = router.messages.filter((m) => m.role === "toolResult").at(-1)!;
       expect(JSON.stringify(read.content)).toContain(full);
+      hob.faux.setResponses([call("show_assistant", {}), text("好")]);
+      await router.prompt("查看助手");
+      const profile = router.messages.filter((m) => m.role === "toolResult").at(-1)!;
+      expect(JSON.stringify(profile.content)).toContain("甲".repeat(6000));
+      expect(JSON.stringify(profile.content)).toContain("乙".repeat(4000));
       const worker = await run("worker");
       hob.faux.setResponses([call("large", {}), text("好")]);
       await worker.prompt("开始");
@@ -69,6 +75,20 @@ describe("Router 上下文边界", () => {
       expect(error).toHaveBeenCalled();
       error.mockRestore();
       session.dispose();
+    } finally { hob.close(); }
+  });
+
+  it("加上重试后压缩仍由引擎运行时解析凭据", async () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
+      const runtime = await hob.runtime.pi.runtime();
+      const auth = vi.spyOn(runtime, "getAuth");
+      const opened = await hob.runtime.pi.open({ file: join(hob.home, "stall-compact.jsonl"), cwd: hob.home, model: "hob-faux/faux-1", thinking: "off", systemPrompt: () => "测试", tools: [], customTools: [], stall: { milliseconds: () => 1000, onRetry: () => {} } });
+      try {
+        const session = opened.session as unknown as { _getSummarizationRequestAuth: (model: unknown, signal: AbortSignal) => Promise<unknown> };
+        await session._getSummarizationRequestAuth(opened.session.model, new AbortController().signal);
+        expect(auth).not.toHaveBeenCalled();
+      } finally { opened.session.dispose(); }
     } finally { hob.close(); }
   });
 

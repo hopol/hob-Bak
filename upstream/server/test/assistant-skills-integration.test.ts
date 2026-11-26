@@ -143,10 +143,10 @@ describe("助手技能接入", () => {
     const hob = makeHob({}, { memory: "off" });
     try {
       hob.runtime.store.saveJob({ id: "t-other", assistantId: "other", title: "任务", instruction: "检查", status: "done", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [] });
-      const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "save_job_as_skill")!;
+      const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "review_job")!;
       const result = await tool.execute("call", { jobId: "t-other" }, undefined, undefined, {} as never);
       expect(result.isError).toBe(true);
-      expect(activityLabel("save_job_as_skill")).toBe("沉淀技能");
+      expect(activityLabel("review_job")).toBe("沉淀技能");
     } finally { hob.close(); }
   });
   it("定时任务完成后不自动沉淀", async () => {

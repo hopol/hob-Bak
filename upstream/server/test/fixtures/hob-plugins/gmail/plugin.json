@@ -1,0 +1,12 @@
+{
+  "name": "gmail",
+  "displayName": "Gmail",
+  "version": "1.0.0",
+  "description": "Connect Gmail tools through Google's remote MCP service. 需要自己在 Google Cloud 建 OAuth 客户端；想简单接入用「邮箱」插件。",
+  "homepage": "https://developers.google.com/workspace/gmail",
+  "userConfig": {
+    "GOOGLE_CLIENT_ID": { "type": "string", "title": "OAuth 客户端 ID", "description": "在 [Google Cloud 控制台](https://console.cloud.google.com/apis/credentials) 建一个 Web 应用客户端", "required": true },
+    "GOOGLE_CLIENT_SECRET": { "type": "string", "title": "OAuth 客户端密钥", "required": true, "sensitive": true }
+  },
+  "extensions": { "com.hob.plugins": { "icon": "icon.svg", "publisher": "Google", "categories": ["communication"] } }
+}

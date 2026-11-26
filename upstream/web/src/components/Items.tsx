@@ -1,8 +1,8 @@
 // 对话条目的渲染：气泡、选择题、任务卡、草稿卡、文件卡、灰字提示。
 import { t } from "../../../shared/i18n.ts";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { Approval, ApprovalOption, Delegation, Draft, GroupItem, GroupSummary, Item, Job, NoteIcon, SedimentStatus } from "../../../shared/types.ts";
+import type { Approval, ApprovalOption, AssistantSummary, Delegation, Draft, GroupItem, GroupSummary, Item, Job, NoteIcon, SedimentStatus } from "../../../shared/types.ts";
 import { attachmentName, isImagePath } from "../../../shared/media.ts";
 import { plainText as plain } from "../../../shared/plain-text.ts";
 import { isRoutineDueNote } from "../../../shared/routine-note.ts";
@@ -39,11 +39,14 @@ import {
   openJob,
   replyJob,
   retryDelegation,
+  saveLoginEntry,
   select,
   selectGroup,
   setNotice,
   setQuote,
   setText,
+  switchLoginSelf,
+  toggleStar,
   stopJob,
   useApp,
 } from "../store.ts";
@@ -52,6 +55,10 @@ import { jobReason, jobRoundView } from "../steps.ts";
 import { actionsFor, menuPosition, moveSwipe, swipeReply, type SwipeState } from "../message-menu.ts";
 import { DELEGATION_STATUS, JOB_STATUS, StatusTag, jobStatusIcon, jobStatusMeta, sedimentText } from "./status-meta.tsx";
 import { membersOf } from "./Groups.tsx";
+import { Disclosure } from "./Disclosure.tsx";
+import { CardView } from "./CardView.tsx";
+import { approvalAnswerFromAction, approvalToCardRecord } from "../approval-card.ts";
+import type { CardActionRequest, CardText } from "../../../shared/cards.ts";
 
 /* ---------------- markdown ---------------- */
 
@@ -59,12 +66,29 @@ import { membersOf } from "./Groups.tsx";
 
 const NOTE_ICON: Record<NoteIcon, IconName> = {
   memory: "mem",
-  skill: "bulb",
+  skill: "book",
   rule: "rule",
   routine: "clock",
   split: "split",
   info: "info",
 };
+
+function NoteWithDetail({ icon, text, detail, fresh }: { icon: NoteIcon; text: string; detail: string; fresh: boolean }) {
+  const long = detail.split("\n").length > 2 || detail.length > 180;
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={`sys sys-why${fresh ? " enter-fade" : ""}`}>
+      {icon !== "split" ? <Icon name={NOTE_ICON[icon]} size={14} /> : null}
+      {long ? (
+        <Disclosure className="sys-why-disclosure" label={text} open={open} onToggle={() => setOpen(value => !value)}>
+          <div className="why">{detail}</div>
+        </Disclosure>
+      ) : (
+        <div className="sys-why-body"><div>{text}</div><div className="why">{detail}</div></div>
+      )}
+    </div>
+  );
+}
 
 
 /** 触屏没有悬停：用长按菜单代替悬停工具行。 */
@@ -91,6 +115,9 @@ function Tools({
   menu?: boolean;
   close?: () => void;
 }) {
+  const s = useApp();
+  const conversation = s.gsel ? { kind: "group" as const, id: s.gsel } : { kind: "assistant" as const, id: s.sel ?? "" };
+  const starred = s.stars.some((star) => star.conversation.kind === conversation.kind && star.conversation.id === conversation.id && star.itemId === itemId);
   const [copied, setCopied] = useState(false);
   const timer = useRef(0);
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -107,6 +134,8 @@ function Tools({
   };
 
   return (
+    <>
+    {starred ? <span className="message-star"><Icon name="starFilled" size={12} /></span> : null}
     <div className={`tools${menu ? " menu" : ""}`}>
       <button
         title={t("回复")}
@@ -119,6 +148,7 @@ function Tools({
       >
         <Icon name="reply" size={16} />{menu ? t("回复") : null}
       </button>
+      <button title={starred ? t("取消收藏") : t("收藏")} aria-label={starred ? t("取消收藏") : t("收藏")} onClick={() => void toggleStar(conversation, itemId)}><Icon name={starred ? "starFilled" : "star"} size={16} /></button>
       <button
         className={copied ? "copied" : ""}
         title={copied ? t("已复制") : t("复制")}
@@ -128,12 +158,16 @@ function Tools({
         <Icon name={copied ? "check" : "copy"} size={16} />{menu ? t("复制") : null}
       </button>
     </div>
+    </>
   );
 }
 
 type Popup = { anchor: HTMLElement; item: Item; text: string; right: boolean };
 
 function MessagePopup({ popup, close, selectText, closing }: { popup: Popup; close: () => void; selectText: () => void; closing: boolean }) {
+  const s = useApp();
+  const conversation = s.gsel ? { kind: "group" as const, id: s.gsel } : { kind: "assistant" as const, id: s.sel ?? "" };
+  const starred = s.stars.some((star) => star.conversation.kind === conversation.kind && star.conversation.id === conversation.id && star.itemId === popup.item.id);
   const menu = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ top: number; left: number; above: boolean } | null>(null);
   useLayoutEffect(() => {
@@ -178,6 +212,7 @@ function MessagePopup({ popup, close, selectText, closing }: { popup: Popup; clo
   const run = (action: string) => {
     if (action === "reply") { setQuote({ itemId: popup.item.id, text: plain(popup.text).slice(0, 60) }); focusComposer(); close(); }
     if (action === "copy") void copyText(popup.text).then((ok) => { if (!ok) setNotice(t("复制失败：浏览器不允许写入剪贴板")); close(); });
+    if (action === "star") { void toggleStar(conversation, popup.item.id); close(); }
     if (action === "select") selectText();
     if (action === "job" && popup.item.kind === "job") { openJob(popup.item.jobId); close(); }
   };
@@ -187,8 +222,8 @@ function MessagePopup({ popup, close, selectText, closing }: { popup: Popup; clo
     if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) close();
   }}>
     {actionsFor(popup.item.kind).map((action) => <button key={action} onClick={() => run(action)}>
-      <span>{action === "reply" ? t("回复") : action === "copy" ? t("复制") : action === "select" ? t("选择文字") : t("查看任务详情")}</span>
-      <Icon name={action === "reply" ? "reply" : action === "copy" ? "copy" : action === "select" ? "textSelect" : "chev"} size={17} />
+      <span>{action === "reply" ? t("回复") : action === "copy" ? t("复制") : action === "select" ? t("选择文字") : action === "star" ? (starred ? t("取消收藏") : t("收藏")) : t("查看任务详情")}</span>
+      <Icon name={action === "reply" ? "reply" : action === "copy" ? "copy" : action === "select" ? "textSelect" : action === "star" ? (starred ? "starFilled" : "star") : "chev"} size={17} />
     </button>)}
   </div>, document.body);
 }
@@ -272,7 +307,7 @@ function JobCard({ job: current, round, fresh, itemId }: { job: Job; round?: num
         {reason || sediment ? <div className={`jnote${!reason && sedimentLeave.leaving ? " leaving" : ""}`}>
           {reason ? <div className={`jnote-row${bad ? " bad" : ""}`}><span className="clamp">{reason}</span></div> : null}
           {sediment ? <div className={`jnote-row${sediment.status === "failed" ? " bad" : ""}`}>
-            <Icon name={sediment.status === "running" ? "spin" : "mem"} size={13} className={sediment.status === "running" ? "spin" : undefined} />
+            <Icon name={sediment.status === "running" ? "spin" : "book"} size={13} className={sediment.status === "running" ? "spin" : undefined} />
             <span>{sedimentText(sediment)}</span>
           </div> : null}
         </div> : null}
@@ -319,6 +354,7 @@ function JobCard({ job: current, round, fresh, itemId }: { job: Job; round?: num
 
 function DraftCard({ draft }: { draft: Draft }) {
   const s = useApp();
+  const [showInstructions, setShowInstructions] = useState(false);
   const created = draft.status === "created" && draft.createdAssistantId;
   // 建好以后：头像跟着新助手走（可能是自画的道具），细节收起来，留职责和「查看」
   const made = created ? s.assistants.find((a) => a.id === draft.createdAssistantId) : undefined;
@@ -338,6 +374,13 @@ function DraftCard({ draft }: { draft: Draft }) {
           <span className="k">{t("职责")}</span>
           <span>{draft.dutyLong}</span>
         </div>
+        {draft.cwd ? (
+          <div className="kv">
+            <span className="k">{t("工作目录")}</span>
+            <span>{draft.cwd}</span>
+          </div>
+        ) : null}
+        {draft.instructions ? <Disclosure className="draft-instructions-disclosure" label={t("补充提示词")} count={draft.instructions.split("\n").length} open={showInstructions} onToggle={() => setShowInstructions(value => !value)}><div className="draft-instructions">{draft.instructions}</div></Disclosure> : null}
         <div className={`expand${created ? "" : " open"}`} inert={Boolean(created)}>
           <div>
             <div className="kv">
@@ -421,8 +464,106 @@ function DelegationCard({ delegation, fresh }: { delegation: Delegation; fresh: 
   );
 }
 
+function ApprovalCard({ approval, fresh }: { approval: Approval; fresh: boolean }) {
+  const record = useMemo(() => approvalToCardRecord(approval), [approval]);
+  return (
+    <CardView
+      record={record}
+      fresh={fresh}
+      bare
+      disableIncompleteSubmit
+      onSubmit={async (request) => {
+        const body = approvalAnswerFromAction(approval, request);
+        if (body) await answer(approval.id, body);
+      }}
+    />
+  );
+}
+
 function QuestionCard({ approval, fresh }: { approval: Approval; fresh: boolean }) {
-  return approval.login ? <LoginCard approval={approval} fresh={fresh} /> : approval.questions?.length ? <MultiQuestionCard approval={approval} fresh={fresh} /> : <SingleQuestionCard approval={approval} fresh={fresh} />;
+  if (approval.login?.fillNewPassword) return <FillNewPasswordCard approval={approval} fresh={fresh} />;
+  if (approval.login?.fillLogin) return <FillLoginCard approval={approval} fresh={fresh} />;
+  if (approval.login?.entry) return <LoginEntryCard approval={approval} fresh={fresh} />;
+  return approval.login ? <LoginCard approval={approval} fresh={fresh} /> : <ApprovalCard approval={approval} fresh={fresh} />;
+}
+
+/** 批准卡、录入卡上点了「我自己登录」：同一张卡换成自己登录卡的样子（标题换成「需要登录：网站」，reason 照旧），还挂着等用户登完 */
+function SelfLoginCard({ approval, fresh }: { approval: Approval; fresh: boolean }) {
+  return <LoginCard approval={{ ...approval, title: t("需要登录：{site}", { site: approval.login!.site }) }} fresh={fresh} />;
+}
+
+/** 「我自己登录」的文字按钮：放按钮行最左边，右边仍是原来的按钮 */
+function SelfLoginButton({ approvalId }: { approvalId: string }) {
+  return <button className="hob-btn hob-btn-ghost qfill-self" onClick={() => void switchLoginSelf(approvalId)}>{t("我自己登录")}</button>;
+}
+
+function passwordCharacterText(characters: string[]): string {
+  const set = new Set(characters);
+  if (set.has("lowercase") && set.has("uppercase") && set.has("numbers") && set.has("symbols")) return t("含符号");
+  if (set.has("lowercase") && set.has("uppercase") && set.has("numbers") && set.size === 3) return t("字母和数字");
+  return characters.map((character) => ({ lowercase: t("小写字母"), uppercase: t("大写字母"), numbers: t("数字"), symbols: t("符号") }[character] ?? character)).join(t("、"));
+}
+
+function FillNewPasswordCard({ approval, fresh }: { approval: Approval; fresh: boolean }) {
+  const fill = approval.login!.fillNewPassword!;
+  const [folder, setFolder] = useState(fill.folder ?? "");
+  const pending = approval.status === "pending" && fill.state === "pending";
+  const done = fill.state === "filled";
+  const websiteMatch = fill.mode === "register" ? t("和注册页一致") : t("和保存的网址一致");
+  const submit = (key: ApprovalOption["key"]) => void answer(approval.id, { key, ...(fill.mode === "register" ? { folder } : {}) });
+  return (
+    <div className={`b q qfill${fresh ? " enter" : ""}`}>
+      <div className="qfill-source"><Icon name="key" size={16} />{fill.mode === "register" ? t("Hob · 注册新账号") : t("Hob · 修改密码")}</div>
+      <div className="qt">{approval.title}</div>
+      {pending ? <div className="qs">{approval.detail}</div> : null}
+      <div className="qfill-group">
+        <div className="qfill-row"><span className="qfill-label">{t("网站")}</span><span className="qfill-value">{fill.host}</span>{pending ? <span className="qfill-ok"><Icon name="check" size={13} />{websiteMatch}</span> : null}</div>
+        <div className="qfill-row"><span className="qfill-label">{t("用户名")}</span><span className="qfill-value">{fill.username}</span></div>
+        <div className="qfill-row"><span className="qfill-label">{t("密码")}</span><span className="qfill-value">{t("{provider} 生成", { provider: fill.providerName })}</span><span className="qfill-provider">{t("{length} 位 · {characters}", { length: fill.length, characters: passwordCharacterText(fill.characters) })}</span></div>
+        {fill.mode === "register" && pending ? <div className="qfill-row"><span className="qfill-label">{t("存到")}</span><span className="qfill-selectwrap"><select className="qfill-select" value={folder} onChange={(event) => setFolder(event.target.value)}><option value="">{t("不放进文件夹")}</option>{fill.folders.map((item) => <option key={item} value={item}>{item}</option>)}</select><Icon name="down" size={13} /></span></div> : null}
+      </div>
+      {fill.state === "failed" ? <div className="qfill-result bad">{fill.result}</div> : done ? <div className="qfill-result"><Icon name="check" size={15} />{fill.result}</div> : fill.state === "rejected" ? <div className="qfill-result">{t("已拒绝")}</div> : null}
+      {pending ? <div className="qfoot qacts"><button className="hob-btn" onClick={() => submit("A")}>{t("不允许")}</button><button className="hob-btn hob-btn-primary" onClick={() => submit("B")}>{t("生成并填写")}</button></div> : null}
+    </div>
+  );
+}
+
+function FillLoginCard({ approval, fresh }: { approval: Approval; fresh: boolean }) {
+  const fill = approval.login!.fillLogin!;
+  // 先调完所有 hook 再按状态换成自己登录卡：同一张卡点了「我自己登录」会就地换样子，hook 数不能变
+  const [selected, setSelected] = useState(fill.chosenId ?? (fill.candidates.length === 1 ? `${fill.candidates[0]!.provider}:${fill.candidates[0]!.id}` : ""));
+  if (approval.status === "pending" && fill.state === "self") return <SelfLoginCard approval={approval} fresh={fresh} />;
+  const chosen = fill.candidates.find((candidate) => `${candidate.provider}:${candidate.id}` === (fill.chosenId ?? selected)) ?? fill.candidates[0];
+  const pending = approval.status === "pending" && fill.state !== "mismatch";
+  const status = fill.state === "failed" ? fill.result : fill.state === "rejected" ? t("已拒绝") : fill.state === "self" ? t("已选择自己登录") : fill.state === "filled" ? fill.result : undefined;
+  const providerNames = [...new Set(fill.candidates.map((candidate) => candidate.providerName))].join(t("、"));
+  const savedHosts = [...new Set(fill.candidates.flatMap((candidate) => candidate.uris.map((uri) => { try { return new URL(uri).hostname; } catch { return uri; } })))];
+  return (
+    <div className={`b q qfill${fresh ? " enter" : ""}`}>
+      <div className="qfill-source"><Icon name="key" size={16} />{t("Hob · 填写登录")}</div>
+      <div className="qt">{approval.title}</div>
+      {pending ? <div className="qs">{approval.detail}</div> : null}
+      {fill.state === "mismatch" ? (
+        <>
+          <div className="qfill-group">
+            <div className="qfill-row"><span className="qfill-label">{t("当前页面")}</span><span className="qfill-value">{fill.currentHost ?? fill.host}</span><span className="qfill-bad"><Icon name="alert" size={13} />{t("对不上")}</span></div>
+            <div className="qfill-row"><span className="qfill-label">{t("保存的网址")}</span><span className="qfill-value">{savedHosts.join("、")}</span></div>
+          </div>
+          <div className="qfill-hint">{t("登录页的网址和 {provider} 里保存的不一致，可能是仿冒的页面。", { provider: providerNames })}</div>
+        </>
+      ) : (
+        <>
+          <div className="qfill-group">
+            <div className="qfill-row"><span className="qfill-label">{t("网站")}</span><span className="qfill-value">{fill.host}</span>{pending ? <span className="qfill-ok"><Icon name="check" size={13} />{t("和保存的网址一致")}</span> : null}</div>
+            {chosen && !(pending && fill.candidates.length > 1) ? <div className="qfill-row"><span className="qfill-label">{t("账号")}</span><span className="qfill-value">{chosen.username}</span><span className="qfill-provider">{chosen.providerName}{chosen.folder ? ` · ${chosen.folder}` : ""}</span></div> : null}
+          </div>
+          {pending && fill.candidates.length > 1 ? <div className="opts qfill-options">{fill.candidates.map((candidate) => { const id = `${candidate.provider}:${candidate.id}`; return <button className={`opt${selected === id ? " chosen" : ""}`} key={id} onClick={() => setSelected(id)}><span className="key">{candidate.username.slice(0, 1).toUpperCase()}</span><span className="olabel">{candidate.username}{candidate.folder ? ` · ${candidate.folder}` : ""}</span>{selected === id ? <span className="ck"><Icon name="check" size={16} /></span> : null}</button>; })}</div> : null}
+          {status ? <div className={`qfill-result${fill.state === "failed" ? " bad" : ""}`}>{fill.state === "failed" ? null : <Icon name="check" size={15} />}{status}</div> : null}
+          {pending ? <div className="qfoot qacts"><SelfLoginButton approvalId={approval.id} /><button className="hob-btn" onClick={() => void answer(approval.id, { key: "A", ...(selected ? { candidateId: selected } : {}) })}>{t("不允许")}</button><button className="hob-btn" disabled={!selected} onClick={() => void answer(approval.id, { key: "B", candidateId: selected })}>{t("这次允许")}</button><button className="hob-btn hob-btn-primary" disabled={!selected} onClick={() => void answer(approval.id, { key: "C", candidateId: selected })}>{t("这个网站以后都允许")}</button></div> : null}
+        </>
+      )}
+    </div>
+  );
 }
 
 function LoginCard({ approval, fresh }: { approval: Approval; fresh: boolean }) {
@@ -444,212 +585,50 @@ function LoginCard({ approval, fresh }: { approval: Approval; fresh: boolean }) 
   );
 }
 
-/** 一张卡问几个问题：每个问题选一项或自己写一句，一次提交。要补充的写进那个问题的「自己写」，卡上不另设补充框。 */
-function MultiQuestionCard({ approval, fresh }: { approval: Approval; fresh: boolean }) {
-  const questions = approval.questions ?? [];
-  const previousStatus = useRef(approval.status);
-  const changed = previousStatus.current !== approval.status;
-  useEffect(() => { previousStatus.current = approval.status; }, [approval.status]);
-  // 推荐的那项默认选中；自己写了字就不算选项
-  const [picks, setPicks] = useState<(ApprovalOption["key"] | null)[]>(() => questions.map((question) => question.recommended ?? null));
-  const [typed, setTyped] = useState<string[]>(() => questions.map(() => ""));
-  const [writing, setWriting] = useState<boolean[]>(() => questions.map(() => false));
-  const done = approval.status === "answered";
-  const answers = approval.answers ?? [];
-  const filled = questions.every((_, index) => Boolean(typed[index]?.trim() || picks[index]));
-  const submit = () => {
-    if (!filled) return;
-    void answer(approval.id, {
-      answers: questions.map((_, index) => (typed[index].trim() ? { text: typed[index].trim() } : { key: picks[index]! })),
-    });
+/** 录入卡：密码管理器里没有这个网站的账号，用户在卡上填一次，Hob 存进密码管理器再填进页面。密码只在提交的那一次请求里经过。 */
+function LoginEntryCard({ approval, fresh }: { approval: Approval; fresh: boolean }) {
+  const entry = approval.login!.entry!;
+  const [provider, setProvider] = useState(entry.provider ?? entry.providers[0]?.provider ?? "");
+  const [username, setUsername] = useState(entry.account ?? "");
+  const [password, setPassword] = useState("");
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  if (approval.status === "pending" && entry.state === "self") return <SelfLoginCard approval={approval} fresh={fresh} />;
+  const pending = approval.status === "pending";
+  const providerName = entry.providers.find((item) => item.provider === provider)?.providerName ?? entry.providers[0]?.providerName ?? "";
+  const savedName = entry.providers.find((item) => item.provider === entry.provider)?.providerName ?? providerName;
+  const account = entry.username ?? entry.account;
+  const status = entry.state === "rejected" ? t("没有登录") : entry.state === "self" ? t("已选择自己登录") : entry.state === "failed" ? t("已存进{provider}，但没有填上：{reason}", { provider: savedName, reason: entry.result ?? "" }) : entry.state === "filled" ? (entry.twoStep ? t("已存进{provider}，已填好用户名", { provider: savedName }) : t("已存进{provider}并填好", { provider: savedName })) : undefined;
+  const ready = username.trim() !== "" && password !== "" && provider !== "";
+  const submit = async () => {
+    if (!ready || busy) return;
+    setBusy(true);
+    const ok = await saveLoginEntry(approval.id, { username: username.trim(), password, provider });
+    setBusy(false);
+    // 没存上（服务端回了原因）：表单保持可填；存上了卡片会自己收起
+    if (!ok) return;
+    setPassword("");
   };
-  const pickAt = (index: number, key: ApprovalOption["key"]) =>
-    setPicks((current) => current.map((item, i) => (i === index ? key : item)));
-  const typeAt = (index: number, text: string) =>
-    setTyped((current) => current.map((item, i) => (i === index ? text : item)));
-  const writeAt = (index: number) =>
-    setWriting((current) => current.map((item, i) => (i === index ? true : item)));
   return (
-    <div className={`b q qmulti${fresh ? " enter" : ""}`}>
+    <div className={`b q qfill${fresh ? " enter" : ""}`}>
+      <div className="qfill-source"><Icon name="key" size={16} />{t("Hob · 填写登录")}</div>
       <div className="qt">{approval.title}</div>
-      {approval.detail ? <div className="qs">{approval.detail}</div> : null}
-      {approval.status === "expired" ? (
-        <div className="opts">
-          <div className={`opt${changed ? " status-fade" : ""}`}>{t("已结束")}</div>
-        </div>
-      ) : null}
-      {approval.status === "expired" ? null : questions.map((question, index) => {
-        const reply = answers[index];
-        const picked = reply?.key ? question.options.find((option) => option.key === reply.key) : undefined;
-        const missRecommended = Boolean(picked && question.recommended && question.recommended !== picked.key);
-        return (
-          <div className="qitem" key={index}>
-            <div className="qt qmt">
-              <span className="qnum">{index + 1}</span>
-              <span>{question.title}</span>
-            </div>
-            {question.why ? <div className="qs">{question.why}</div> : null}
-            {done ? (
-              reply ? (
-                <div className="opts">
-                  <div className="opt chosen">
-                    <span className="key">{picked ? picked.key : <Icon name="user" size={12} />}</span>
-                    <span className="olabel">{picked ? picked.label : reply.text}</span>
-                    <span className={`ck${changed ? " check-enter" : ""}`}>
-                      <Icon name="check" size={16} />
-                    </span>
-                  </div>
-                </div>
-              ) : null
-            ) : (
-              <div className="opts">
-                {question.options.map((option) => {
-                  const sel = !typed[index].trim() && picks[index] === option.key;
-                  return (
-                    <button
-                      className={`opt${sel ? " chosen" : ""}`}
-                      key={option.key}
-                      onClick={() => pickAt(index, option.key)}
-                    >
-                      <span className="key">{option.key}</span>
-                      <span className="olabel">{option.label}</span>
-                      {option.key === question.recommended ? <span className="rec">{t("推荐")}</span> : null}
-                      {sel ? (
-                        <span className="ck">
-                          <Icon name="check" size={16} />
-                        </span>
-                      ) : null}
-                    </button>
-                  );
-                })}
-                {writing[index] ? (
-                  <div className="other">
-                    <input
-                      value={typed[index]}
-                      placeholder={t("自己写这个问题的答案")}
-                      autoFocus
-                      onChange={(event) => typeAt(index, event.target.value)}
-                    />
-                  </div>
-                ) : (
-                  <button className="opt qwrite" onClick={() => writeAt(index)}>
-                    <span className="key">
-                      <Icon name="edit" size={12} />
-                    </span>
-                    {t("自己写")}
-                  </button>
-                )}
-              </div>
-            )}
-            {missRecommended
-              ? <div className="qs qrec">{t("推荐的是 {key}：{label}", { key: question.recommended!, label: question.options.find((option) => option.key === question.recommended)?.label ?? "" })}</div>
-              : null}
-          </div>
-        );
-      })}
-      {done ? (
-        approval.answerText ? <div className="qs qnote">{t("补充：{text}", { text: approval.answerText })}</div> : null
-      ) : null}
-      {done || approval.status === "expired" ? null : (
-        <div className="qfoot qacts">
-          <button className="hob-btn hob-btn-primary" disabled={!filled} onClick={submit}>
-            {t("提交")}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SingleQuestionCard({ approval, fresh }: { approval: Approval; fresh: boolean }) {
-  const previousStatus = useRef(approval.status);
-  const changed = previousStatus.current !== approval.status;
-  useEffect(() => { previousStatus.current = approval.status; }, [approval.status]);
-  const chosen = approval.options.find((o) => o.key === approval.chosen);
-  const done = approval.status === "answered" && chosen ? approval.chosen : undefined;
-  // 刚点的那个选项：先亮一下，其余收起来，再出勾
-  const [picked, setPicked] = useState<ApprovalOption["key"] | null>(null);
-  const [text, setText] = useState("");
-  const active = picked ?? done;
-  const animated = picked !== null;
-  // 用户没选选项、自己写的那句：和选了选项一样，卡片就到这里
-  const reply = approval.status === "answered" ? approval.answerText : undefined;
-  const typed = text.trim();
-  const send = () => {
-    if (typed) void answer(approval.id, { text: typed });
-  };
-
-  return (
-    <div className={`b q${fresh ? " enter" : ""}`}>
-      <div className="qt">{approval.title}</div>
-      {approval.detail ? <div className="qs">{approval.detail}</div> : null}
-      <div className="opts">
-        {approval.status === "expired" ? (
-          <div className={`opt${changed ? " status-fade" : ""}`}>{t("已结束")}</div>
-        ) : reply ? (
-          <div className="opt chosen">
-            <span className="key">
-              <Icon name="user" size={12} />
-            </span>
-            {reply}
-            <span className={`ck${changed ? " check-enter" : ""}`}>
-              <Icon name="check" size={16} />
-            </span>
-          </div>
-        ) : active && !animated ? (
-          <div className="opt chosen">
-            <span className="key">{active}</span>
-            {approval.options.find((o) => o.key === active)?.label}
-            <span className="ck">
-              <Icon name="check" size={16} />
-            </span>
-          </div>
-        ) : (
-          approval.options.map((o) => {
-            const sel = o.key === active;
-            return (
-              <div className={`optrow${animated && !sel ? " away" : ""}`} key={o.key}>
-                <div className="optclip">
-                  <button
-                    className={`opt${sel ? " chosen" : ""}`}
-                    disabled={animated}
-                    onClick={() => {
-                      setPicked(o.key);
-                      void answer(approval.id, { key: o.key }).then((ok) => { if (!ok) setPicked(null); });
-                    }}
-                  >
-                    <span className="key">{o.key}</span>
-                    <span className="olabel">{o.label}</span>
-                    {o.key === approval.recommended ? <span className="rec">{t("推荐")}</span> : null}
-                    {sel && animated ? (
-                      <span className="ck">
-                        <Icon name="check" size={16} />
-                      </span>
-                    ) : null}
-                  </button>
-                </div>
-              </div>
-            );
-          })
-        )}
-        {approval.status === "expired" || reply || animated || active ? null : (
-          <div className="other">
-            <input
-              value={text}
-              placeholder={t("其他想法…")}
-              onChange={(event) => setText(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.nativeEvent.isComposing) send();
-              }}
-            />
-            {typed ? (
-              <button className="hob-icon-btn other-send" title={t("发送")} onClick={send}>
-                <Icon name="send" size={16} />
-              </button>
-            ) : null}
-          </div>
-        )}
+      {pending ? <div className="qs">{t("密码管理器里还没有这个网站的账号。在这里填一次，Hob 存进{provider}再填进登录页，助手看不到。", { provider: providerName })}</div> : null}
+      <div className="qfill-group">
+        <div className="qfill-row"><span className="qfill-label">{t("网站")}</span><span className="qfill-value">{entry.host}</span></div>
+        {pending ? (
+          <>
+            <form className="qfill-form" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+              <div className="qfill-row"><label className="qfill-label" htmlFor={`entry-user-${approval.id}`}>{t("用户名")}</label><span className="qfill-inputwrap"><input id={`entry-user-${approval.id}`} className="qfill-input" placeholder={t("用户名或邮箱")} value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="off" autoCapitalize="none" spellCheck={false} /></span></div>
+              <div className="qfill-row"><label className="qfill-label" htmlFor={`entry-pass-${approval.id}`}>{t("密码")}</label><span className="qfill-inputwrap"><input id={`entry-pass-${approval.id}`} className="qfill-input" placeholder={t("这个网站的密码")} type={show ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" /><button type="button" className="qfill-toggle" aria-label={show ? t("隐藏密码") : t("显示密码")} title={show ? t("隐藏密码") : t("显示密码")} onClick={() => setShow(!show)}><Icon name={show ? "eyeoff" : "eye"} size={15} /></button></span></div>
+              {entry.providers.length > 1 ? <div className="qfill-row"><label className="qfill-label" htmlFor={`entry-provider-${approval.id}`}>{t("存到")}</label><span className="qfill-selectwrap"><select id={`entry-provider-${approval.id}`} className="qfill-select" value={provider} onChange={(event) => setProvider(event.target.value)}>{entry.providers.map((item) => <option key={item.provider} value={item.provider}>{item.providerName}</option>)}</select><Icon name="down" size={13} /></span></div> : null}
+            </form>
+          </>
+        ) : account ? <div className="qfill-row"><span className="qfill-label">{t("账号")}</span><span className="qfill-value">{account}</span><span className="qfill-provider">{savedName}</span></div> : null}
       </div>
+      {entry.error ? <div className="qfill-entry-error">{entry.error}</div> : null}
+      {status ? <div className={`qfill-result${entry.state === "failed" ? " bad" : ""}`}>{["filled", "self"].includes(entry.state ?? "") ? <Icon name="check" size={15} /> : null}{status}</div> : null}
+      {pending ? <div className="qfoot qacts"><SelfLoginButton approvalId={approval.id} /><button className="hob-btn" onClick={() => void answer(approval.id, { key: "A" })}>{t("不登录")}</button><button className="hob-btn hob-btn-primary" disabled={!ready || busy} onClick={() => void submit()}>{t("保存并登录")}</button></div> : null}
     </div>
   );
 }
@@ -783,7 +762,8 @@ function ItemView({
   const [albumOpen, setAlbumOpen] = useState(false);
   // 带附件的不收：照片是定宽的，按文字收会把照片裁掉
   const bubble = useFit<HTMLDivElement>(item.kind === "user" && !item.files?.length ? item.text : undefined);
-  const preventMenu = tools.touch ? (event: React.MouseEvent) => event.preventDefault() : undefined;
+  // 手机上长按不弹系统菜单；浮起来或在选字的那条放行，系统才能选文字
+  const preventMenu = tools.touch ? (event: React.MouseEvent) => { if (!(event.target as Element).closest(".message-lifted, .message-selecting")) event.preventDefault(); } : undefined;
   const swipeStyle = tools.distance ? { transform: `translateX(-${Math.min(64, tools.distance * 0.8)}px)`, transition: "none" } : undefined;
   const progress = Math.min(1, tools.distance / 48);
   const swipeIcon = tools.distance > 0 ? <span className={`swipe-reply${tools.ready ? " ready" : ""}`} style={{ opacity: progress, transform: `scale(${progress})` }}><span className="swipe-reply-inner"><Icon name="reply" size={18} /></span></span> : null;
@@ -819,12 +799,10 @@ function ItemView({
         {forwarded ? <div className="forwarded-line">{forwarded && "assistantId" in forwarded ? (() => { const sender = s.assistants.find((a) => a.id === forwarded.assistantId); return t("从和「{name}」的对话转来", { name: sender?.name ?? forwarded.assistantId }); })() : t("从综合转来")}</div> : null}
         {album ? (
           <div className={`u-album${albumOpen ? " open" : ""}`} ref={hasBubble ? undefined : bubble} style={hasBubble ? undefined : swipeStyle}>
-            <button className="album-pill" onClick={() => setAlbumOpen(!albumOpen)}>{albumOpen ? t("收起") : t("展开 {n}", { n: photos.length })}</button>
-            {albumOpen ? (
+            {!albumOpen ? <PhotoStack photos={photos} onOpen={open} /> : null}
+            <Disclosure className="album-disclosure" label={t("照片")} count={photos.length} open={albumOpen} onToggle={() => setAlbumOpen(value => !value)}>
               <div className="album-list">{photos.map((f) => photo(f, "u-photo album-item"))}</div>
-            ) : (
-              <PhotoStack photos={photos} onOpen={open} />
-            )}
+            </Disclosure>
           </div>
         ) : null}
         {single ? (
@@ -848,6 +826,7 @@ function ItemView({
             <button onClick={() => discardPending(pend)}>{t("删除")}</button>
           </div>
         ) : null}
+        {pend ? null : <Reactions itemId={item.id} reactions={item.reactions ?? []} group={Boolean(mentions)} />}
         {pend ? null : <Tools text={item.text} itemId={item.id} />}
         </div>
       </div>
@@ -893,18 +872,8 @@ function ItemView({
     if (item.icon === "routine" && isRoutineDueNote(item.text, item.routineId)) {
       return <div className={`sys routine-note${fresh ? " enter-fade" : ""}`}><Icon name="clock" size={14} /><span>{item.text.replace(/，检查到：[\s\S]*$/u, "")}</span></div>;
     }
-    // 带原因的（工具没办成）：点开看工具报错的原文
-    if (item.detail) {
-      return (
-        <div className={`sys sys-why${fresh ? " enter-fade" : ""}`}>
-          {item.icon !== "split" ? <Icon name={NOTE_ICON[item.icon]} size={14} /> : null}
-          <details>
-            <summary>{item.text}</summary>
-            <div className="why">{item.detail}</div>
-          </details>
-        </div>
-      );
-    }
+    // 长原因用统一展开行；一两行能看完的原文直接显示
+    if (item.detail) return <NoteWithDetail icon={item.icon} text={item.text} detail={item.detail} fresh={fresh} />;
     return (
       <div className={`sys${fresh ? " enter-fade" : ""}`} id={item.handbackId ? `handback-${item.handbackId}` : undefined}>
         {item.targetGroupId && !item.handbackId && !(item.icon === "skill" && item.path) ? <button className="sys-group" onClick={() => void openNoteGroup(item.targetGroupId!)}>{item.icon !== "split" ? <Icon name={NOTE_ICON[item.icon]} size={14} /> : null}{item.text}</button> : <>
@@ -940,6 +909,11 @@ function ItemView({
   if (item.kind === "delegation") {
     const delegation = s.delegations[item.delegationId];
     return delegation ? <DelegationCard delegation={delegation} fresh={fresh} /> : null;
+  }
+
+  if (item.kind === "card") {
+    const card = s.cards[item.cardId];
+    return card ? <CardView record={card} fresh={fresh} itemId={item.id} /> : null;
   }
 
   if (item.kind === "topic") return <TopicCard topicId={item.topicId} fresh={fresh} itemId={item.id} />;
@@ -1073,7 +1047,8 @@ function useItemGestures() {
         if (interactive && !cardRoot) return;
         const row = event.currentTarget as HTMLElement;
         const anchor = target.closest<HTMLElement>(".u,.b,.tablecard,.igen,.filecard,.imgcard,.media-audio,.media-video") ?? row.querySelector<HTMLElement>(".u,.b,.tablecard,.igen,.filecard,.imgcard,.media-audio,.media-video");
-        if (!anchor || selected === anchor) return;
+        // 已经浮起来的那条再长按：交给系统选文字，不再弹我们的菜单
+        if (!anchor || selected === anchor || popupRef.current?.anchor === anchor) return;
         if (press.current) { window.clearTimeout(press.current.timer); press.current.anchor.classList.remove("message-press"); }
         anchor.classList.add("message-press");
         const { clientX: x, clientY: y, pointerId } = event;
@@ -1118,6 +1093,29 @@ export function visibleItems<T extends Item>(items: T[]): T[] {
     if (item.kind === "job") return (item.round ?? 0) === latest.get(item.jobId);
     return true;
   });
+}
+
+/** 这一页上已经出现过的回应：第一次画出来的不弹，之后新挂上、换了表情的才弹一下 */
+const shownReactions = new Set<string>();
+
+/**
+ * 你消息下面贴着气泡的小胶囊：助手的表情回应（模型点的，或者它回了 NO_REPLY 时系统替它挂的 👀）。
+ * 群里每个助手一个，带它的头像；单聊只有一个助手，只放表情。
+ */
+function Reactions({ itemId, reactions, group }: { itemId: string; reactions: { by: string; emoji: string }[]; group: boolean }) {
+  const s = useApp();
+  const mounted = useRef(false);
+  const keys = reactions.map((r) => `${itemId}:${r.by}:${r.emoji}`);
+  const pop = new Set(mounted.current ? keys.filter((key) => !shownReactions.has(key)) : []);
+  useEffect(() => { mounted.current = true; for (const key of keys) shownReactions.add(key); });
+  if (!reactions.length) return null;
+  return <div className="reactions">{reactions.map((r, i) => {
+    const a = s.assistants.find((x) => x.id === r.by);
+    return <span className="reaction" key={r.by} title={a?.name}>
+      <span className={`reaction-emoji${pop.has(keys[i]) ? " pop" : ""}`} key={r.emoji}>{r.emoji}</span>
+      {group && a ? <Avatar sprite={a.sprite} prop={a.prop} size={16} /> : null}
+    </span>;
+  })}</div>;
 }
 
 export function ItemList({ items: all }: { items: Item[] }) {

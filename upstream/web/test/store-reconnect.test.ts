@@ -54,6 +54,7 @@ describe("实时连接重连", () => {
     expect(store.getState()).toMatchObject({ mobile: "chat", gsel: "g" });
     handlers.onReconnect!();
     await vi.waitFor(() => expect(store.getState().groupGen.g).toBe(2));
-    expect(store.getState()).toMatchObject({ mobile: "chat", gsel: "g", panelStack: [{ kind: "job", id: "j1" }], quote: { text: "原话" } });
+    expect(store.getState()).toMatchObject({ mobile: "chat", gsel: "g", panelStack: [{ kind: "job", id: "j1" }] });
+    expect(store.composerDraft(store.getState()).quote).toEqual({ itemId: "x", text: "原话" });
   });
 });

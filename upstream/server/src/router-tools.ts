@@ -2,12 +2,14 @@ import { t } from "../../shared/i18n.ts";
 import { Type } from "typebox";
 import { propArtSchema } from "./prop-art-schema.ts";
 import { createReadToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { readFile } from "node:fs/promises";
 import { IMAGE_TYPES } from "../../shared/media.ts";
-import { lookupFile, isInPagesDir } from "./files.ts";
+import { checkSensitivePath, lookupFile, isInPagesDir, OUTSIDE_HOB } from "./files.ts";
 import { resolveMovedPath } from "./layout.ts";
+import { assistantFilesDir, assistantWorkDir } from "./config.ts";
 import {
   COLORS,
   COLOR_IDS,
@@ -20,7 +22,9 @@ import {
 } from "../../shared/sprites.ts";
 import type { ColorId } from "../../shared/sprites.ts";
 import { buildAdminTools } from "./admin-tools.ts";
-import type { Approval, ApprovalQuestion, CustomProp, Job, Routine, RoutineCheck } from "../../shared/types.ts";
+import type { Approval, ApprovalQuestion, ApprovalQuestionInput, CardRecord, CustomProp, Job, Routine, RoutineCheck } from "../../shared/types.ts";
+import { loginCard, prepareLogin } from "./login.ts";
+import { prepareFillNewPassword } from "./new-password.ts";
 import { cronToChinese, timePointText } from "./cron-text.ts";
 import { newId } from "./ids.ts";
 import { findKnowledgeTool, searchKnowledgeTool } from "./knowledge-tools.ts";
@@ -30,15 +34,21 @@ import { overviewTool } from "./overview.ts";
 import { pageTool } from "./pages.ts";
 import { pushApproval } from "./push.ts";
 import { searchTools } from "./search.ts";
+import { searchPluginsTool } from "./search-plugins.ts";
 import type { HobRuntime } from "./runtime.ts";
-import { assistantSkillsDir, groupSkillsDir, listSkills, readAssistantSkillBody, saveSkill, moveSkill } from "./assistant-skills.ts";
-import { bundledPlaywrightSkillDir, generalSkillsDir, notEditable, skillDirOf, syncGeneralIndex, visibleSkills } from "./skills.ts";
-import { jobView } from "./job-view.ts";
+import { assistantSkillsDir, groupSkillsDir, listSkills } from "./assistant-skills.ts";
+import { bundledPlaywrightSkillDir, generalSkillsDir, notEditable, skillDirOf, visibleSkills } from "./skills.ts";
+import { jobView, reviewedSkillsText } from "./job-view.ts";
 import { HANDOVER_EVENT } from "./groups.ts";
 import { sessionOrigin } from "./origin.ts";
 import { deleteSkill } from "./delete-skill.ts";
 import { askOptions, cleanRecommended, unnumber } from "./worker-tools.ts";
 import { handOffTodos, readTodos, sessionTodosPath, updateTodosTool } from "./todos.ts";
+import { searchHistory } from "./history.ts";
+import { saveSkillTool } from "./save-skill.ts";
+import { validateCard } from "./cards.ts";
+import { markdownToCard } from "./card-markdown.ts";
+import { CWD_IMMUTABLE, normalizeWorkspaceCwdInput, resolveWorkspaceCwd } from "./workspace.ts";
 
 type Tool = ToolDefinition<any, any>;
 
@@ -49,25 +59,19 @@ const SCHEDULES_DESCRIPTION = "一个或多个；可以是 cron 表达式，也�
 const ONCE_DESCRIPTION = "可选。为 true 时设置为仅运行一次：没有检查脚本的，运行一次后停止；有检查脚本的，第一次有输出后停止。已停止的定时任务还在，可以重新启用。";
 
 /** 检查脚本参数：create_routine 和 update_routine 共用。 */
-const CHECK_DESCRIPTION = "可选。到执行时间先运行的 bash 脚本，填脚本全文：没有输出就这次什么都不做；有输出时，then 为 notify 就把输出作为提醒发到对话，为 job 就带着输出启动任务。每次有输出都会这样处理一次，不看上一次的处理完没有：同一件事连着输出几次，就会处理几次；只该处理一次的，在状态文件里记下已经输出过的，下次跳过。脚本在这个定时任务自己的目录里运行，状态文件存在当前目录，记住上次看到哪里；第一次运行还没有状态时只记下现状，不输出。非零退出算检查失败。脚本用到的其他文件也放在这个目录，跟着定时任务走。";
+const CHECK_DESCRIPTION = "可选。到执行时间先运行的 bash 脚本，填脚本全文：没有输出就这次什么都不做；有输出时，then 为 notify 就把输出作为提醒发到对话，为 job 就把输出和任务内容一起交给你处理。每次有输出都会这样处理一次，不看上一次的处理完没有：同一件事连着输出几次，就会处理几次；只该处理一次的，在状态文件里记下已经输出过的，下次跳过。脚本里要调用你的工具（包括插件），用 node 运行 JS，全局对象 tools 就是你能用的工具。脚本在这个定时任务自己的目录里运行，状态文件存在当前目录，记住上次看到哪里；第一次运行还没有状态时只记下现状，不输出。非零退出算检查失败。脚本用到的其他文件也放在这个目录，跟着定时任务走。";
 
-const checkDescription = (group: boolean) => group ? CHECK_DESCRIPTION.replace("then 为 notify 就把输出作为提醒发到对话，为 job 就带着输出启动任务", "then 为 notify 就把输出作为提醒发到群里，为 job 就带着输出交给群主处理") : CHECK_DESCRIPTION;
+const checkDescription = (group: boolean) => group ? CHECK_DESCRIPTION.replace("then 为 notify 就把输出作为提醒发到对话，为 job 就把输出和任务内容一起交给你处理", "then 为 notify 就把输出作为提醒发到群里，为 job 就把输出和任务内容一起交给群主处理") : CHECK_DESCRIPTION;
 const checkParam = (group: boolean) => Type.Object({
   script: Type.String({ description: "bash 脚本全文" }),
-  then: Type.Union([Type.Literal("notify"), Type.Literal("job")], { description: group ? "有输出时：notify 把输出作为提醒发到群里，job 交给群主处理" : "有输出时：notify 把输出作为提醒发到对话，job 带着输出启动任务" }),
+  then: Type.Union([Type.Literal("notify"), Type.Literal("job")], { description: group ? "有输出时怎么办。notify：把输出原样发到群里提醒用户，不叫醒群主，任务内容不会执行；job：把输出和任务内容一起交给群主，由群主处理。要看了输出再判断、再动手的，填 job。" : "有输出时怎么办。notify：把输出原样发到对话提醒用户，不叫醒你，任务内容不会执行；job：把输出和任务内容一起交给你，由你处理。要看了输出再判断、再动手的，填 job。" }),
 }, { description: checkDescription(group) });
 
-/** edit_skill / save_job_as_skill 的 general 参数：换给谁用 / 新建在哪。 */
-const generalParam = (group: boolean) => Type.Optional(Type.Boolean({
-  description: group ? "可选，换这份技能给谁用：true 换成通用的，所有助手都能用；false 收回来，归本群。" : "可选，换这份技能给谁用：true 换成通用的，所有助手都能用；false 收回来，归你。",
-}));
-const intoGeneralParam = (group: boolean) => Type.Optional(Type.Boolean({
-  description: group ? "可选，填 true 新建成通用技能，所有助手都能用；不填，新建的归本群。填了 into 就是改那份，不看这一项。" : "可选，填 true 新建成通用技能，所有助手都能用；不填，新建的归你。填了 into 就是改那份，不看这一项。",
-}));
+const QUESTION_INPUTS: readonly ApprovalQuestionInput[] = ["text", "multiline", "number", "date", "time"];
 
-/** ask_user 的 questions 参数说明：照抄 .scratch/v2/design-projects.md 第五节，一字不改。 */
+/** ask_user 的 questions 参数说明。 */
 const QUESTIONS_DESCRIPTION =
-  "可选，一次问几个问题时用，每个写 `title`（问题）、`why`（为什么要定它）、`options`（2 到 3 个选项）、`recommended`（推荐哪个选项）。用户答完，答案一起回来。";
+  "可选，一次问几个问题时用。每个问题写 `title`（问题）、`why`（为什么要问它）；选择题写 `options`（2 到 3 个选项）和 `recommended`（推荐哪个选项），填空题不写 `options`，写 `input`（`text` 一行字、`multiline` 一段话、`number` 数字、`date` 日期、`time` 时间）和可选的 `placeholder`。用户答完，答案一起回来。";
 
 
 /** 单问题卡的选项列表。 */
@@ -97,6 +101,33 @@ function approvalFromParams(assistantId: string, groupId: string | undefined, pa
       const n = index + 1;
       const title = titles[index];
       if (!title) return { error: `第 ${n} 个问题缺 title：每个问题都要写清问什么。` };
+      const hasOptions = item?.options !== undefined && item?.options !== null;
+      const hasInput = item?.input !== undefined && item?.input !== null;
+      if (hasOptions && hasInput) {
+        return { error: `第 ${n} 个问题不能同时带 options 和 input：选择题只写 options，填空题只写 input。` };
+      }
+      if (!hasOptions && !hasInput) {
+        return { error: `第 ${n} 个问题缺 options 或 input：选择题写 options（2 到 3 个选项），填空题写 input（text、multiline、number、date 或 time）。` };
+      }
+      const why = typeof item?.why === "string" ? item.why.trim() : "";
+      if (hasInput) {
+        const input = typeof item.input === "string" ? item.input.trim() : "";
+        if (!QUESTION_INPUTS.includes(input as ApprovalQuestionInput)) {
+          return { error: `第 ${n} 个问题的 input 只能是 text、multiline、number、date 或 time，现在填的是「${String(item.input)}」：改成这五种之一。` };
+        }
+        if (item?.recommended !== undefined && item?.recommended !== null && String(item.recommended).trim() !== "") {
+          return { error: `第 ${n} 个问题是填空题，不能带 recommended：去掉 recommended。` };
+        }
+        const placeholder = typeof item?.placeholder === "string" ? item.placeholder.trim() : "";
+        questions.push({
+          title,
+          ...(why ? { why } : {}),
+          options: [],
+          input: input as ApprovalQuestionInput,
+          ...(placeholder ? { placeholder } : {}),
+        });
+        continue;
+      }
       const labels = Array.isArray(item?.options) ? item.options.map((option: any) => String(option?.label ?? "").trim()) : [];
       if (labels.length < 2 || labels.length > 3) {
         return { error: `第 ${n} 个问题的选项要 2 到 3 个，现在有 ${labels.length} 个：合并相近的选项，或者把它拆成两个问题。` };
@@ -107,7 +138,6 @@ function approvalFromParams(assistantId: string, groupId: string | undefined, pa
       if (recommended && !hit) {
         return { error: `第 ${n} 个问题的 recommended 要和其中一个选项的文字一字不差，现在填的是「${recommended}」：填${options.map((option) => `「${option.label}」`).join("或")}。` };
       }
-      const why = typeof item?.why === "string" ? item.why.trim() : "";
       questions.push({ title, ...(why ? { why } : {}), options, ...(hit ? { recommended: hit.key } : {}) });
     }
     return { ...base, options: [], questions };
@@ -121,12 +151,12 @@ function approvalFromParams(assistantId: string, groupId: string | undefined, pa
 }
 
 /** 工具返回里说的「每 10 分钟」这类：具体时间只说那一刻，有检查脚本的说明有新内容会怎样，开了 once 的说明会停。 */
-function routineFact(schedules: string[], check: RoutineCheck | undefined, once: boolean | undefined): string {
+function routineFact(schedules: string[], check: RoutineCheck | undefined, once: boolean | undefined, group = false): string {
   const points = schedules.map((schedule) => timePointText(schedule));
   const labels = schedules.map((schedule, index) => points[index] ?? cronToChinese(schedule));
   const facts: string[] = [];
   if (points.every(Boolean)) facts.push(`${labels.join("、")}运行一次`);
-  if (check) facts.push(`${labels.join("、")}检查一次${check.then === "notify" ? "，有新内容就提醒你" : "，有新内容就启动任务"}`);
+  if (check) facts.push(`${labels.join("、")}检查一次${check.then === "notify" ? `，有输出时原样发到${group ? "群里" : "对话"}，任务内容不会执行` : `，有输出时连同任务内容交给${group ? "群主" : "你"}处理`}`);
   if (once) facts.push(t("运行一次后停止"));
   return facts.length ? `，${facts.join("；")}` : "";
 }
@@ -154,6 +184,19 @@ function fail(text: string) {
   return { content: [{ type: "text" as const, text }], details: undefined, isError: true };
 }
 
+const GRAPHEME_SEGMENTER = new Intl.Segmenter("en", { granularity: "grapheme" });
+
+/** 是否正好是一个表情符号（用 Intl.Segmenter 数字素）。 */
+export function isSingleEmoji(raw: string): boolean {
+  const emoji = raw.trim();
+  if (!emoji) return false;
+  const graphemes = [...GRAPHEME_SEGMENTER.segment(emoji)];
+  if (graphemes.length !== 1) return false;
+  return /\p{Extended_Pictographic}/u.test(emoji)
+    || /^\p{Regional_Indicator}{2}$/u.test(emoji)
+    || /^[#*0-9]\uFE0F?\u20E3$/u.test(emoji);
+}
+
 function fileMeta(path: string): string | undefined {
   try {
     if (!statSync(path).isFile()) return undefined;
@@ -168,8 +211,19 @@ function fileMeta(path: string): string | undefined {
 }
 
 /** 一个助手的 Router 能用的全部工具。改状态的工具都写卡片 + 发事件。 */
-export function buildRouterTools(runtime: HobRuntime, assistantId: string, groupId?: string, cwd = runtime.home): Tool[] {
+export function buildRouterTools(
+  runtime: HobRuntime,
+  assistantId: string,
+  groupId?: string,
+  cwd = runtime.home,
+  ownWorkDir = assistantWorkDir(runtime.home, assistantId),
+): Tool[] {
   const { store, bus, router, jobs, routines } = runtime;
+  const resolvedWorkspace = resolveWorkspaceCwd(store, runtime.home, assistantId, groupId);
+  const boundSession = Boolean(resolvedWorkspace.bound);
+  const currentGroup = groupId ? store.group(groupId) : undefined;
+  const parentGroup = currentGroup?.parentId ? store.group(currentGroup.parentId) : currentGroup;
+  const groupHasBoundCwd = Boolean(parentGroup?.cwd);
   const assistant = () => {
     const found = store.assistant(assistantId);
     if (!found) throw new Error(`助手不存在：${assistantId}`);
@@ -177,6 +231,24 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
   };
   const note = (icon: "memory" | "rule" | "routine" | "split" | "info" | "skill", text: string) =>
     router.addItem(assistantId, { kind: "note", icon, text }, groupId);
+  const presentApproval = async (approval: Approval, signal?: AbortSignal) => {
+    const cancel = () => {
+      const current = store.approval(approval.id);
+      if (!current || current.status !== "pending") return;
+      const expired: Approval = { ...current, status: "expired" };
+      store.saveApproval(expired);
+      bus.emit({ type: "approval", approval: expired });
+      if (groupId) runtime.groups.publish(groupId);
+    };
+    if (signal?.aborted) cancel(); else signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      signal?.throwIfAborted();
+      await router.addItem(assistantId, { kind: "question", approvalId: approval.id }, groupId);
+      signal?.throwIfAborted();
+      bus.emit({ type: "approval", approval });
+      pushApproval({ push: runtime.push, store }, approval);
+    } finally { signal?.removeEventListener("abort", cancel); }
+  };
   const profileChanged = (target = assistantId) => bus.emit({ type: "profile", assistantId: target });
   /**
    * 主助手的规则、定时和技能工具多一个 assistantId：填了就操作那个助手的，
@@ -243,18 +315,6 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
     return `${groupId ? "本群" : ownerId === assistantId ? "你" : `「${store.assistant(ownerId)?.name ?? ownerId}」`}现在${left.length ? `的定时任务：${left.map((routine) => `「${routine.name}」（${routine.id}）`).join("、")}` : "没有定时任务"}。`;
   };
 
-  /** 换范围后的提示行：和删技能的提示行同一种样子。 */
-  const moveNote = (name: string, title: string, to: "general" | "group" | "assistant", ownerId: string): string => {
-    const whose = whoseSkill(to === "general" ? generalSkillsDir(runtime.home) : to === "group" ? groupSkillsDir(runtime.home, groupIdId()) : assistantSkillsDir(runtime.home, ownerId), ownerId);
-    if (to === "general") return t("已把{whose}技能「{title}」改为通用技能", { whose, title });
-    if (to === "group") return t("已把{whose}技能「{title}」收回本群", { whose, title });
-    return ownerId !== assistantId ? t("已把{whose}技能「{title}」收回给「{name}」", { whose, title, name: nameOf(ownerId) }) : t("已把{whose}技能「{title}」收回来", { whose, title });
-  };
-  const groupIdId = () => {
-    const group = groupId ? store.group(groupId) : undefined;
-    return group ? group.parentId ?? group.id : "";
-  };
-
   // 能派的模型：写进 start_job 的参数说明，助手知道有哪些可选、哪个是默认
   const modelSettings = runtime.settings.settings.models;
   const modelAssistant = assistantInGroup(assistant(), groupId ? store.group(groupId) : undefined, runtime.models, modelSettings);
@@ -277,8 +337,13 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
       if (file.startsWith(`${root}${sep}`) && statSync(file).isFile()) return file;
     } catch { /* 交给普通文件规则报告错误 */ }
     const found = lookupFile(runtime.home, path, [...store.jobs().flatMap((job) => job.cwd ? [job.cwd] : []), cwd]);
-    if (!found.ok) throw new Error(found.error);
-    return found.info.path;
+    if (found.ok) return found.info.path;
+    // 技能清单里列出来的文件都能读：Lore 的在 system/ 里，本机和自带的在数据目录外，普通文件规则会拒掉
+    try {
+      const file = realpathSync(path);
+      if (statSync(file).isFile() && visibleSkills(runtime, assistantId, currentGroup).some((skill) => file.startsWith(`${realpathSync(skill.dir)}${sep}`))) return file;
+    } catch { /* 按普通文件规则的原因报 */ }
+    throw new Error(found.error);
   };
   const read = createReadToolDefinition(cwd, { operations: {
     access: async (path) => { checkFile(path); },
@@ -286,7 +351,52 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
     detectImageMimeType: async (path) => IMAGE_TYPES[extname(checkFile(path)).toLowerCase()],
   } }) as unknown as Tool;
   delete (read as { promptSnippet?: unknown }).promptSnippet; // 用了自定义系统提示词，引擎自带的这段不进提示词
+  const credentialsAvailable = (() => {
+    const desktop = runtime.desktop.view();
+    return desktop.enabled && Boolean(desktop.url && desktop.tokenConfigured) && runtime.plugins.hasCredentialProvider(assistantId);
+  })();
+  const fillNewPasswordAvailable = (() => {
+    const desktop = runtime.desktop.view();
+    return desktop.enabled && Boolean(desktop.url && desktop.tokenConfigured) && runtime.plugins.hasPasswordGenerator(assistantId);
+  })();
   const tools: Tool[] = [
+    {
+      name: "react",
+      label: "表情回应",
+      description: "给用户最新的一条消息加一个表情回应，显示在那条消息的右下角，像聊天软件里的点赞。再调一次会换成新的表情。",
+      parameters: Type.Object({
+        emoji: Type.String({ description: "一个 emoji，比如 👍 ✅ ❤️ 😂" }),
+      }),
+      execute: async (_id, params: { emoji: string }) => {
+        const emoji = typeof params.emoji === "string" ? params.emoji.trim() : "";
+        if (!isSingleEmoji(emoji)) return fail("emoji 要正好一个表情，比如 👍");
+        const result = groupId ? runtime.groups.react(groupId, assistantId, emoji) : router.react(assistantId, emoji);
+        if (!result.ok) return fail(result.error);
+        return ok(`已给用户的消息点了 ${emoji}。`);
+      },
+    },
+    {
+      name: "search_history",
+      label: "搜索聊天记录",
+      description: "在所有单聊、群和话题的聊天记录里按文字找消息，也能只看用户收藏过的消息。按时间从新到旧返回，每条带对话名、说话人、时间和命中处前后的一段原文。",
+      parameters: Type.Object({
+        query: Type.Optional(Type.String({ description: "要找的文字，空格隔开的几个词都要出现，不分大小写；只看收藏时可以不填。" })),
+        starred: Type.Optional(Type.Boolean({ description: "填 true 只找用户收藏过的消息。" })),
+      }),
+      execute: async (_id, params: { query?: string; starred?: boolean }) => {
+        const query = params.query?.trim() ?? "";
+        if (!query && !params.starred) return fail("query 和 starred 至少填一个");
+        try {
+          const { results, total } = await searchHistory(store, { query, starred: params.starred, limit: 20, context: 80 });
+          if (!total) return ok(params.starred && !store.stars().length ? "用户还没有收藏过消息" : `没找到包含「${query}」的消息`);
+          const lines = results.map((item) => `${item.starred ? "★" : ""}[${item.at}] ${item.conversationName} · ${item.speakerName}：${item.snippet}`);
+          if (total > results.length) lines.push(`还有 ${total - results.length} 条没列出，换更具体的词再找`);
+          return ok(lines.join("\n"));
+        } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
+      },
+    },
+    saveSkillTool(runtime, assistantId, groupId, cwd, undefined, [cwd, ownWorkDir]),
+    searchPluginsTool(runtime.plugins, assistantId),
     {
       name: "check_job",
       label: "查看任务",
@@ -301,53 +411,6 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
             return ok("和你上次查看时一样，没有新的步骤。任务结束或提问时会通知你。");
           }
           return ok(jobView({ ...job, cwd: job.cwd ?? store.workDir(job.id) }, transcript, store.approvals(), visibleSkills(runtime, job.assistantId, job.groupId ? store.group(job.groupId) : undefined), runtime.settings.settings.general.timezone, undefined, jobOrigin(job)));
-        } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
-      },
-    },
-    {
-      name: "edit_skill",
-      label: "修改技能",
-      description: `修改一个技能的正文（SKILL.md）：把一段原文换成新的文字，旧版会保留。脚本需要修改的，交给任务修改。也能换它给谁用。${groupId ? "在群里按名字先找本群的技能，再找你自己的。" : ""}`,
-      parameters: Type.Object({
-        name: Type.String({ description: "技能名" }),
-        edits: Type.Optional(Type.Array(Type.Object({ old: Type.String(), new: Type.String() }), { description: "一处或几处修改：old 是正文里的原文，要一字不差、只出现一次；new 是换成的文字；只换给谁用时不填" })),
-        general: generalParam(!!groupId),
-        ...(assistant().primary && !groupId ? { assistantId: Type.Optional(Type.String({ description: "可选，改哪个助手的；不填是你自己的" })) } : {}),
-      }),
-      execute: async (_id, params: { name: string; edits?: { old: string; new: string }[]; general?: boolean; assistantId?: string }) => {
-        const target = targetOf(params.assistantId);
-        if ("error" in target) return fail(target.error);
-        try {
-          const found = findSkill(target.id, params.name);
-          if (found.problem || !found.skill || !found.dir) return fail(found.problem!);
-          const edits = Array.isArray(params.edits) ? params.edits : [];
-          if (!edits.length && typeof params.general !== "boolean") return fail("edits 和 general 至少填一样：改正文填 edits，换给谁用填 general。");
-          let saved: { name: string; title?: string; version?: number } = found.skill;
-          if (edits.length) {
-            let body = readAssistantSkillBody(found.skill.path);
-            for (const edit of edits) {
-              if (!edit.old) return fail("原文不能为空");
-              const count = body.split(edit.old).length - 1;
-              if (!count) return fail(`正文里找不到这段原文：${[...edit.old].slice(0, 30).join("")}`);
-              if (count > 1) return fail(`这段原文出现了 ${count} 次，多带几个字`);
-              body = body.replace(edit.old, () => edit.new);
-            }
-            saved = saveSkill(found.dir, { name: found.skill.name, title: found.skill.title ?? found.skill.name, description: found.skill.description, content: body });
-          }
-          if (typeof params.general === "boolean") {
-            const group = groupId ? store.group(groupId) : undefined;
-            const to = params.general ? "general" : group ? "group" : "assistant";
-            const toDir = params.general ? generalSkillsDir(runtime.home) : group ? groupSkillsDir(runtime.home, group.parentId ?? group.id) : assistantSkillsDir(runtime.home, target.id);
-            if (toDir !== found.dir) {
-              // 通用目录里可能有还没登记的技能：先把索引补齐，换范围时不能把它们丢了
-              if (params.general) syncGeneralIndex(toDir);
-              const conflict = params.general ? t("已有名为 {name} 的通用技能", { name: found.skill.name }) : group ? t("本群已有名为 {name} 的技能", { name: found.skill.name }) : t("你已有名为 {name} 的技能", { name: found.skill.name });
-              moveSkill(found.dir, toDir, found.skill.name, conflict);
-            }
-            await note("skill", moveNote(params.name, saved.title ?? found.skill.name, to, target.id));
-          }
-          bus.emit({ type: "skills", assistantId: target.id });
-          return ok(edits.length ? `已更新技能「${saved.title ?? saved.name}」，第 ${saved.version} 版。` : "已换好。");
         } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
       },
     },
@@ -374,15 +437,14 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
       },
     },
     {
-      name: "save_job_as_skill",
+      name: "review_job",
       label: "沉淀技能",
-      description: `让一个已经结束的任务（做完、受阻、失败或停下的都行）把它的做法写成技能。它在自己的会话里写，能把脚本和命令真跑一遍验证；进度和结果显示在任务卡片上。${groupId ? "群里的任务新沉淀的技能归这个群；into 填哪份就改哪份。" : ""}`,
-      parameters: Type.Object({ jobId: Type.String(), into: Type.Optional(Type.String({ description: "可选，在哪个已有技能的基础上改，填技能名；不填就新建。" })), general: intoGeneralParam(!!groupId), note: Type.Optional(Type.String({ description: "可选，要交代给任务的话，比如用户的反馈和纠正、要一起并进来的技能。" })) }),
-      execute: async (_id, params: { jobId: string; into?: string; general?: boolean; note?: string }) => {
+      description: "让一个已经结束的任务（做完、受阻、失败或停下的都行）回顾这次的做法，值得留的它自己存成技能。它在自己的会话里写，能把脚本和命令真跑一遍验证；进度和结果显示在任务卡片上。",
+      parameters: Type.Object({ jobId: Type.String({ description: "任务 id。" }), note: Type.Optional(Type.String({ description: "可选，要交代给任务的话，比如用户的反馈和纠正、要一起并进来的技能。" })) }),
+      execute: async (_id, params: { jobId: string; note?: string }) => {
         const job = store.job(params.jobId);
-        // 群里的任务大家可以接手：分派给其他成员执行的，结果回到分派任务的助手，沉淀也由它发起
         if (!job || (job.assistantId !== assistantId && !(groupId && canManageJob(params.jobId)))) return fail("任务不存在");
-        try { jobs.startSediment(job.id, { into: params.into || undefined, note: params.note || undefined, general: params.general === true }); return ok("已开始沉淀，进度显示在任务卡片上。"); }
+        try { jobs.startSediment(job.id, { note: params.note || undefined }); return ok("已开始回顾，进度显示在任务卡片上。"); }
         catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
       },
     },
@@ -426,8 +488,9 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
         note: Type.String({ description: HANDOFF_NOTE_DESCRIPTION }),
         cwd: Type.Optional(
           Type.String({
-            description:
-              "可选。填了，任务的命令默认就在这个目录里运行，改动直接落在这里，适合直接修改一个现成的项目。不填，任务在自己的目录里执行；只是读取某个项目，或者要另拉一份隔离着执行，不用填。相对路径以你的工作目录为准。",
+            description: boundSession
+              ? `可选。不填，任务就在 ${resolvedWorkspace.bound} 里运行；填它里面的一个子目录，任务就在那里运行，比如几个任务要并行改同一个项目，各给一份 worktree。相对路径以 ${resolvedWorkspace.bound} 为准。`
+              : "可选。填了，任务的命令默认就在这个目录里运行，改动直接落在这里，适合直接修改一个现成的项目。不填，任务在自己的目录里执行；只是读取某个项目，或者要另拉一份隔离着执行，不用填。相对路径以你的工作目录为准。",
           }),
         ),
         files: Type.Optional(
@@ -443,7 +506,7 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
           thinking: Type.Optional(Type.String({ description: "可选：思考档以可分派模型列表里每个模型标的为准。不填用模型的默认思考档。" })),
         }),
       }),
-      execute: async (_id, params: any) => {
+      execute: async (_id, params: any, signal) => {
         try {
           if (params.expect_minutes != null && (!Number.isInteger(params.expect_minutes) || params.expect_minutes < 1 || params.expect_minutes > 10080)) return fail("expect_minutes 要在 1 到 10080 之间");
           const note = String(params.note ?? "").trim();
@@ -452,6 +515,8 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
           // 群里可以指名成员：任务以它的身份跑（提示词、技能、记忆、默认模型都算它的），结果回到这个会话
           const assignee = assigneeOf(groupId ? params.assistantId : undefined);
           if ("error" in assignee) return fail(assignee.error);
+          const rawCwd = normalizeWorkspaceCwdInput(params.cwd);
+          const explicitCwd = rawCwd ? resolve(cwd, rawCwd) : undefined;
           const job = await jobs.start(assignee.id, {
             title: String(params.title),
             ...(groupId ? { groupId } : {}),
@@ -459,13 +524,13 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
             ...(params.expect_minutes != null ? { expectMinutes: params.expect_minutes } : {}),
             instruction: note,
             ...(Array.isArray(params.after) && params.after.length ? { after: params.after.map(String) } : {}),
-            ...(params.cwd ? { cwd: resolve(cwd, String(params.cwd)) } : {}),
+            ...(explicitCwd ? { cwd: explicitCwd } : {}),
             ...(files.length ? { files } : {}),
             ...(params.model ? { model: String(params.model) } : {}),
             ...(params.thinking ? { thinking: String(params.thinking) } : {}),
             ...(router.currentDelegation(assistantId, groupId) ? { delegationId: router.currentDelegation(assistantId, groupId) } : {}),
             ...(router.currentRoutineId(assistantId, groupId) ? { routineId: router.currentRoutineId(assistantId, groupId) } : {}),
-          });
+          }, signal);
           if (job.status === "failed") return fail(`任务启动失败：${job.statusReason ?? "原因不明"}`);
           if (assignee.id !== assistantId) return ok(`已派给「${nameOf(assignee.id)}」：${job.title}（${job.id}）。结果会回到这里。`);
           if (job.after?.length) {
@@ -493,11 +558,12 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
           const jobId = String(params.jobId);
           if (!canManageJob(jobId)) return fail(`没有这个任务：${jobId}`);
           const job = store.job(jobId)!;
-          await jobs.reply(jobId, String(params.text), "router");
+          const interrupted = await jobs.reply(jobId, String(params.text), "router");
           const origin = jobOrigin(job);
-          return ok(origin
+          const text = origin
             ? `已交给任务「${job.title}」（${jobId}），它会接着做。这个任务是${origin}创建的，结果回到那边。`
-            : `已交给任务「${job.title}」（${jobId}），它会接着做，结果会回到这里。`);
+            : `已交给任务「${job.title}」（${jobId}），它会接着做，结果会回到这里。`;
+          return ok(`${text}${interrupted ? `它的回顾停了，${reviewedSkillsText(interrupted)}` : ""}`);
         } catch (error) {
           return fail(error instanceof Error ? error.message : String(error));
         }
@@ -523,42 +589,138 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
       },
     },
     {
-      name: "ask_login",
-      label: "请用户登录",
-      description: "请用户在桌面上登录一个网站：碰到登录页、两步验证、验证码这类只能用户本人完成的步骤时用。会出一张卡，用户登录完会告诉你；登录信息所有助手共用，登一次就行。",
+      name: "send_card",
+      label: "发送卡片",
+      description: `**说明**：在对话里发一张卡片。卡片有自己的标题、分栏、表格和折叠的段落，用来放文档式排版的内容；也可以让用户填表、选择、点按钮。卡片里有能操作的东西时，这一轮在这里结束，用户操作完，结果会作为系统消息回到对话；只有展示内容的卡片不结束这一轮。你发的卡片不能有密码框：密码、密钥这类值要用插件的卡片收，不经过你。
+
+**参数**
+- \`markdown\`：卡片内容。普通的 Markdown 照常写（小标题、列表、表格、代码块、链接），另外有这些写法：
+  - 卡片标题：第一行写 \`# 标题\`；紧跟着的一行普通文字是副标题，可以不写。
+  - 单独一行 \`---\` 是分割线；单独一行 \`![说明](https://…)\` 是图片。
+  - 分栏：单独一行 \`::: columns\` 开始，单独一行 \`:::\` 结束，栏和栏之间单独一行 \`+++\`。手机上会竖着排。各栏宽度不一样时写 \`::: columns{weights="2 1"}\`。
+  - 折叠：\`<details><summary>标题</summary>\` 开始，\`</details>\` 结束，中间是默认收起的内容；写成 \`<details open>\` 默认展开。
+  - 能操作的组件一行一个，写成 \`::组件[文字]{属性}\`，属性之间用空格隔开，带空格的值加引号：
+    - \`::input[标签]{name=… placeholder="…" default="…" required}\`：输入框，一行字。加 \`type=multiline\` 是一段话，\`type=number\` 是数字，可以加 \`min=\`、\`max=\`。
+    - \`::select[标签]{name=… options="选项1|选项2|选项3" default="选项1" required}\`：单选。\`::multiselect\` 是多选，\`default\` 里几个默认选中的也用 \`|\` 隔开。
+    - \`::date[标签]{name=… required}\`、\`::time[标签]{…}\`、\`::datetime[标签]{…}\`：日期、时间、日期和时间。
+    - \`::checkbox[文字]{name=… checked}\`：开关，写 \`checked\` 默认打开。
+    - \`::button[文字]{primary}\`：按钮，\`primary\` 是主按钮，\`danger\` 是危险操作。写 \`url=https://…\` 是打开网址；在表单里写 \`submit\` 是提交表单；其余的点了就算一次操作。
+  - 表单：单独一行 \`:::form{name=…}\` 开始，单独一行 \`:::\` 结束，里面的输入在点 \`submit\` 按钮时一起交回。表单里的每个输入都要有不重复的 \`name\`。`,
       parameters: Type.Object({
-        site: Type.String({ description: "哪个网站" }),
-        reason: Type.String({ description: "为什么要登录，一句话" }),
+        markdown: Type.String({ description: "卡片内容，Markdown" }),
       }),
-      execute: async (_id, params: any) => {
-        const site = String(params.site ?? "").trim();
-        const reason = String(params.reason ?? "").trim();
-        if (!site || !reason) return fail("site 和 reason 都要填写清楚。");
-        const approval: Approval = {
-          id: newId("q-"),
-          assistantId,
-          title: t("需要登录：{site}", { site }),
-          detail: reason,
-          options: [{ key: "A", label: "已登录" }],
-          recommended: "A",
-          status: "pending",
-          source: "router",
+      execute: async (_id, params: { markdown?: unknown }) => {
+        if (typeof params.markdown !== "string" || !params.markdown.trim()) {
+          return fail("卡片内容不能为空。");
+        }
+        const { card, warnings, errors } = markdownToCard(params.markdown);
+        if (errors.length) return fail(`卡片格式不对：${errors.join("；")}`);
+        const result = validateCard(card);
+        if (!result.ok) {
+          const error = result.error.error.startsWith("卡片不能有")
+            ? `你发的${result.error.error}`
+            : `卡片格式不对：${result.error.error}`;
+          return fail(error);
+        }
+        const record: CardRecord = {
+          id: newId("c-"),
+          owner: { type: "assistant", assistantId },
           ...(groupId ? { groupId } : {}),
-          login: { site, reason },
+          card: result.value.card,
+          status: "open",
           createdAt: new Date().toISOString(),
         };
-        store.saveApproval(approval);
-        if (groupId) runtime.groups.publish(groupId);
-        await router.addItem(assistantId, { kind: "question", approvalId: approval.id }, groupId);
-        bus.emit({ type: "approval", approval });
-        pushApproval({ push: runtime.push, store }, approval);
-        return endTurn("已请用户登录，等用户完成后继续。");
+        await router.addCard(assistantId, record, groupId);
+        const shown = result.value.interactive
+          ? "卡片已显示给用户，用户操作完结果会回到对话。"
+          : "卡片已显示给用户。";
+        const reply = warnings.length ? `${shown}注意：${warnings.join("；")}。` : shown;
+        return result.value.interactive ? endTurn(reply) : ok(reply);
       },
     },
     {
+      name: "login",
+      label: "登录",
+      description: credentialsAvailable
+        ? "登录云桌面浏览器里当前打开的网站，先打开网站的登录页再调用。用户的密码管理器里存了这个网站的账号时，Hob 核对网址、请用户批准后，把账号和密码直接填进页面；没存的，请用户在卡片上填一次，存进密码管理器再填；页面要扫码、第三方账号或验证码这类只能用户本人完成的，请用户在云桌面里自己登录。密码不经过你。填好以后由你点登录按钮；分两步的登录页（先填用户名、点下一步才出密码框），点完下一步再调一次。site 写网站网址或名称，比如 forum.example.net 或「Example 论坛」；同一个网站存了几个账号时，account 写要用的用户名或邮箱，不确定就不填，用户在卡上选；reason 一句话写为什么要登录，显示在卡上；self 填 true 时不填账号，直接请用户在云桌面里自己登录。"
+        : "请用户在云桌面里登录一个网站：会出一张卡，用户登录完会告诉你；登录信息所有助手共用，登一次就行。site 写哪个网站，reason 一句话写为什么要登录。",
+      parameters: Type.Object({
+        site: Type.String({ description: "网站网址或名称" }),
+        reason: Type.String({ description: "为什么要登录，一句话" }),
+        ...(credentialsAvailable ? { account: Type.Optional(Type.String({ description: "用户名或邮箱，不确定就不填" })), self: Type.Optional(Type.Boolean({ description: "用户要自己登录时填 true" })) } : {}),
+      }),
+      execute: async (_id: string, params: any, signal?: AbortSignal) => {
+        const site = String(params.site ?? "").trim();
+        const reason = String(params.reason ?? "").trim();
+        const account = typeof params.account === "string" ? params.account.trim() : undefined;
+        if (!site || !reason) return fail("site 和 reason 都要填写清楚。");
+        try {
+          const prepared = await prepareLogin(runtime, assistantId, site, account, params.self === true);
+          if (prepared.kind === "message") return ok(prepared.text);
+          if (prepared.kind === "failed") return fail(prepared.text);
+          if (prepared.kind === "mismatch") {
+            const approval: Approval = {
+              id: newId("q-"), assistantId, title: "没有填写密码", detail: prepared.text, options: [], status: "answered", source: "router",
+              ...(groupId ? { groupId } : {}), login: { site, reason, fillLogin: prepared.approval }, createdAt: new Date().toISOString(), answeredAt: new Date().toISOString(),
+            };
+            store.saveApproval(approval);
+            await router.addItem(assistantId, { kind: "question", approvalId: approval.id }, groupId);
+            bus.emit({ type: "approval", approval });
+            return ok(prepared.text);
+          }
+          const card = loginCard(prepared, site, reason);
+          const approval: Approval = {
+            id: newId("q-"), assistantId, title: card.title, ...(card.detail ? { detail: card.detail } : {}),
+            options: card.options, status: "pending", source: "router", ...(groupId ? { groupId } : {}), login: card.login, createdAt: new Date().toISOString(),
+          };
+          store.saveApproval(approval);
+          const delegationId = router.currentDelegation(assistantId, groupId);
+          if (delegationId) runtime.delegations.addApproval(delegationId, approval.id);
+          await presentApproval(approval, signal);
+          return endTurn(card.endTurn);
+        } catch (error) {
+          return fail(error instanceof Error ? error.message : String(error));
+        }
+      },
+    },
+    ...(fillNewPasswordAvailable ? [{
+      name: "fill_new_password",
+      label: "生成并填写新密码",
+      description: "注册新账号或修改密码时用：让用户的密码管理器按网站的要求生成一个新密码，Hob 先把它存进密码管理器，再填进云桌面浏览器当前页面的密码框（新密码和确认密码都填），密码不经过你。会先请用户批准。username 写注册或登录用的用户名或邮箱；length 和 characters 照页面上写的密码要求填，页面没写就不填（默认 20 位，含小写、大写、数字和符号）；name 是存进密码管理器时的名称，默认用网站名。",
+      parameters: Type.Object({
+        username: Type.String({ description: "注册或登录用的用户名或邮箱" }),
+        length: Type.Optional(Type.Integer({ minimum: 4, maximum: 128, description: "页面要求的密码长度；不填默认 20 位" })),
+        characters: Type.Optional(Type.Array(Type.Union([Type.Literal("lowercase"), Type.Literal("uppercase"), Type.Literal("numbers"), Type.Literal("symbols")]), { minItems: 1, maxItems: 4, description: "页面允许的字符种类；不填默认含小写、大写、数字和符号" })),
+        name: Type.Optional(Type.String({ description: "存进密码管理器时的名称；不填用网站名" })),
+      }),
+      execute: async (_id: string, params: any, signal?: AbortSignal) => {
+        const username = String(params.username ?? "").trim();
+        if (!username) return fail("username 要填写注册或登录用的用户名或邮箱。");
+        const characters = Array.isArray(params.characters) ? params.characters as ("lowercase" | "uppercase" | "numbers" | "symbols")[] : undefined;
+        try {
+          const prepared = await prepareFillNewPassword(runtime, assistantId, username, params.length === undefined ? undefined : Number(params.length), characters, typeof params.name === "string" ? params.name : undefined);
+          if (prepared.kind === "message") return ok(prepared.text);
+          const approval: Approval = {
+            id: newId("q-"), assistantId, title: prepared.title, detail: prepared.detail,
+            options: [{ key: "A", label: "不允许" }, { key: "B", label: "生成并填写" }],
+            status: "pending", source: "router", ...(groupId ? { groupId } : {}),
+            login: { site: prepared.approval.host, reason: prepared.detail, fillNewPassword: prepared.approval },
+            createdAt: new Date().toISOString(),
+          };
+          store.saveApproval(approval);
+          const delegationId = router.currentDelegation(assistantId, groupId);
+          if (delegationId) runtime.delegations.addApproval(delegationId, approval.id);
+          await presentApproval(approval, signal);
+          return endTurn(`已请用户批准在 ${prepared.approval.host} ${prepared.approval.mode === "register" ? "注册新账号" : "修改密码"}，这一轮先到这里；用户批准后 Hob 会生成、保存并填好。`);
+        } catch (error) {
+          return fail(error instanceof Error ? error.message : String(error));
+        }
+      },
+    }] : []),
+    {
       name: "ask_user",
       label: "询问用户",
-      description: "在对话里出一张选择题卡片（2 到 3 个选项），用户选完，答案会回到对话。",
+      description: "在对话里出一张提问卡，用户答完，答案会回到对话。问题可以是选择题（2 到 3 个选项），也可以是填空题（一行字、一段话、数字、日期、时间）。",
       parameters: Type.Object({
         title: Type.String({ description: "问题，一句话" }),
         detail: Type.Optional(Type.String({ description: "补充说明，写清后果。" })),
@@ -572,17 +734,25 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
           Type.Object({
             title: Type.String({ description: "问题" }),
             why: Type.Optional(Type.String({ description: "可选，写清为什么要定它" })),
-            options: Type.Array(
+            options: Type.Optional(Type.Array(
               Type.Object({ label: Type.String({ description: "选项文字" }) }),
               { description: "2 到 3 个选项", minItems: 2, maxItems: 3 },
-            ),
+            )),
             recommended: Type.Optional(Type.String({ description: "可选，推荐哪个选项，填选项的文字" })),
+            input: Type.Optional(Type.Union([
+              Type.Literal("text"),
+              Type.Literal("multiline"),
+              Type.Literal("number"),
+              Type.Literal("date"),
+              Type.Literal("time"),
+            ], { description: "填空题的类型：text 一行字、multiline 一段话、number 数字、date 日期、time 时间。不写 options 时必填。" })),
+            placeholder: Type.Optional(Type.String({ description: "可选，输入框里的提示文字。" })),
           }),
           { description: QUESTIONS_DESCRIPTION, minItems: 1, maxItems: 8 },
         )),
         remember: Type.Optional(Type.String({ description: "这类事以后可以不再问时，填这类事的简称（如「清理临时文件」）；卡片上会多一个「以后直接执行」的选项。" })),
       }),
-      execute: async (_id, params: any) => {
+      execute: async (_id, params: any, signal) => {
         const approval = approvalFromParams(assistantId, groupId, params);
         if ("error" in approval) return fail(approval.error);
         store.saveApproval(approval);
@@ -590,9 +760,7 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
         if (groupId) runtime.groups.publish(groupId);
         const delegationId = router.currentDelegation(assistantId, groupId);
         if (delegationId) runtime.delegations.addApproval(delegationId, approval.id);
-        await router.addItem(assistantId, { kind: "question", approvalId: approval.id }, groupId);
-        bus.emit({ type: "approval", approval });
-        pushApproval({ push: runtime.push, store }, approval);
+        await presentApproval(approval, signal);
         return endTurn("问题卡已显示给用户。");
       },
     },
@@ -678,7 +846,7 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
           });
           await note("routine", t("新增{whose}定时任务 · {name} · {schedules}", { whose: whoseRoutine(target.id), name: routine.name, schedules: routine.schedules.map((schedule) => cronToChinese(schedule)).join("、") }));
           profileChanged(target.id);
-          return ok(`定时任务「${routine.name}」已创建${routineFact(routine.schedules, routine.check, routine.once)}。它的目录是 ${routines.dir(routine)}，检查脚本在这里运行；脚本要用的其他文件，可以分派任务写到这个目录。${await trialFact(routine)}`);
+          return ok(`定时任务「${routine.name}」已创建${routineFact(routine.schedules, routine.check, routine.once, !!groupId)}。它的目录是 ${routines.dir(routine)}，检查脚本在这里运行；脚本要用的其他文件，可以分派任务写到这个目录。${await trialFact(routine)}`);
         } catch (error) {
           return fail(error instanceof Error ? error.message : String(error));
         }
@@ -717,7 +885,7 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
           });
           await note("routine", t("修改{whose}定时任务 · {name} · {schedules}", { whose: whoseRoutine(target.id), name: routine.name, schedules: routine.schedules.map((schedule) => cronToChinese(schedule)).join("、") }));
           profileChanged(target.id);
-          return ok(`已修改${routineFact(routine.schedules, routine.check, routine.once)}。目录是 ${routines.dir(routine)}。${params.check ? await trialFact(routine) : ""}`);
+          return ok(`已修改${routineFact(routine.schedules, routine.check, routine.once, !!groupId)}。目录是 ${routines.dir(routine)}。${params.check ? await trialFact(routine) : ""}`);
         } catch (error) {
           return fail(error instanceof Error ? error.message : String(error));
         }
@@ -755,8 +923,22 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
       execute: async (_id, params: any) => {
         const requested = resolve(cwd, String(params.path));
         // 迁移后的老路径直接换到新位置（不给模型提示），卡片里存新路径
-        const path = existsSync(requested) ? requested : resolveMovedPath(runtime.home, requested);
+        let path = existsSync(requested) ? requested : resolveMovedPath(runtime.home, requested);
         if (!existsSync(path)) return fail(`文件不存在：${requested}`);
+        const sensitive = checkSensitivePath(path, runtime.home);
+        if (sensitive) return fail(`${sensitive}：${path}`);
+        // 页面只读得到 Hob 自己的目录和任务工作目录：外部目录（含绑定的项目目录）文件复制一份进 files/sent/ 再发，同时拦截敏感文件
+        const homeScope = lookupFile(runtime.home, path, []);
+        if (!homeScope.ok && homeScope.error !== OUTSIDE_HOB) return fail(`${homeScope.error}：${path}`);
+        if (!homeScope.ok) {
+          const workScope = lookupFile(runtime.home, path, [...store.jobs().flatMap((job) => job.cwd ? [job.cwd] : []), cwd]);
+          if (!workScope.ok && workScope.error !== OUTSIDE_HOB) return fail(`${workScope.error}：${path}`);
+          if (!statSync(path).isFile()) return fail(`这是目录，不是文件：${path}`);
+          const copy = join(assistantFilesDir(runtime.home, assistantId, "sent"), randomUUID().slice(0, 8), basename(path));
+          mkdirSync(dirname(copy), { recursive: true });
+          copyFileSync(path, copy);
+          path = copy;
+        }
         let name = basename(path);
         let meta = fileMeta(path);
         if (isInPagesDir(relative(runtime.home, resolve(path))) && extname(path).toLowerCase() === ".html") {
@@ -836,13 +1018,13 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
         size: Type.Optional(Type.String({ description: "尺寸，如 1024x1024；不填用设置里的默认" })),
         refs: Type.Optional(Type.Array(Type.String(), { description: "参考图的绝对路径（改图、按图生成的时候给）" })),
       }),
-      execute: async (_id, params: any) => {
+      execute: async (_id, params: any, signal) => {
         const config = runtime.settings.settings.image;
         const prompt = String(params.prompt ?? "");
         const size = params.size ? String(params.size) : config.source === "openai" ? config.size : undefined;
         const item = await router.addItem(assistantId, { kind: "image", status: "pending", prompt, ...(size ? { size } : {}), startedAt: new Date().toISOString() }, groupId);
         try {
-          const path = await generateImage({ home: runtime.home, dir: join(runtime.home, "assistants", assistantId, "files", "images"), config }, {
+          const path = await generateImage({ home: runtime.home, dir: join(runtime.home, "assistants", assistantId, "files", "images"), config, signal }, {
             prompt,
             ...(params.size ? { size: String(params.size) } : {}),
             ...(Array.isArray(params.refs) && params.refs.length ? { refs: params.refs.map(String) } : {}),
@@ -873,7 +1055,7 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
           note: Type.String({ description: HANDOFF_NOTE_DESCRIPTION }),
           files: Type.Optional(Type.Array(Type.String({ description: "要交给对方的文件路径" }))),
         }),
-        execute: async (_id, params: any) => {
+        execute: async (_id, params: any, signal) => {
           const targetId = String(params.assistantId);
           const target = store.assistant(targetId);
           if (!target) return fail(`没有这个助手：${targetId}`);
@@ -894,7 +1076,8 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
             const carried = unfinished.length
               ? `${note}\n\n「${assistant().name}」转交前列过的待办，没做完的：\n${unfinished.map((item) => `· ${item.text}`).join("\n")}`
               : note;
-            await runtime.delegations.start(assistantId, targetId, carried, files);
+            await runtime.delegations.start(assistantId, targetId, carried, files, signal);
+            signal?.throwIfAborted();
             if (!unfinished.length) return endTurn(`已转交给「${target.name}」。`);
             await handOffTodos(runtime, assistantId, groupId);
             return endTurn(`已转交给「${target.name}」。你手上那份待办（没做完 ${unfinished.length} 项）一起交过去了，已经清掉。`);
@@ -912,8 +1095,9 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
           title: Type.String({ description: "话题名，写这件事，如「相册备份出错」，最多 40 字。" }),
           note: Type.String({ description: HANDOFF_NOTE_DESCRIPTION }),
           files: Type.Optional(Type.Array(Type.String({ description: "要交给群的文件路径" }))),
+          cwd: Type.Optional(Type.String({ description: "可选，仅目标群未绑定工作目录时可用，为新话题指定工作目录（绝对路径，创建后不可修改）。" })),
         }),
-        execute: async (_id, params: any) => {
+        execute: async (_id, params: any, signal) => {
           const id = String(params.groupId ?? "").trim();
           const group = store.group(id);
           if (!group) {
@@ -929,9 +1113,26 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
           if (!note) return fail("note 不能为空：写清交接说明后再调用一次。");
           const files = Array.isArray(params.files) ? params.files.map((file: unknown) => resolve(cwd, String(file))) : [];
           try {
-            const { topic, item } = runtime.groups.handOver(group.id, title, assistantId, { text: note, files });
-            // 这次说话所在的对话里落一张话题卡：进度、等你回答、结论都在卡上
-            await router.addItem(assistantId, { kind: "topic", topicId: topic.id }, groupId);
+            signal?.throwIfAborted();
+            const { topic, item } = runtime.groups.handOver(group.id, title, assistantId, {
+              text: note,
+              files,
+              ...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
+            });
+            const cancel = () => {
+              const current = store.group(topic.id);
+              if (current && !current.closedAt && !runtime.groups.summary(topic.id).busy?.length) {
+                runtime.groups.closeByOwner(topic.id, t("交接调用已中止"));
+              }
+            };
+            signal?.addEventListener("abort", cancel, { once: true });
+            try {
+              // 这次说话所在的对话里落一张话题卡：进度、等你回答、结论都在卡上
+              await router.addItem(assistantId, { kind: "topic", topicId: topic.id }, groupId);
+              signal?.throwIfAborted();
+            } finally {
+              signal?.removeEventListener("abort", cancel);
+            }
             void runtime.groups.deliverEvent(topic.id, topic.ownerId, HANDOVER_EVENT, item.id).catch((error) => console.error("交给群的事件没送到：", error));
             return endTurn(`已交给群「${group.name}」：创建了话题「${topic.name}」（${topic.id}），群主「${nameOf(topic.ownerId)}」接手。有了结论会回到这里。`);
           } catch (error) {
@@ -947,7 +1148,7 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
       label: "交回",
       description: "把不归你管的事交回：别人转给你的，交回转来的那位；用户直接找你的，交回 Hob，由它转给合适的助手。",
       parameters: Type.Object({ text: Type.String({ description: "用户要什么" }), reason: Type.String({ description: "为什么不归你，一句话" }) }),
-      execute: async (_id, params: any) => {
+      execute: async (_id, params: any, signal) => {
         const text = String(params.text ?? "").trim();
         const reason = String(params.reason ?? "").trim();
         if (!text || !reason) return fail("请写清用户要求和交回原因。");
@@ -962,9 +1163,12 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
           const destination = store.assistant("hob");
           if (!destination) return fail("主助手不存在，暂时无法交回。");
           await router.ensure(destination.id);
+          signal?.throwIfAborted();
           const handbackId = newId("hb-");
           await router.addItem(assistantId, { kind: "note", icon: "info", text: `已交回「${destination.name}」：${reason}`, handbackId });
+          signal?.throwIfAborted();
           await router.addForwarded(destination.id, text, handbackId, assistantId);
+          signal?.throwIfAborted();
           await router.event(destination.id, `转自「${assistant().name}」：${text}\n交回原因：${reason}`);
           return endTurn(`已交回「${destination.name}」。`);
         } catch (error) {
@@ -1011,7 +1215,8 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
         if (!topic || topic.parentId !== parentId) return fail(`「${targetId}」不是这个群的话题。这个群进行中的话题：${topicList()}`);
         try {
           const closed = runtime.groups.closeByOwner(topic.id, params.note);
-          return ok(`话题「${closed.name}」已关闭。`);
+          // 关的是自己所在的话题：这里的事办完了，本轮到此为止（和转交、交回一样），不再多请求一轮模型
+          return targetId === gid ? endTurn(`话题「${closed.name}」已关闭。`) : ok(`话题「${closed.name}」已关闭。`);
         } catch (error) {
           return fail(error instanceof Error ? error.message : String(error));
         }
@@ -1027,6 +1232,9 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
           topic: Type.Optional(Type.String({ description: "已有话题的 id。创建新话题时不填。" })),
           note: Type.String({ description: HANDOFF_NOTE_DESCRIPTION }),
           files: Type.Optional(Type.Array(Type.String({ description: "要交给话题的文件路径" }))),
+          ...(groupHasBoundCwd ? {} : {
+            cwd: Type.Optional(Type.String({ description: "仅创建新话题（填 title）时可选，话题的工作目录（绝对路径，创建后不可修改）。" })),
+          }),
         }),
         execute: async (_id, params: any) => {
           const problem = notOwner();
@@ -1043,16 +1251,17 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
 
           try {
             if (topicId) {
+              if (!groupHasBoundCwd && params.cwd !== undefined) return fail(CWD_IMMUTABLE);
               const target = store.group(topicId);
               if (!target || target.parentId !== gid) return fail(`「${topicId}」不是这个群的话题。这个群进行中的话题：${topicList()}`);
               // 已关闭的话题先重新打开，接着在里面处理
               const topic = target.closedAt ? runtime.groups.reopen(topicId) : target;
               runtime.groups.appendItem(topicId, "user", { kind: "user", text: note, ...(files.length ? { files } : {}), forwardedFrom: { assistantId } });
-              runtime.groups.note(gid, assistantId, `转到了话题「${topic.name}」`, "info");
+              runtime.groups.note(gid, assistantId, `转到了话题「${topic.name}」`, "info", undefined, topicId);
               void runtime.groups.deliverEvent(topicId, assistantId, event).catch((error) => console.error("转到话题的事件没送到：", error));
               return endTurn(`已转到话题「${topic.name}」（${topic.id}），接下来在话题里处理。`);
             }
-            const topic = runtime.groups.createTopic(gid, title, assistantId);
+            const topic = runtime.groups.createTopic(gid, title, assistantId, !groupHasBoundCwd && params.cwd !== undefined ? { cwd: params.cwd } : undefined);
             runtime.groups.appendItem(topic.id, "user", { kind: "user", text: note, ...(files.length ? { files } : {}), forwardedFrom: { assistantId } });
             void runtime.groups
               .deliverEvent(topic.id, assistantId, event)
@@ -1066,7 +1275,7 @@ export function buildRouterTools(runtime: HobRuntime, assistantId: string, group
     }
   }
 
-  tools.push(updateTodosTool(runtime, { assistantId, ...(groupId ? { groupId } : {}) }), findKnowledgeTool(runtime), searchKnowledgeTool(runtime, assistantId), ...searchTools(runtime.home, () => runtime.settings.settings.search));
+  tools.push(updateTodosTool(runtime, { assistantId, ...(groupId ? { groupId } : {}) }), findKnowledgeTool(runtime), searchKnowledgeTool(runtime, assistantId), ...searchTools(runtime.home, () => runtime.settings.settings.search, () => runtime.settings.settings.providers));
   return tools;
 }
 

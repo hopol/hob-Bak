@@ -1,5 +1,9 @@
 import { t } from "../../shared/i18n.ts";
-import type { Approval, Job, JobStatus, JobStep } from "../../shared/types.ts";
+import type { Approval, Job, JobStatus, JobStep, SavedSkill } from "../../shared/types.ts";
+
+export function reviewedSkillsText(saved: SavedSkill[]): string {
+  return saved.length ? `已存的技能：${saved.map((skill) => `「${skill.title}」（${skill.name}，第 ${skill.version} 版）`).join("、")}。` : "还没存技能。";
+}
 
 export interface JobSkillTitle { name: string; title?: string; version?: number }
 
@@ -48,6 +52,7 @@ export function jobView(job: Job, steps: JobStep[], approvals: Approval[], skill
   const lines = [`任务「${job.title}」（${job.id}）：${state}${job.rounds?.length ? `（第 ${job.rounds.length + 1} 轮）` : ""}`];
   // 不是现在这个会话开的：说清它在哪，结果回到那边
   if (origin) lines.push(`这个任务是${origin}开的，结果回到那边。`);
+  if (job.sediment?.status === "running") lines.push(`正在回顾，${reviewedSkillsText(job.sediment.saved ?? [])}`);
   if (job.statusReason) lines.push(`原因：${job.statusReason}`);
   for (const approval of approvals.filter((item) => item.jobId === job.id && item.status === "pending")) lines.push(`在等你回复：${approval.title}`);
   if (job.skillsUsed?.length) lines.push(`用到的技能：${job.skillsUsed.map((name) => { const skill = skills.find((item) => item.name === name); if (!skill) return name; return `${skill.title ?? skill.name}${skill.version ? `（第 ${skill.version} 版）` : ""}`; }).join("、")}`);

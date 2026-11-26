@@ -5,19 +5,23 @@ import type {
   Group,
   GroupItem,
   GroupItemsPage,
+  GroupReplyMode,
   GroupSummary,
   JobStatus,
   NoteIcon,
   SendMessageBody,
 } from "../../shared/types.ts";
 import { newId } from "./ids.ts";
+import { reactionsList } from "./store.ts";
 import { saysNoReply, stripNoReply } from "../../shared/no-reply.ts";
 import { clearTodos, readTodos } from "./todos.ts";
 import { groupTodosPath } from "./config.ts";
 import { nowBlock } from "./now.ts";
+import { cardHistoryLine } from "./cards.ts";
 import { checkAssistantModels } from "./models.ts";
 import type { EventText, NewItem } from "./router.ts";
 import type { HobRuntime } from "./runtime.ts";
+import { CWD_IMMUTABLE, normalizeWorkspaceCwdInput, topicCwdLockedByGroup, validateWorkspaceCwd } from "./workspace.ts";
 
 /** 一条用户消息引出的助手回合上限：挡来回 @ 的死循环，不是限制正常协作。 */
 export const MAX_WAVE_TURNS = 20;
@@ -38,10 +42,18 @@ const SYSTEM = "system";
 /** 结论后面附的任务记录里，任务状态怎么写。 */
 const JOB_STATE: Record<JobStatus, string> = { queued: "排队中", running: "进行中", waiting: "等你回复", done: "已完成", stuck: "受阻", failed: "失败", stopped: "已停止" };
 
-/** 一条用户消息引出的一串助手回合，turns 是已经开了几个。 */
+/** 一条用户消息引出的一串助手回合，turns 是已经开了几个（按 @ 接力计，不含全员依次轮到的回合）。 */
 interface Wave {
   turns: number;
   stopped: boolean;
+  pending: number;
+  finalSpeaker?: string;
+  /** 全员回应：用户没点名时，群主这一串跑完后，把还没轮到过的成员按成员顺序依次排上。 */
+  allReply?: {
+    triggerId: string;
+    epoch: number;
+    participated: Set<string>;
+  };
 }
 
 /** 一个成员正在说的这一轮：正文（@ 检测用）、当前这条消息的条目、最后一条说成的条目、叫到它的条目。 */
@@ -53,6 +65,8 @@ interface RunningTurn {
   /** 事件那一轮：文字先攒着，这一轮结束再写进时间线（以 NO_REPLY 收尾就不写） */
   event?: true;
   held?: string[];
+  /** 这一轮以 NO_REPLY 收尾：收到了用户消息的话，替它挂 👀 */
+  silent?: boolean;
 }
 
 /** 这一轮该给它的条目，和给到哪一条（seen 存它）。 */
@@ -82,6 +96,8 @@ export interface CreateGroupInput {
   ownerId?: unknown;
   members?: unknown;
   parentId?: unknown;
+  cwd?: unknown;
+  replyMode?: unknown;
 }
 
 export interface UpdateGroupInput {
@@ -90,6 +106,8 @@ export interface UpdateGroupInput {
   ownerId?: unknown;
   members?: unknown;
   listOrder?: unknown;
+  cwd?: unknown;
+  replyMode?: unknown;
 }
 
 export class GroupManager {
@@ -140,6 +158,7 @@ export class GroupManager {
       unread: this.unread(group.id, items),
       busy: this.busyOf(group.id),
       todos: readTodos(groupTodosPath(this.runtime.home, group.id)),
+      ...(this.runtime.router.suggestionsFor(group.ownerId, group.id)?.length ? { suggestions: this.runtime.router.suggestionsFor(group.ownerId, group.id) } : {}),
       ...(Object.keys(activity).length ? { activity } : {}),
     };
   }
@@ -196,12 +215,17 @@ export class GroupManager {
     // 话题是挂在群下面的群，但得先有群：建群的接口不建话题
     if (input.parentId !== undefined) throw new Error("创建群不接受 parentId：话题在群里创建（POST /api/groups/:gid/topics）。");
     const members = this.membersOf(input.members, "群里至少要有一个助手");
+    const normalizedCwd = normalizeWorkspaceCwdInput(input.cwd);
+    const cwd = normalizedCwd ? validateWorkspaceCwd(normalizedCwd, this.runtime.home) : undefined;
+    const replyMode = this.replyModeOf(input.replyMode);
     const group: Group = {
       id: newId("g-"),
       name: this.text(input.name, "群名", 40),
       purpose: this.text(input.purpose, "职责", 200),
       ownerId: this.ownerOf(input.ownerId, members),
       members,
+      ...(replyMode ? { replyMode } : {}),
+      ...(cwd ? { cwd } : {}),
       createdAt: new Date().toISOString(),
     };
     this.store.saveGroup(group);
@@ -214,15 +238,24 @@ export class GroupManager {
    * 开一个话题：话题是挂在群下面的群，时间线、成员会话、已读都是自己的。
    * 成员、群主、负责什么取所属的群，不另存。
    */
-  createTopic(gid: string, title: unknown, createdBy: string): Group {
+  createTopic(gid: string, title: unknown, createdBy: string, options?: { cwd?: unknown }): Group {
     const group = this.group(gid);
     if (group.parentId) throw new Error("话题挂在群下面：话题里不能再创建话题。");
+    const normalizedCwd = normalizeWorkspaceCwdInput(options?.cwd);
+    let cwd: string | undefined;
+    if (group.cwd) {
+      if (normalizedCwd) throw new Error(topicCwdLockedByGroup(group.cwd));
+    } else if (normalizedCwd) {
+      cwd = validateWorkspaceCwd(normalizedCwd, this.runtime.home);
+    }
     const topic: Group = {
       id: newId("g-"),
       name: this.text(title, "话题名", 40),
       purpose: group.purpose,
       ownerId: group.ownerId,
       members: group.members,
+      ...(group.replyMode ? { replyMode: group.replyMode } : {}),
+      ...(cwd ? { cwd } : {}),
       createdAt: new Date().toISOString(),
       parentId: gid,
       createdBy,
@@ -257,8 +290,8 @@ export class GroupManager {
    * 任意助手把一件事交给这个群：开一个话题，把交接说明作为第一条用户条目转进去，
    * 记下是谁交来的，综合里落一行。叫醒群主由调用方发（它还要结束这一轮）。
    */
-  handOver(gid: string, title: unknown, by: string, original: { text: string; files: string[]; itemId?: string }): { topic: Group; item: GroupItem } {
-    const topic = this.createTopic(gid, title, by);
+  handOver(gid: string, title: unknown, by: string, original: { text: string; files: string[]; itemId?: string; cwd?: unknown }): { topic: Group; item: GroupItem } {
+    const topic = this.createTopic(gid, title, by, original.cwd !== undefined ? { cwd: original.cwd } : undefined);
     const item = this.appendItem(topic.id, "user", {
       kind: "user",
       text: original.text,
@@ -355,18 +388,21 @@ export class GroupManager {
   /** 话题不再依赖工作方式字段。旧群文件里的 workflow 由存储层原样保留。 */
   update(gid: string, patch: UpdateGroupInput): Group {
     const group = this.group(gid);
+    if (patch.cwd !== undefined) throw new Error(CWD_IMMUTABLE);
     if (group.parentId) {
-      return this.renameTopic(group, patch);
+      return this.updateTopic(group, patch);
     }
     const members = patch.members === undefined ? group.members : this.membersOf(patch.members, "群里至少要留一个成员");
     const ownerId = patch.ownerId === undefined ? group.ownerId : this.ownerOf(patch.ownerId, members);
     if (!members.includes(ownerId)) throw new Error("群主必须是成员之一");
+    const replyMode = this.replyModeOf(patch.replyMode);
     const next: Group = {
       ...group,
       members,
       ownerId,
       ...(patch.name !== undefined ? { name: this.text(patch.name, "群名", 40) } : {}),
       ...(patch.purpose !== undefined ? { purpose: this.text(patch.purpose, "职责", 200) } : {}),
+      ...(replyMode !== undefined ? { replyMode } : {}),
       ...(typeof patch.listOrder === "number" && Number.isFinite(patch.listOrder) ? { listOrder: Math.max(0, Math.round(patch.listOrder)) } : {}),
     };
     if (group.memberModels) next.memberModels = Object.fromEntries(Object.entries(group.memberModels).filter(([id]) => members.includes(id)));
@@ -433,12 +469,18 @@ export class GroupManager {
     return models;
   }
 
-  /** 话题只能改名：成员、群主、负责什么跟着所属的群。 */
-  private renameTopic(topic: Group, patch: UpdateGroupInput): Group {
+  /** 话题只能改名和回应方式：成员、群主、负责什么跟着所属的群。 */
+  private updateTopic(topic: Group, patch: UpdateGroupInput): Group {
+    if (patch.cwd !== undefined) throw new Error(CWD_IMMUTABLE);
     if (patch.members !== undefined || patch.ownerId !== undefined || patch.purpose !== undefined) {
       throw new Error("话题的成员、群主与职责随所属的群，请在群设置中修改。");
     }
-    const next: Group = { ...topic, ...(patch.name !== undefined ? { name: this.text(patch.name, "话题名", 40) } : {}) };
+    const replyMode = this.replyModeOf(patch.replyMode);
+    const next: Group = {
+      ...topic,
+      ...(patch.name !== undefined ? { name: this.text(patch.name, "话题名", 40) } : {}),
+      ...(replyMode !== undefined ? { replyMode } : {}),
+    };
     this.store.saveGroup(next);
     this.publish(topic.id);
     if (topic.parentId) this.publish(topic.parentId);
@@ -523,6 +565,12 @@ export class GroupManager {
     return value;
   }
 
+  private replyModeOf(value: unknown): GroupReplyMode | undefined {
+    if (value === undefined) return undefined;
+    if (value === "owner" || value === "all") return value;
+    throw new Error(`回应方式只能填 owner 或 all，收到「${String(value)}」`);
+  }
+
   // ---------- 群里的消息 ----------
 
   /** 用户在群里说话：写一条 user 条目，算出轮到谁，给每个人开一轮。话题关了就不收，等重新打开。 */
@@ -536,6 +584,7 @@ export class GroupManager {
       this.store.saveApproval(expired);
       this.bus.emit({ type: "approval", approval: expired });
     }
+    this.runtime.router.clearSuggestions(group.ownerId, gid);
     const item = this.append(gid, {
       kind: "user",
       speaker: "user",
@@ -545,26 +594,42 @@ export class GroupManager {
     });
     this.bus.emit({ type: "group-item", groupId: gid, item });
     this.publish(gid);
-    const wave: Wave = { turns: 0, stopped: false };
-    for (const id of this.targetsOf(group, body.text, body.quote)) void this.callTurn(gid, group, id, wave, item.id);
+    const explicit = this.explicitTargetsOf(group, body.text, body.quote);
+    const targets = explicit.length ? explicit : [group.ownerId];
+    const wave: Wave = {
+      turns: 0,
+      stopped: false,
+      pending: 0,
+      ...(!explicit.length && group.replyMode === "all"
+        ? { allReply: { triggerId: item.id, epoch: this.epochs.get(gid) ?? 0, participated: new Set<string>() } }
+        : {}),
+    };
+    for (const id of targets) void this.callTurn(gid, group, id, wave, item.id);
     return item;
   }
 
   /** 停掉这个群里所有成员正在进行的回合（不停任务）；排队里的回合也不再生效。 */
   async stop(gid: string, group?: Group): Promise<void> {
     const target = group ?? this.group(gid);
+    this.runtime.router.clearSuggestions(target.ownerId, gid);
     this.epochs.set(gid, (this.epochs.get(gid) ?? 0) + 1);
     await Promise.all(target.members.map((id) => this.runtime.router.stop(id, gid)));
   }
 
-  /** 用户的消息轮到谁：@ 了谁、引用谁的消息就是谁；都没有就轮到群主。 */
-  private targetsOf(group: Group, text: string, quote?: { itemId: string; text: string }): string[] {
+  /** 用户的消息明确点名了谁：@ 了谁、引用谁的消息就是谁。 */
+  private explicitTargetsOf(group: Group, text: string, quote?: { itemId: string; text: string }): string[] {
     const out = this.mentions(text, group);
     if (quote) {
       const quoted = this.store.groupItems(group.id).find((item) => item.id === quote.itemId);
       const speaker = quoted?.speaker;
       if (speaker && speaker !== "user" && speaker !== SYSTEM && group.members.includes(speaker) && !out.includes(speaker)) out.push(speaker);
     }
+    return out;
+  }
+
+  /** 用户的消息轮到谁：@ 了谁、引用谁的消息就是谁；都没有就轮到群主。 */
+  targetsOf(group: Group, text: string, quote?: { itemId: string; text: string }): string[] {
+    const out = this.explicitTargetsOf(group, text, quote);
     return out.length ? out : [group.ownerId];
   }
 
@@ -585,18 +650,43 @@ export class GroupManager {
   }
 
   /** 给一个成员排一轮：同一成员同时被叫两次时排队，第二次的输入包含第一次之后的新条目。 */
-  private schedule(gid: string, assistantId: string, wave: Wave, triggerId: string, event?: EventText, workDone = false): Promise<void> {
+  private schedule(gid: string, assistantId: string, wave: Wave, triggerId: string, event?: EventText, workDone = false, allReplyTurn = false): Promise<void> {
     const key = `${gid}@${assistantId}`;
     const epoch = this.epochs.get(gid) ?? 0;
+    wave.pending += 1;
     const previous = this.queues.get(key) ?? Promise.resolve();
     const next = previous
-      .then(() => this.runTurn(gid, assistantId, wave, epoch, triggerId, event, workDone))
-      .catch(() => undefined);
+      .then(() => this.runTurn(gid, assistantId, wave, epoch, triggerId, event, workDone, allReplyTurn))
+      .catch(() => undefined)
+      .finally(() => {
+        wave.pending = Math.max(0, wave.pending - 1);
+        this.advanceWave(gid, wave);
+      });
     this.queues.set(key, next);
     void next.then(() => {
       if (this.queues.get(key) === next) this.queues.delete(key);
     });
     return next;
+  }
+
+  /**
+   * 这一串里正在跑的回合都结束时收尾：
+   * 全员回应的波次还有没轮到的成员，就按成员列表顺序排上下一个（前一个跑完才轮到下一个）；
+   * 全部跑完后再生成推荐提问。
+   */
+  private advanceWave(gid: string, wave: Wave): void {
+    if (wave.pending > 0 || wave.stopped) return;
+    if (wave.allReply && (this.epochs.get(gid) ?? 0) === wave.allReply.epoch) {
+      const group = this.store.group(gid);
+      if (group && group.replyMode === "all") {
+        const nextMember = group.members.find((id) => !wave.allReply!.participated.has(id));
+        if (nextMember) {
+          void this.schedule(gid, nextMember, wave, wave.allReply.triggerId, undefined, false, true);
+          return;
+        }
+      }
+    }
+    if (wave.finalSpeaker && !wave.stopped) void this.runtime.router.generateSuggestionsFor(wave.finalSpeaker, gid);
   }
 
   /**
@@ -618,6 +708,15 @@ export class GroupManager {
         }
       };
       if (await this.runtime.router.steerMember(gid, assistantId, text, this.inputFiles(input), received).catch(() => false)) {
+        if (wave.allReply) {
+          wave.allReply.participated.add(assistantId);
+          const running = this.queues.get(`${gid}@${assistantId}`) ?? Promise.resolve();
+          wave.pending += 1;
+          void running.finally(() => {
+            wave.pending = Math.max(0, wave.pending - 1);
+            this.advanceWave(gid, wave);
+          });
+        }
         return;
       }
     }
@@ -632,7 +731,7 @@ export class GroupManager {
   async deliverEvent(gid: string, assistantId: string, text: EventText, triggerId = "", workDone = false): Promise<void> {
     const group = this.group(gid);
     if (!group.members.includes(assistantId)) return;
-    await this.schedule(gid, assistantId, { turns: 0, stopped: false }, triggerId, text, workDone);
+    await this.schedule(gid, assistantId, { turns: 0, stopped: false, pending: 0 }, triggerId, text, workDone);
   }
 
   /**
@@ -654,18 +753,19 @@ export class GroupManager {
     return this.timeline(gid).findLast(isRequestItem);
   }
 
-  private async runTurn(gid: string, assistantId: string, wave: Wave, epoch: number, triggerId: string, event?: EventText, workDone = false): Promise<void> {
+  private async runTurn(gid: string, assistantId: string, wave: Wave, epoch: number, triggerId: string, event?: EventText, workDone = false, allReplyTurn = false): Promise<void> {
     const group = this.store.group(gid);
     if (!group || !group.members.includes(assistantId)) return;
     // 用户按了停止：这一轮不再开始
     if ((this.epochs.get(gid) ?? 0) !== epoch) return;
-    // 一条用户消息引出的回合太多：停下，不再按 @ 叫人
-    if (wave.turns >= MAX_WAVE_TURNS) {
+    wave.allReply?.participated.add(assistantId);
+    // 一条用户消息引出的 @ 接力回合太多：停下，不再按 @ 叫人；全员依次轮到的回合每人最多一次，不受此上限截断
+    if (!allReplyTurn && wave.turns >= MAX_WAVE_TURNS) {
       if (!wave.stopped) {
         wave.stopped = true;
         this.note(gid, SYSTEM, RELAY_NOTE, "info");
         // 群主在群里收尾：只给它这一轮，它再 @ 人也不接着转，免得停了又起
-        void this.schedule(gid, group.ownerId, { turns: MAX_WAVE_TURNS - 1, stopped: true }, "", `${RELAY_NOTE}：一条消息引出的助手回复已经超过 ${MAX_WAVE_TURNS} 轮，后面的 @ 不再转给下一个成员。需要的话，把结论整理一下再发一条。`)
+        void this.schedule(gid, group.ownerId, { turns: MAX_WAVE_TURNS - 1, stopped: true, pending: 0 }, "", `${RELAY_NOTE}：一条消息引出的助手回复已经超过 ${MAX_WAVE_TURNS} 轮，后面的 @ 不再转给下一个成员。需要的话，把结论整理一下再发一条。`)
           .catch(() => undefined);
       }
       return;
@@ -673,7 +773,7 @@ export class GroupManager {
     // 排到的这一轮已经没有新东西给它（前面那一轮已经带上了）：不跑，不调模型
     const input = this.windowFor(group, assistantId, event === undefined ? triggerId : "");
     if (event === undefined && !input) return;
-    wave.turns += 1;
+    if (!allReplyTurn) wave.turns += 1;
     const key = `${gid}@${assistantId}`;
     const turn: RunningTurn = { text: "", ...(event !== undefined ? { event: true as const, held: [] } : {}), ...(triggerId ? { triggerId } : {}) };
     this.turns.set(key, turn);
@@ -691,9 +791,13 @@ export class GroupManager {
     } finally {
       this.turns.delete(key);
     }
+    // 这一轮收到了用户的消息、回了 NO_REPLY、自己也没点表情：替它挂 👀，用户看得出消息到了
+    const userItem = input?.items.findLast((item) => item.kind === "user");
+    if (userItem && turn.silent && !turn.lastId && !this.store.groupState(gid).reactions?.[userItem.id]?.[assistantId]) this.react(gid, assistantId, "👀", userItem.id);
     if ((this.epochs.get(gid) ?? 0) !== epoch) return;
     // 回复里 @ 了别的成员：接着轮到他们（用这一轮最后一条的 id 当触发条目）
     if (!turn.lastId) return;
+    wave.finalSpeaker = assistantId;
     for (const id of this.mentions(text, group, assistantId)) this.schedule(gid, id, wave, turn.lastId);
   }
 
@@ -769,6 +873,10 @@ export class GroupManager {
         const topic = this.store.group(item.topicId);
         return `${who}：创建了话题「${topic?.name ?? item.topicId}」`;
       }
+      case "card": {
+        const card = this.store.card(item.cardId);
+        return `${who}：${card ? cardHistoryLine(card.card) : "显示了一张卡片"}`;
+      }
       default:
         return "";
     }
@@ -786,6 +894,7 @@ export class GroupManager {
     const page = all.slice(start, end);
     const jobIds = new Set(page.flatMap((item) => (item.kind === "job" ? [item.jobId] : [])));
     const approvalIds = new Set(page.flatMap((item) => (item.kind === "question" ? [item.approvalId] : [])));
+    const cardIds = new Set(page.flatMap((item) => (item.kind === "card" ? [item.cardId] : [])));
     return {
       items: page,
       approvals: this.store.approvals().filter((approval) => approvalIds.has(approval.id)),
@@ -793,6 +902,7 @@ export class GroupManager {
         const job = this.store.job(id);
         return job ? [job] : [];
       }),
+      cards: this.store.cards().filter((card) => cardIds.has(card.id)),
       hasMore: start > 0,
     };
   }
@@ -824,6 +934,7 @@ export class GroupManager {
     turn.itemId = undefined;
     // NO_REPLY 这个词永远不显示：去掉之后什么都不剩，就当作这一段没说
     const visible = stripNoReply(text);
+    if (saysNoReply(text)) turn.silent = true;
     if (!visible) {
       // 只流出了空白（工具调用前的换行）：把那条流式条目收掉，重启时才不会当成中断
       if (id) this.bus.emit({ type: "group-item", groupId: gid, item: this.append(gid, { kind: "assistant", speaker: assistantId, text: "" }, id) });
@@ -844,7 +955,7 @@ export class GroupManager {
     const held = turn.held ?? [];
     turn.held = [];
     if (!held.length) return;
-    if (saysNoReply(held.at(-1)!)) return;
+    if (saysNoReply(held.at(-1)!)) { turn.silent = true; return; }
     for (const one of held) {
       const text = stripNoReply(one);
       if (!text) continue;
@@ -874,14 +985,35 @@ export class GroupManager {
   }
 
   /** 一行系统提示（停下、重启、无响应、记忆已更新）。 */
-  note(gid: string, speaker: string, text: string, icon: NoteIcon = "info", detail?: string): GroupItem {
+  note(gid: string, speaker: string, text: string, icon: NoteIcon = "info", detail?: string, targetGroupId?: string): GroupItem {
     const visibleText = text === RELAY_NOTE ? t("群内转交次数过多，已在此暂停。") : text === RESTART_NOTE ? t("服务已重启，本轮已中断。") : text;
-    return this.appendItem(gid, speaker, { kind: "note", icon, text: visibleText, ...(detail ? { detail } : {}) });
+    return this.appendItem(gid, speaker, { kind: "note", icon, text: visibleText, ...(detail ? { detail } : {}), ...(targetGroupId ? { targetGroupId } : {}) });
   }
 
-  /** 这一个群的时间线（去掉没说完的空回复）。 */
+  /** 给这个群（或话题）时间线上最新的一条用户消息（或指定的那条）点表情回应；再点会换掉。 */
+  react(gid: string, assistantId: string, emoji: string, itemId?: string): { ok: true; itemId: string } | { ok: false; error: string } {
+    const group = this.group(gid);
+    if (!group.members.includes(assistantId)) return { ok: false, error: "你不是这个群的成员。" };
+    const target = this.timeline(gid).findLast((item) => item.kind === "user" && (!itemId || item.id === itemId));
+    if (!target || target.kind !== "user") return { ok: false, error: "这个群里还没有用户的消息，无法添加表情回应。" };
+    const all = this.store.groupState(gid).reactions ?? {};
+    const forItem = { ...(all[target.id] ?? {}), [assistantId]: emoji };
+    this.store.saveGroupState(gid, { reactions: { ...all, [target.id]: forItem } });
+    const reactions = reactionsList(forItem);
+    this.bus.emit({ type: "group-item", groupId: gid, item: { ...target, ...(reactions ? { reactions } : {}) } });
+    return { ok: true, itemId: target.id };
+  }
+
+  /** 这一个群的时间线（去掉没说完的空回复，用户条目补上表情回应）。 */
   timeline(gid: string): GroupItem[] {
-    return this.store.groupItems(gid).filter((item) => item.kind !== "assistant" || item.text.trim().length > 0);
+    const storedReactions = this.store.groupState(gid).reactions;
+    return this.store.groupItems(gid)
+      .filter((item) => item.kind !== "assistant" || item.text.trim().length > 0)
+      .map((item) => {
+        if (item.kind !== "user") return item;
+        const reactions = reactionsList(storedReactions?.[item.id]);
+        return reactions ? { ...item, reactions } : item;
+      });
   }
 
   private append(gid: string, item: NewGroupItem, id = this.nextId(gid)): GroupItem {

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "gmail": {
+      "url": "https://gmailmcp.googleapis.com/mcp/v1",
+      "oauth": {
+        "clientId": "${user_config.GOOGLE_CLIENT_ID}",
+        "clientSecret": "${user_config.GOOGLE_CLIENT_SECRET}",
+        "scope": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.modify",
+        "authorizationParams": { "access_type": "offline", "prompt": "consent" }
+      }
+    }
+  }
+}

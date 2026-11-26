@@ -1,4 +1,5 @@
 // 模型单价：默认从 models.dev 拉，一天最多更新一次；存在 HOB_HOME/cache/usage-prices.json，拉不到就用上次的。
+// 同一份数据里顺便记下每个模型的上下文窗口和单次最多输出：供应商插件没给这两项时拿来补（Magpie、OpenCode 也这样补）。
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { TokenPrice } from "../../shared/types.ts";
@@ -14,15 +15,23 @@ const TIMEOUT = 10_000;
 /** 模型厂商自己那一家：同一个模型 id 出现在多个服务商里时优先它。 */
 const VENDOR_PROVIDERS = new Set(["openai", "anthropic", "deepseek", "google", "xai", "mistral", "zhipuai", "moonshotai"]);
 
-/** HOB_HOME/cache/usage-prices.json：拉到的单价 + 上次更新和上次尝试的时间。 */
+/** 一个模型的上下文窗口和单次最多输出（token）；models.dev 没写输出时 output 为 0。 */
+export interface ModelLimits {
+  context: number;
+  output: number;
+}
+
+/** HOB_HOME/cache/usage-prices.json：拉到的单价和模型上限 + 上次更新和上次尝试的时间。 */
 interface PriceFile {
   fetchedAt: string | null;
   attemptAt: string | null;
   error: string | null;
   prices: Record<string, TokenPrice>;
+  /** 旧版本存的文件没有这一项（null）：下次 ensure 重拉一次补上 */
+  limits: Record<string, ModelLimits> | null;
 }
 
-const EMPTY: PriceFile = { fetchedAt: null, attemptAt: null, error: null, prices: {} };
+const EMPTY: PriceFile = { fetchedAt: null, attemptAt: null, error: null, prices: {}, limits: null };
 
 function readFile(home: string): PriceFile {
   const path = join(cacheDir(home), FILE);
@@ -35,10 +44,19 @@ function readFile(home: string): PriceFile {
       attemptAt: typeof stored.attemptAt === "string" ? stored.attemptAt : null,
       error: typeof stored.error === "string" ? stored.error : null,
       prices: Object.fromEntries(Object.entries(prices).filter(([, price]) => isPrice(price))),
+      limits: stored.limits && typeof stored.limits === "object"
+        ? Object.fromEntries(Object.entries(stored.limits).filter(([, item]) => isLimits(item)))
+        : null,
     };
   } catch {
     return EMPTY;
   }
+}
+
+function isLimits(value: unknown): value is ModelLimits {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.context === "number" && item.context > 0 && typeof item.output === "number" && item.output >= 0;
 }
 
 function isPrice(value: unknown): value is TokenPrice {
@@ -103,6 +121,30 @@ export function indexPrices(raw: unknown): Record<string, TokenPrice> {
 }
 
 /**
+ * models.dev 的整份数据 → 模型 id → 上下文窗口和单次最多输出。
+ * 和单价一样：同一个模型 id 在多个服务商里都有时，优先模型厂商自己那家。
+ */
+export function indexLimits(raw: unknown): Record<string, ModelLimits> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const candidates = new Map<string, { vendor: boolean; limits: ModelLimits }[]>();
+  for (const [providerId, provider] of Object.entries(raw as Record<string, unknown>)) {
+    const models = (provider as { models?: unknown } | null)?.models;
+    if (!models || typeof models !== "object" || Array.isArray(models)) continue;
+    for (const [modelId, model] of Object.entries(models as Record<string, unknown>)) {
+      const limit = (model as { limit?: unknown } | null)?.limit as Record<string, unknown> | null | undefined;
+      if (!limit || typeof limit.context !== "number" || limit.context <= 0) continue;
+      const canonical = (model as { canonical_model_id?: unknown }).canonical_model_id;
+      const vendor = (typeof canonical === "string" && canonical.split("/")[0] === providerId) || VENDOR_PROVIDERS.has(providerId);
+      const output = typeof limit.output === "number" && limit.output > 0 ? limit.output : 0;
+      const list = candidates.get(modelId) ?? [];
+      list.push({ vendor, limits: { context: limit.context, output } });
+      candidates.set(modelId, list);
+    }
+  }
+  return Object.fromEntries([...candidates].map(([modelId, list]) => [modelId, (list.find((item) => item.vendor) ?? list[0]).limits]));
+}
+
+/**
  * 价格表：一天最多更新一次；拉不到就留着上次的，并把原因写下来给页面显示。
  * `fetchImpl` 和 `now` 只为测试注入（不连真实网络）。
  */
@@ -126,6 +168,11 @@ export class UsagePrices {
     await this.loading;
   }
 
+  /** models.dev 上这个模型的上下文窗口和单次最多输出；没拉到或没有这个模型时 undefined。 */
+  limitsOf(modelId: string): ModelLimits | undefined {
+    return this.file.limits?.[modelId];
+  }
+
   /** 现在用的价格和上次更新的状态。 */
   table(): { fetchedAt: string | null; error: string | null; prices: Record<string, TokenPrice> } {
     return { fetchedAt: this.file.fetchedAt, error: this.file.error, prices: this.file.prices };
@@ -134,11 +181,12 @@ export class UsagePrices {
   private async refresh(): Promise<void> {
     const now = this.now;
     const fetchedAt = this.file.fetchedAt ? Date.parse(this.file.fetchedAt) : 0;
-    if (now - fetchedAt < DAY) return;
+    if (now - fetchedAt < DAY && this.file.limits) return;
     const attemptAt = this.file.attemptAt ? Date.parse(this.file.attemptAt) : 0;
     if (attemptAt > fetchedAt && now - attemptAt < RETRY) return;
     try {
-      this.file = { fetchedAt: new Date(now).toISOString(), attemptAt: new Date(now).toISOString(), error: null, prices: indexPrices(await this.fetchSource()) };
+      const raw = await this.fetchSource();
+      this.file = { fetchedAt: new Date(now).toISOString(), attemptAt: new Date(now).toISOString(), error: null, prices: indexPrices(raw), limits: indexLimits(raw) };
     } catch (error) {
       this.file = { ...this.file, attemptAt: new Date(now).toISOString(), error: failureReason(error) };
     }

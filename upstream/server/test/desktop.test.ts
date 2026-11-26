@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopControl, RfbClientFilter, attachDesktopWebSocket } from "../src/desktop-control.ts";
+import { filledSecretsFor, redactSecrets, rememberFilledSecret } from "../src/desktop-tools.ts";
 import { createApp } from "../src/http.ts";
 import { makeHob } from "./helpers.ts";
 import { DesktopService, checkDesktopUrl } from "../src/desktop.ts";
@@ -363,5 +364,17 @@ describe("云桌面配置", () => {
   it("拒绝在地址中嵌入令牌", () => {
     expect(() => checkDesktopUrl("http://user:password@localhost")).toThrow();
     expect(() => checkDesktopUrl("file:///tmp/token")).toThrow();
+  });
+  it("Hob 填过的密码只记在这个助手的屏幕下，从命令输出里抹掉", () => {
+    const hob = makeHob();
+    try {
+      rememberFilledSecret(hob.runtime, "hob", "Forum-Lantern#42");
+      rememberFilledSecret(hob.runtime, "other", "Other-Secret#7");
+      const secrets = filledSecretsFor(hob.runtime, "hob");
+      expect(secrets).toEqual(["Forum-Lantern#42"]);
+      expect(redactSecrets('textbox "密码" [ref=e7]: Forum-Lantern#42', secrets)).toBe('textbox "密码" [ref=e7]: ••••');
+      expect(redactSecrets("没有密码的文字", secrets)).toBe("没有密码的文字");
+      expect(redactSecrets("a b a", ["a"])).toBe("•••• b ••••");
+    } finally { hob.close(); }
   });
 });

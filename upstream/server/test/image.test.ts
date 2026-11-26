@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -183,6 +183,32 @@ describe("生图配置校验", () => {
 });
 
 describe("生成图片", () => {
+  it("中止后即使服务迟到返回图片也不落盘", async () => {
+    const home = tempDir("hob-img-abort-");
+    const dir = join(home, "images");
+    const controller = new AbortController();
+    let release!: () => void;
+    let started!: () => void;
+    let passedSignal: AbortSignal | null | undefined;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fakeFetch: typeof fetch = async (_input, init) => {
+      passedSignal = init?.signal;
+      started();
+      await gate;
+      return Response.json({ data: [{ b64_json: PNG.toString("base64") }] });
+    };
+    try {
+      const pending = generateImage({ home, dir, config: { source: "openai", baseUrl: "https://example.invalid/v1", model: "fake" }, apiKey: "fake", fetchImpl: fakeFetch, signal: controller.signal }, { prompt: "画一片叶子" });
+      await entered;
+      controller.abort();
+      release();
+      await expect(pending).rejects.toThrow("图片生成已中止");
+      expect(passedSignal?.aborted).toBe(true);
+      expect(existsSync(dir)).toBe(false);
+    } finally { release(); rmSync(home, { recursive: true, force: true }); }
+  });
+
   it("OpenAI 兼容接口：组装 /images/generations 请求，base64 存成 PNG", async () => {
     const server = await startServer((_request, response) =>
       json(response, { data: [{ b64_json: PNG.toString("base64") }] }),

@@ -2,7 +2,6 @@ import {
   createAgentSession,
   createBashTool,
   createExtensionRuntime,
-  createMcpExtension,
   createToolSearchExtension,
   DefaultResourceLoader,
   ModelRuntime,
@@ -13,7 +12,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Model, Provider } from "@earendil-works/pi-ai";
 import type { AgentSession, ExtensionFactory, Skill, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -21,6 +20,9 @@ import type { ClaudeCodeSettings, MemoryProvider } from "../../shared/types.ts";
 import { claudeStatus } from "./claude-status.ts";
 import type { ThinkingLevel } from "./config.ts";
 import { MEMORY_TOOL_PATTERNS } from "./memory.ts";
+import { limitToolCalls } from "./tool-timeout.ts";
+import { retryStalledModel } from "./model-stall.ts";
+import { protectedFileTools } from "./write-protection.ts";
 
 export interface PiHostOptions {
   /** Hob 自己的引擎目录（凭据、资源、记忆），通常在 HOB_HOME/engine */
@@ -43,17 +45,22 @@ export interface OpenSessionOptions {
   systemPrompt: () => string;
   tools: string[];
   customTools: ToolDefinition<any, any>[];
+  writeGuard?: { home: string; roots: () => string[] };
   /** 每次执行 bash 前注入会话级环境（云桌面 CLI 连接信息）。 */
   bashSpawnHook?: (context: { command: string; cwd: string; env: NodeJS.ProcessEnv }) => { command: string; cwd: string; env: NodeJS.ProcessEnv };
   /** 这一轮用哪个记忆提供者：决定加载哪个捆绑插件（off = 两个都不加载） */
   memory?: MemoryProvider;
-  /** 任务会话加载 MCP 服务（引擎目录的 mcp.json）；对话会话不加载。 */
-  mcp?: boolean;
+  /** 只加载工具搜索；插件连接由 Hob 共享。 */
+  toolSearch?: boolean;
   /** 任务使用的技能；对话会话不加载。 */
   skills?: Skill[];
   disabledSkills?: string[];
+  /** 会话打开时快照好的项目指令文件（通常仅绑定工作目录根的 AGENTS.md） */
+  agentsFiles?: Array<{ path: string; content: string }>;
   /** Router 大结果落盘目录；任务不传。 */
   spillDir?: string;
+  /** 工具和模型各自的无响应时限；每次调用时读取当前设置。 */
+  stall?: { milliseconds: () => number; onRetry: () => void };
 }
 
 export interface OpenedSession {
@@ -68,7 +75,22 @@ export interface OpenedSession {
 const FAILED_PREFIX = "调用失败：";
 
 /** 读文件的工具：出错就是「文件不存在」这类，模型看得懂，不用再加开头。 */
-const PLAIN_FAILURE_TOOLS = new Set(["read"]);
+const PLAIN_FAILURE_TOOLS = new Set(["read", "edit", "write", "save_skill", "review_job"]);
+
+/** 不认识的参数原样报错：静默丢掉会让模型以为做到了（比如把检查脚本写在 create_routine 顶层，建出没有检查的定时任务）。 */
+function strictSchema(schema: any): any {
+  if (Array.isArray(schema)) return schema.map(strictSchema);
+  if (!schema || typeof schema !== "object") return schema;
+  const out: any = {};
+  for (const [key, value] of Object.entries(schema)) out[key] = key === "properties" ? Object.fromEntries(Object.entries(value as object).map(([k, v]) => [k, strictSchema(v)])) : (value && typeof value === "object" ? strictSchema(value) : value);
+  if (out.type === "object" && out.properties && out.additionalProperties === undefined) out.additionalProperties = false;
+  return out;
+}
+
+/** Hob 自己定义的工具参数一律严格；插件工具（带 namespace）用服务给的 schema，不动。 */
+export function strictTools(tools: ToolDefinition<any, any>[]): ToolDefinition<any, any>[] {
+  return tools.map((tool) => tool.namespace ? tool : { ...tool, parameters: strictSchema(tool.parameters) });
+}
 
 /**
  * 给会话装自定义工具时统一包一层：返回 isError 的，或者直接抛异常的，发给模型的文字前面加「调用失败：」。
@@ -134,13 +156,14 @@ export function bundledPluginEntry(packageName: string): string {
   return join(dirname(manifest), entry);
 }
 
-function emptyLoader(systemPrompt: () => string): ResourceLoader {
+function emptyLoader(systemPrompt: () => string, agentsFiles: Array<{ path: string; content: string }> = []): ResourceLoader {
+  const frozenAgents = agentsFiles.map((file) => ({ ...file }));
   return {
     getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
     getSkills: () => ({ skills: [], diagnostics: [] }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
+    getAgentsFiles: () => ({ agentsFiles: frozenAgents }),
     // 每轮现读 store：换了规矩/记忆下一轮就生效
     getSystemPrompt: () => systemPrompt(),
     getSystemPromptSource: () => undefined,
@@ -151,12 +174,20 @@ function emptyLoader(systemPrompt: () => string): ResourceLoader {
   };
 }
 
+const MEMORY_SNAPSHOT_HEADER = /(\n\n## Memory\n\()Snapshot [^\n.]* at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\. /;
+
+/** 去掉 pi-memory 注入头里会变的快照原因和秒级时间戳，保留后面的指引和记忆正文。 */
+export function stabilizeMemorySnapshot(text: string): string {
+  return text.replace(MEMORY_SNAPSHOT_HEADER, "$1");
+}
+
 /**
- * 记忆插件互斥断言 + 本地记忆的工具修剪。只看捆绑插件（additionalExtensionPaths）：
+ * 记忆插件互斥断言 + 本地记忆的工具修剪与快照去抖。只看捆绑插件（additionalExtensionPaths）：
  * 内联工厂（MCP、按需搜索）不是记忆插件，直接放行。
  *
  * 一次只加载一家的插件：万一哪天两条路径同时挂上，这里立刻报错，而不是把用户的记忆
- * 分裂成两份。pi-memory 没带 qmd，`memory_search` 只会报错，所以在注册前就去掉。
+ * 分裂成两份。pi-memory 没带 qmd，`memory_search` 只会报错，所以在注册前就去掉；
+ * 它在 before_agent_start 里拼的快照行带原因和秒级时间，重开会话会改写 system，这里一并去掉。
  */
 export function filterMemoryExtensions(
   result: LoadExtensionsResult,
@@ -178,10 +209,22 @@ export function filterMemoryExtensions(
     throw new Error(`记忆插件与当前记忆来源不一致：期望 ${provider}，实际 ${loaded ?? "无"}。`);
   }
   const extensions = bundled.map((extension) => {
-    if (!extension.tools?.has("memory_search")) return extension;
-    const tools = new Map(extension.tools);
-    tools.delete("memory_search");
-    return { ...extension, tools };
+    let next = extension;
+    if (next.tools?.has("memory_search")) {
+      const tools = new Map(next.tools);
+      tools.delete("memory_search");
+      next = { ...next, tools };
+    }
+    if (provider === "local" && next.handlers?.has("before_agent_start")) {
+      const handlers = new Map(next.handlers);
+      const wrapped = (handlers.get("before_agent_start") ?? []).map((handler) => async (event: any, ctx: any) => {
+        const out = await handler(event, ctx) as { systemPrompt?: unknown; [key: string]: unknown } | undefined;
+        return out && typeof out.systemPrompt === "string" ? { ...out, systemPrompt: stabilizeMemorySnapshot(out.systemPrompt) } : out;
+      });
+      handlers.set("before_agent_start", wrapped);
+      next = { ...next, handlers };
+    }
+    return next;
   });
   return { ...result, extensions: [...result.extensions.filter(isInline), ...extensions] };
 }
@@ -300,14 +343,13 @@ export class PiHost {
       noThemes: true,
       noContextFiles: true,
       additionalExtensionPaths: pluginPath ? [pluginPath] : [],
-      // 任务会话的 MCP：读引擎目录的 mcp.json，会话启动（bindExtensions）时连服务。
-      // 按需搜索（deferred）的服务靠 tool_search 加载，codemode 不提供：不加载那个扩展。
+      // 按需工具通过 tool_search 加载，连接由 Hob 的插件宿主管理。
       extensionFactories: [
         ...(this.claudeFactory ? [this.claudeFactory] : []),
-        ...(options.mcp ? [createMcpExtension(), createToolSearchExtension()] : []),
+        ...(options.toolSearch ? [createToolSearchExtension()] : []),
         ...(options.spillDir ? [((pi) => {
           pi.on("tool_result", async (event) => {
-            if (event.toolName === "read") return;
+            if (event.toolName === "read" || event.toolName === "show_assistant") return;
             const full = event.content.filter((block) => block.type === "text").map((block) => block.text).join("");
             if (full.length <= 4000) return;
             const dir = resolve(options.spillDir!);
@@ -335,7 +377,7 @@ export class PiHost {
     await base.reload();
     // 系统提示词仍由我们每轮现读（DefaultResourceLoader 的提示词只在 reload 时算一次）
     return {
-      ...emptyLoader(options.systemPrompt),
+      ...emptyLoader(options.systemPrompt, options.agentsFiles),
       getExtensions: () => base.getExtensions(),
       getSkills: () => {
         if (!options.skills) return { skills: [], diagnostics: [] };
@@ -369,7 +411,8 @@ export class PiHost {
     const memoryTools = MEMORY_TOOL_PATTERNS[options.memory ?? "off"];
     const customTools = [
       ...(options.bashSpawnHook ? [createBashTool(options.cwd, { spawnHook: options.bashSpawnHook })] : []),
-      ...(options.customTools ?? []),
+      ...(options.writeGuard ? protectedFileTools(options.cwd, options.writeGuard.home, options.writeGuard.roots) : []),
+      ...strictTools(options.customTools ?? []),
     ];
     const { session } = await createAgentSession({
       cwd: options.cwd,
@@ -383,13 +426,38 @@ export class PiHost {
       tools: [...options.tools, ...memoryTools],
       customTools: toolFailureText(customTools),
     });
+    if (options.stall) {
+      const stall = options.stall;
+      const agentState = session.agent.state;
+      const descriptor = Object.getOwnPropertyDescriptor(agentState, "tools")!;
+      Object.defineProperty(agentState, "tools", {
+        ...descriptor,
+        set(tools) { descriptor.set!.call(agentState, limitToolCalls(tools, stall.milliseconds)); },
+      });
+      agentState.tools = agentState.tools;
+      const originalStream = session.agent.streamFunction;
+      const retryStream = retryStalledModel(originalStream, stall.milliseconds, stall.onRetry);
+      session.agent.streamFunction = (model, context, request) => request?.sessionId === session.agent.sessionId
+        ? retryStream(model, context, request)
+        : originalStream(model, context, request);
+      // 保留 SDK 对运行时鉴权的标记：压缩摘要不应预解析凭据再传回同一运行时。
+      // 1.5.2 的公开入口没有导出这个标记函数，只能使用固定版本的内部文件。
+      const sdkPackage = requireFromHere.resolve.paths("@earendil-works/pi-coding-agent")?.map(path => join(path, "@earendil-works/pi-coding-agent/package.json")).find(existsSync);
+      if (!sdkPackage) throw new Error("找不到引擎包。");
+      const { markRuntimeStreamFunction } = await import(pathToFileURL(join(dirname(sdkPackage), "dist/core/agent-session.js")).href);
+      markRuntimeStreamFunction(session.agent.streamFunction, await this.runtime());
+    }
     // resources_discover 由 bindExtensions 触发；Lore 注册技能目录，MCP 连服务（都在后台）
     if (options.memory === "lore") {
       this.loreSkillPaths = [];
       await session.bindExtensions({ mode: "print" });
-    } else if (options.mcp || this.claudeFactory) {
+    } else if (options.toolSearch || this.claudeFactory) {
       await session.bindExtensions({ mode: "print" });
     }
+    // SDK 的 tools 同时决定注册白名单和初始激活集；deferred 工具要留在注册表里，
+    // 但不能随白名单直接声明。搜索后 pi 仍允许按原名激活这些普通工具。
+    const deferred = new Set((options.customTools ?? []).filter(tool => tool.exposure === "deferred").map(tool => tool.name));
+    if (deferred.size) session.setActiveToolsByName(session.getActiveToolNames().filter(name => !deferred.has(name)));
     return { session, manager };
   }
 }

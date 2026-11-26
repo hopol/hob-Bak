@@ -12,6 +12,7 @@ import { JOB_STATUS } from "./status-meta.tsx";
 import { ownerGroup, topicFace, topicGroups, topicPreview } from "../topics.ts";
 import { GroupCluster, groupPreview } from "./Groups.tsx";
 import { todoStamp } from "./status-meta.tsx";
+import { UpdateDot, availableVersion } from "./SettingsParts.tsx";
 
 /** 群头部第二行：几个成员。 */
 export function membersLine(g: GroupSummary): string {
@@ -93,6 +94,7 @@ export function GroupSidebar({ groupId }: { groupId?: string }) {
   const [showAllClosed, setShowAllClosed] = useState(false);
   if (!g) return null;
   const groups = topicGroups(s.groups, g.id);
+  const updateVersion = availableVersion(s.update);
 
   return (
     <aside className="side gside">
@@ -124,7 +126,10 @@ export function GroupSidebar({ groupId }: { groupId?: string }) {
         </button>
         <button className="frow" onClick={openSettings}>
           <Icon name="gear" size={18} />
-          <span className="sp">{t("设置")}</span>
+          <span className="sp">
+            {t("设置")}
+            {updateVersion ? <UpdateDot version={updateVersion} /> : null}
+          </span>
         </button>
       </div>
       {creating ? <NewTopicDialog group={g} onClose={() => setCreating(false)} /> : null}
@@ -203,13 +208,14 @@ export function PlaceJobs({ ids, where = true }: { ids: string[]; where?: boolea
 /** 开新话题的小对话框：一个话题名，建好直接进这个话题，失败在框里显示原因。 */
 export function NewTopicDialog({ group, onClose }: { group: GroupSummary; onClose: () => void }) {
   const [title, setTitle] = useState("");
+  const [cwd, setCwd] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const submit = async () => {
     if (!title.trim() || busy) return;
     setBusy(true);
     setError(null);
-    const failure = await openTopic(group.id, title.trim());
+    const failure = await openTopic(group.id, title.trim(), group.cwd ? undefined : cwd.trim() || undefined);
     setBusy(false);
     if (failure) setError(failure);
     else onClose();
@@ -219,6 +225,17 @@ export function NewTopicDialog({ group, onClose }: { group: GroupSummary; onClos
           <span>{t("话题名")}</span>
           <input autoFocus maxLength={40} value={title} placeholder={t("一件事，如「相册备份出错」")} onChange={(event) => setTitle(event.target.value)} />
         </label>
+        {group.cwd ? (
+          <div className="gcreate-field">
+            <span>{t("工作目录")}</span>
+            <div className="field ro" title={group.cwd}>{t("跟随群（{path}）", { path: group.cwd })}</div>
+          </div>
+        ) : (
+          <label className="gcreate-field">
+            <span>{t("工作目录（可选）")}</span>
+            <input value={cwd} placeholder={t("如 /workspace/app，创建后不可修改")} onChange={(event) => setCwd(event.target.value)} />
+          </label>
+        )}
         {error ? <div className="gcreate-error">{error}</div> : null}
       </DialogShell>;
 }

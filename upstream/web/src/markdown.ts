@@ -37,6 +37,34 @@ function formula(source: string, display: boolean, raw: string): string {
   }
 }
 
+const CJK_RE = /[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/;
+const MATH_TEXT_CMD_RE = /\\(?:text(?:rm|bf|it|sf|tt|normal)?|math(?:rm|bf|it|sf|tt)|operatorname\*?|mbox|hbox)\s*\{/g;
+
+/** 单 $ ... $ 里除 \text{...} 等文本命令外的裸 CJK 字符视为普通文本而非公式。 */
+function hasBareCjk(source: string): boolean {
+  if (!CJK_RE.test(source)) return false;
+  let stripped = "";
+  let i = 0;
+  MATH_TEXT_CMD_RE.lastIndex = 0;
+  for (let m = MATH_TEXT_CMD_RE.exec(source); m; m = MATH_TEXT_CMD_RE.exec(source)) {
+    if (m.index < i) continue;
+    let depth = 1;
+    let j = m.index + m[0].length;
+    while (j < source.length && depth > 0) {
+      if (source[j] === "\\" && j + 1 < source.length) { j += 2; continue; }
+      if (source[j] === "{") depth++;
+      else if (source[j] === "}") depth--;
+      j++;
+    }
+    if (depth !== 0) continue;
+    stripped += source.slice(i, m.index);
+    i = j;
+    MATH_TEXT_CMD_RE.lastIndex = i;
+  }
+  stripped += source.slice(i);
+  return CJK_RE.test(stripped);
+}
+
 const markdown = new Marked({
   extensions: [
     {
@@ -51,9 +79,17 @@ const markdown = new Marked({
     {
       name: "inlineMath", level: "inline",
       start(src) { return src.search(/\$|\\\(/); },
-      tokenizer(src) {
-        const match = /^(?:\$(?!\$|\s)([^$`\n]*?[^$`\s])\$(?!\d)|\\\((.+?)\\\))/.exec(src);
-        if (match) return { type: "inlineMath", raw: match[0], text: match[1] ?? match[2] };
+      tokenizer(src, tokens) {
+        const paren = /^\\\((.+?)\\\)/.exec(src);
+        if (paren) return { type: "inlineMath", raw: paren[0], text: paren[1] };
+        const prev = tokens.at(-1)?.raw ?? "";
+        // 紧跟在字母数字后面的 $ 多半不是公式（正则 /^foo$/），上下标和命令开头的除外（CO$_2$、m$^2$、90$^\\circ$）
+        if (/[A-Za-z0-9_]$/.test(prev) && !/^\$[\\^_]/.test(src)) return;
+        // 模板字符串 / Shell 变量展开（如 ${name}、${job.cwd}）不作为公式起点
+        if (/^\$\{[A-Za-z_][A-Za-z0-9_.-]*\}(?![_^])/.test(src)) return;
+        const match = /^\$(?!\$|\s)([^$`\n]*?[^$`\s])\$(?!\w|\{|\$|\\[A-Za-z])/.exec(src);
+        // 夹着裸中文、又没有等号和上下标的，是两个 $ 之间的普通句子，不是公式
+        if (match && (/[\\=^_]/.test(match[1]) || !hasBareCjk(match[1]))) return { type: "inlineMath", raw: match[0], text: match[1] };
       },
       renderer(token) { return formula(String(token.text), false, token.raw); },
     },

@@ -668,8 +668,8 @@ describe("任务", () => {
 });
 
 describe("任务做完就提醒沉淀，写明用了哪些技能", () => {
-  const hint = "这个任务没用到技能。用 save_job_as_skill 让它回顾一遍，把能复用的做法沉淀下来，有没有值得沉淀的由它判断；已经有同类的技能，into 填那份。";
-  const usedHint = (titles: string[]) => `这个任务用了技能${titles.map((title) => `「${title}」`).join("")}。用 save_job_as_skill 让它回顾一遍，有没有值得沉淀的由它判断：技能里没写到的做法、写错的地方，into 填对应的那份补进去；是另一类事的做法，就新建一份。`;
+  const hint = "这个任务没用到技能。可以用 review_job 让它回顾一遍，把能复用的做法沉淀下来，有没有值得沉淀的由它判断。";
+  const usedHint = (titles: string[]) => `这个任务用了技能${titles.map((title) => `「${title}」`).join("")}。可以用 review_job 让它回顾一遍，有没有值得沉淀的由它判断：技能里没写到的做法、写错的地方，它会补进对应的那份；是另一类事的做法，它会新建一份。`;
   const makeJob = (overrides: Partial<Job> = {}): Job => ({
     id: "t-hint", assistantId: "hob", assistantName: "Hob", title: "整理报告", instruction: "整理报告", status: "done",
     createdAt: new Date().toISOString(), stats: { reads: 2, commands: 1, edits: 0 }, activity: [], summary: "报告整理好了",
@@ -717,7 +717,7 @@ describe("任务做完就提醒沉淀，写明用了哪些技能", () => {
       saveAssistantSkill(hob.home, "hob", { name: "report-brief", title: "报告简报", description: "整理简报", content: "步骤" }, job.id);
       saveAssistantSkill(hob.home, "hob", { name: "other-skill", title: "别的事", description: "别的事", content: "步骤" }, "t-other");
       const lines = assistantJobResultEvent(hob.home, job).split("\n");
-      expect(lines[2]).toBe(`${hint}上次从这个任务沉淀出了技能「报告简报」（report-brief），into 填它。`);
+      expect(lines[2]).toBe(hint);
     } finally { hob.close(); }
   });
 

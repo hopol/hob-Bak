@@ -1,0 +1,13 @@
+{
+  "name": "vault",
+  "displayName": "密码库",
+  "version": "1.0.1",
+  "description": "Saves the usernames and passwords for your websites on this machine, encrypted. Assistants can see which logins you have and ask you to save new ones on a card, but never the passwords: when a site needs a login, Hob fills it into the page itself after you approve. The key is stored next to the vault in Hob's data folder, so anyone who can read that folder can read the vault.",
+  "extensions": {
+    "com.hob.plugins": {
+      "icon": "icon.svg",
+      "publisher": "Hob",
+      "categories": ["productivity"]
+    }
+  }
+}

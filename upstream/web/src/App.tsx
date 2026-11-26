@@ -7,17 +7,19 @@ import { FilePreviewOverlay } from "./components/FilePreview.tsx";
 import { JobOverlay } from "./components/JobDetail.tsx";
 import { Login } from "./components/Login.tsx";
 import { Knowledge } from "./components/Knowledge.tsx";
+import { Plugins } from "./components/Plugins.tsx";
 import { MobileList, Sheet } from "./components/Mobile.tsx";
 import { Panel } from "./components/Panel.tsx";
 import { PushPrompt } from "./components/PushPrompt.tsx";
 import { SettingsPage } from "./components/Settings.tsx";
+import { Stars } from "./components/Stars.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { GroupSidebar, MobileTopics } from "./components/Topics.tsx";
 import { Home } from "./components/Home.tsx";
 import { groupSidebarFor } from "./topics.ts";
 import { useLeave } from "./motion.ts";
 import { applyUpdate } from "./pwa.ts";
-import { gonePages, layerList, pageKey, panelAssistant, type GonePage } from "./panel-stack.ts";
+import { gonePages, layerList, pageKey, panelDesk, type GonePage } from "./panel-stack.ts";
 import { backPanel, answer, clearNotice, closeLoginDesktop, loadDesktopWidth, saveDesktopWidth, start, tick, useApp, type PanelPage } from "./store.ts";
 import { isNarrow, updateStatusColor } from "./theme.ts";
 import { useDesktopScreens } from "./desktop-screens.ts";
@@ -54,6 +56,7 @@ export function App() {
   const chat = useLeave(s.mobile === "chat" && Boolean(s.sel ?? s.gsel), 240);
   const settings = useLeave(s.page === "settings", 180);
   const knowledge = useLeave(s.page === "knowledge", 180);
+  const plugins = useLeave(s.page === "plugins", 180);
   const sheet = useLeave(s.sheet, 180);
   // 左栏的群二级页（桌面）和手机的话题列表：退场时还要画着刚才那个群，id 先记下来
   const sideGroup = groupSidebarFor(s.gsel, s.sideHome, s.groups);
@@ -205,6 +208,9 @@ export function App() {
     );
   }
 
+  if (s.page === "stars") return <><Stars narrow={narrow} />{toast}{pushPrompt}{loginOverlay}</>;
+  if (plugins.mounted) return <><Plugins narrow={narrow} leaving={plugins.leaving} />{toast}{pushPrompt}{loginOverlay}</>;
+
   if (knowledge.mounted) {
     return (
       <>
@@ -224,8 +230,7 @@ export function App() {
   // 桌面没打开对话就是首页：右栏收起，点开的任务、文件照样盖上来
   const home = !s.sel && !s.gsel;
   const sideHidden = s.sideCollapsed && !home;
-  const desktopId = desktop.profiles[panelAssistant(s.panelStack, s.sel)];
-  const desktopFocus = s.nowWide && (!s.gsel || top?.kind === "member") && !!desktopId && desktop.screens.some((entry) => entry.id === desktopId && entry.running);
+  const desktopFocus = s.nowWide && (!s.gsel || !top || top.kind === "member") && panelDesk(s.panelStack, s.sel, s.gsel, s.groups, desktop).running;
 
   if (narrow) {
     return (
@@ -272,7 +277,8 @@ export function App() {
       {/* 右栏宽度跟根页走（收起、云桌面展开），宽页（任务、文件）打开时变宽、把对话区挤窄；上面的页一层层盖在右栏里 */}
       <div ref={panelwrap} className={`panelwrap${fullPage ? " full" : widePage ? " wide page" : home || s.collapsed ? " off" : desktopFocus ? " wide focus" : s.nowWide ? " wide" : ""}`} style={desktopWidth ? { ["--desk-w" as string]: `${desktopWidth}px` } : undefined}>
         {desktopFocus && !widePage && !fullPage && !home && !s.collapsed ? <div className="panel-resize" role="separator" aria-orientation="vertical" aria-label={t("拖动调整云桌面宽度")} onPointerDown={startResize} /> : null}
-        <Panel page={null} />
+        {/* 首页右栏是收起的：不渲染根页，免得回首页那一刻在滑出去的面板里重画一遍主助手的资料 */}
+        {home ? null : <Panel page={null} />}
         {layers.map(({ page, leaving }) => (
           <div key={pageKey(page)} className={`panel-layer${page.kind === "file" || page.kind === "job" || page.kind === "jobs" ? " wide" : ""}${page.kind === "job" && page.instant ? " instant" : ""}${leaving ? " leaving" : ""}`}>
             {page.kind === "file" ? <FilePreviewOverlay embedded page={page} />

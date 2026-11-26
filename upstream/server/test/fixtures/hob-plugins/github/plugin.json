@@ -1,0 +1,11 @@
+{
+  "name": "github",
+  "displayName": "GitHub",
+  "version": "1.0.0",
+  "description": "Connect GitHub tools using a personal access token.",
+  "homepage": "https://github.com/github/github-mcp-server",
+  "userConfig": {
+    "GITHUB_PERSONAL_ACCESS_TOKEN": { "type": "string", "title": "个人访问令牌", "description": "在 [GitHub](https://github.com/settings/personal-access-tokens) 创建个人访问令牌。", "required": true, "sensitive": true }
+  },
+  "extensions": { "com.hob.plugins": { "icon": "icon.svg", "publisher": "GitHub", "categories": ["development"] } }
+}

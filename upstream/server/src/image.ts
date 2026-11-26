@@ -2,6 +2,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import type { ImageSettings } from "../../shared/types.ts";
+import { t } from "../../shared/i18n.ts";
 import { IMAGE_TYPES } from "../../shared/media.ts";
 import { newId } from "./ids.ts";
 import { readSecrets } from "./secrets.ts";
@@ -75,6 +76,8 @@ export interface ImageContext {
   apiKey?: string;
   /** 测试注入假服务器 */
   fetchImpl?: typeof fetch;
+  /** 单次工具调用的中止信号。 */
+  signal?: AbortSignal;
 }
 
 export interface GenerateImageInput {
@@ -101,7 +104,9 @@ export async function generateImage(ctx: ImageContext, input: GenerateImageInput
   if (ctx.config.source !== "openai") {
     throw new Error("尚未配置图像生成：请在「设置 → 图像生成」中选择 OpenAI 兼容接口。");
   }
+  if (ctx.signal?.aborted) throw new Error(t("图片生成已中止。"));
   const bytes: ImageBytes = await openAIImage(ctx, ctx.config, prompt, input);
+  if (ctx.signal?.aborted) throw new Error(t("图片生成已中止。"));
   if (!bytes.data.length) throw new Error("生成失败：接口返回了空图片。");
   mkdirSync(ctx.dir, { recursive: true });
   const ext = EXT_BY_MIME[bytes.mimeType.toLowerCase()] ?? "png";
@@ -145,12 +150,12 @@ async function openAIImage(
     };
   }
 
-  const response = await send(fetchImpl, endpoint, request, config.baseUrl);
+  const response = await send(fetchImpl, endpoint, request, config.baseUrl, ctx.signal);
   const body = (await response.json().catch(() => undefined)) as unknown;
   const first = firstImage(body);
   if (!first) throw new Error(`生成失败：接口未返回图片：${snippet(body)}`);
   if (first.b64_json) return { data: Buffer.from(first.b64_json, "base64"), mimeType: "image/png" };
-  const fetched = await send(fetchImpl, first.url!, { method: "GET" }, first.url!);
+  const fetched = await send(fetchImpl, first.url!, { method: "GET" }, first.url!, ctx.signal);
   const mimeType = fetched.headers.get("content-type")?.split(";")[0]?.trim() || "image/png";
   return { data: Buffer.from(await fetched.arrayBuffer()), mimeType };
 }
@@ -166,11 +171,13 @@ export function firstImage(body: unknown): { b64_json?: string; url?: string } |
   return b64 || url ? { ...(b64 ? { b64_json: b64 } : {}), ...(url ? { url } : {}) } : undefined;
 }
 
-async function send(fetchImpl: typeof fetch, url: string, init: RequestInit, label: string): Promise<Response> {
+async function send(fetchImpl: typeof fetch, url: string, init: RequestInit, label: string, signal?: AbortSignal): Promise<Response> {
   let response: Response;
   try {
-    response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const timeout = AbortSignal.timeout(TIMEOUT_MS);
+    response = await fetchImpl(url, { ...init, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
   } catch (error) {
+    if (signal?.aborted) throw new Error(t("图片生成已中止。"));
     const reason = error instanceof Error ? error.message : String(error);
     if (/timeout|timed out|abort/i.test(reason)) throw new Error(`${label} 请求超时：${TIMEOUT_MS / 1000} 秒内未响应。`);
     throw new Error(`无法连接 ${label}：${reason}`);

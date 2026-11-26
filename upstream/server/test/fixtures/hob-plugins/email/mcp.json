@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "email": {
+      "command": "node",
+      "args": ["${hob.root}/server/mcp/email.mjs"],
+      "env": {
+        "EMAIL_PROFILES": "${hob.profiles}",
+        "EMAIL_DATA": "${hob.plugin_data}"
+      }
+    }
+  }
+}

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { Assistant, HobConfig } from "../../shared/types.ts";
 import { archiveAssistant } from "../src/actions.ts";
 import { applyEngineEnv } from "../src/boot.ts";
-import { DEV_TEAM_GROUP, DEV_TEAM_ROLES } from "../src/dev-team.ts";
+import { DEV_TEAM_GROUP, DEV_TEAM_ROLES, HACKER } from "../src/dev-team.ts";
 import { PiHost } from "../src/pi.ts";
 import { createRuntime } from "../src/runtime.ts";
 import { makeHob, text, waitFor, type TestHob } from "./helpers.ts";
@@ -151,6 +151,58 @@ describe("自带的敏捷团队", () => {
       expect(replies.map((item) => item.speaker)).toEqual(["qa"]);
     } finally {
       hob.close();
+    }
+  });
+});
+
+describe("自带的 Hacker", () => {
+  it("首次启动建出 Hacker，和 Hob 一起置顶", () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
+      expect(hob.runtime.store.assistant("hacker")).toMatchObject({ name: "Hacker", duty: HACKER.duty, dutyLong: HACKER.dutyLong, sprite: "shield", pinned: true, hidden: false, primary: false });
+      // 补充提示词照随包的文件原样写进去（只比相等，不把原文打进测试输出）
+      const instructions = readFileSync(new URL("../src/hacker-instructions.md", import.meta.url), "utf8").trim();
+      expect(instructions.length > 0 && hob.runtime.store.assistant("hacker")?.instructions === instructions).toBe(true);
+      expect(hob.runtime.store.assistants().filter((assistant) => assistant.pinned).map((assistant) => assistant.id).sort()).toEqual(["hacker", "hob"]);
+      expect(JSON.parse(readFileSync(join(hob.home, "system", "seeded.json"), "utf8"))).toMatchObject({ devTeam: true, hacker: true });
+    } finally {
+      hob.close();
+    }
+  });
+
+  it("删了以后重启不补回来", async () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
+      hob.runtime.store.deleteAssistant("hacker");
+      const again = restart(hob);
+      try {
+        expect(again.store.assistant("hacker")).toBeUndefined();
+      } finally {
+        again.router.disposeAll();
+      }
+    } finally {
+      hob.close();
+    }
+  });
+
+  it("已经有 id 为 hacker 的助手时不覆盖、不另建", () => {
+    const home = mkdtempSync(join(tmpdir(), "hob-hacker-"));
+    try {
+      applyEngineEnv(process.env, home);
+      const own = { ...legacyAssistant("hacker", "我的安全助手"), pinned: false, dutyLong: "用户自己写的职责" };
+      mkdirSync(join(home, "assistants", "hacker"), { recursive: true });
+      writeFileSync(join(home, "assistants", "hacker", "profile.json"), JSON.stringify(own));
+      const config: HobConfig = { passwordHash: "x", cookieSecret: "y", host: "127.0.0.1", port: 0 };
+      const runtime = createRuntime({ home, config, pi: new PiHost({ engineDir: join(home, "system", "engine") }) });
+      runtime.initializeLocale("zh-CN");
+      try {
+        expect(runtime.store.assistant("hacker")).toEqual(own);
+        expect(runtime.store.assistants().some((assistant) => assistant.id.startsWith("hacker-"))).toBe(false);
+      } finally {
+        runtime.router.disposeAll();
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

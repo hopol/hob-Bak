@@ -18,6 +18,9 @@ const DENY_ANY_FILE = /\.bak/i;
 const DENY_WORK_DIRS = /(^|[/\\])\.(ssh|gnupg|aws|git)([/\\]|$)/;
 const DENY_WORK_FILE = /^(\.env.*|id_[a-z0-9]+|.*\.(pem|key))$/i;
 
+/** 页面只读得到 Hob 自己的目录和任务工作目录；范围外的文件报这句。 */
+export const OUTSIDE_HOB = "只允许读 Hob 自己的文件";
+
 /** 预览面板最多拉 1 MB 文本。 */
 export const MAX_TEXT_BYTES = 1024 * 1024;
 
@@ -74,6 +77,35 @@ function headOf(path: string): Uint8Array {
 }
 
 /**
+ * 检查路径本身及其 realpath 是否命中敏感目录或敏感文件（.ssh、.gnupg、.aws、.git、.env、id_*、.pem、.key、.bak，以及 HOB_HOME/system 等）。
+ * 命中时返回拒绝原因，安全时返回 undefined。
+ */
+export function checkSensitivePath(targetPath: string, home?: string): string | undefined {
+  const resolved = resolve(targetPath);
+  const candidates = [resolved];
+  try {
+    const real = realpathSync(resolved);
+    if (real !== resolved) candidates.push(real);
+  } catch {
+    // 损坏软链或不存在的路径仍对原路径做规则检查
+  }
+  const homeRoots = home
+    ? [...new Set([resolve(home), ...(existsSync(home) ? [realpathSync(resolve(home))] : [])])]
+    : [];
+  for (const candidate of candidates) {
+    for (const root of homeRoots) {
+      if ((candidate === root || candidate.startsWith(`${root}${sep}`)) && denied(root, candidate)) {
+        return "这个文件不对页面开放";
+      }
+    }
+    if (DENY_WORK_DIRS.test(candidate) || DENY_WORK_FILE.test(basename(candidate)) || DENY_ANY_FILE.test(basename(candidate))) {
+      return "这个文件不对页面开放";
+    }
+  }
+  return undefined;
+}
+
+/**
  * 解析一个路径：realpath 后必须在数据目录或某个任务的工作目录里（符号链接指出去就是 403），
  * 凭据和内部状态文件不开放，不是普通文件当 404。
  * 包含数据目录的工作目录（家目录、根目录这类）太宽，不算数。
@@ -99,7 +131,7 @@ export function lookupFile(home: string, requested: string, workDirs: string[] =
   const inHome = path.startsWith(`${root}${sep}`);
   const work = inHome ? undefined : workRoots(root, workDirs).find((dir) => path.startsWith(`${dir}${sep}`));
   // 先说范围再说类型：范围外的目录报「不存在」，模型会以为路径写错了
-  if (!inHome && !work) return { ok: false, status: 403, error: "只允许读 Hob 自己的文件" };
+  if (!inHome && !work) return { ok: false, status: 403, error: OUTSIDE_HOB };
   if (!isFile) return { ok: false, status: 404, error: "这是目录，不是文件" };
   const relativePath = relative(inHome ? root : work!, path);
   if ((inHome && denied(root, path)) || DENY_WORK_DIRS.test(relativePath) || DENY_WORK_FILE.test(basename(path)) || DENY_ANY_FILE.test(basename(path))) {

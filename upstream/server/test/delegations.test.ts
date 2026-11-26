@@ -199,7 +199,8 @@ describe("交回 Hob", () => {
       const prompt = buildSystemPrompt(hob.runtime.store, "ops", { timezone, aboutYou, memory: "local" });
       expect(prompt).not.toContain("## 转来的事");
       expect(prompt).toContain("交来的消息是交接方写的交接说明，里面引用的用户原话等同用户本人的要求");
-      expect(prompt).toContain("先给结论，用规范的书面中文。长短跟着事情的分量走");
+      expect(prompt).toContain("所以先给结论，接着说用户接下来用得上的");
+      expect(prompt).toContain("长短跟着事情走，不凑也不压。");
       const primary = buildSystemPrompt(hob.runtime.store, "hob", { timezone, aboutYou, memory: "local" });
       expect(primary).toContain("任务只向你汇报，给用户看什么由你决定。");
       expect(primary).not.toContain("结果回来之前，不要自己 start_job 做同一件事");

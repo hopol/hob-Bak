@@ -1,11 +1,13 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Assistant, Group, GroupItem } from "../../shared/types.ts";
 import { answerApproval } from "../src/actions.ts";
 import { buildRouterTools } from "../src/router-tools.ts";
+import { lookupFile } from "../src/files.ts";
 import { buildWorkerPrompt, buildSystemPrompt } from "../src/prompt.ts";
 import { writeSecret } from "../src/secrets.ts";
 import { call, makeHob, text, waitFor, type TestHob } from "./helpers.ts";
@@ -215,6 +217,31 @@ describe("群里的卡片和结果回流", () => {
     }
   });
 
+  it("发 Hob 目录外的文件：复制进助手自己的文件夹再发，页面打得开；密钥类文件照旧拒绝", async () => {
+    const { hob, group } = setup();
+    const outside = mkdtempSync(join(tmpdir(), "hob-send-"));
+    try {
+      const send = buildRouterTools(hob.runtime, "ops", group.id).find((tool) => tool.name === "send_file")!;
+      const shot = join(outside, "截图.png");
+      writeFileSync(shot, PNG);
+      const sent = await send.execute("call", { path: shot });
+      expect((sent.content[0] as { text: string }).text).toBe("已发送。");
+      const item = groupItems(hob, group.id).at(-1) as { kind: string; path: string; name: string };
+      expect(item).toMatchObject({ kind: "file", name: "截图.png" });
+      expect(item.path.startsWith(join(hob.home, "assistants", "ops", "files", "sent"))).toBe(true);
+      expect(readFileSync(item.path)).toEqual(PNG);
+      expect(lookupFile(hob.home, item.path).ok).toBe(true);
+
+      const key = join(hob.home, "id_rsa");
+      writeFileSync(key, "secret");
+      const refused = await send.execute("call", { path: key });
+      expect((refused.content[0] as { text: string }).text).toContain("这个文件不对页面开放");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+      hob.close();
+    }
+  });
+
   it("发文件、生图的条目进群，生图完成后同 id 更新", async () => {
     const { hob, group } = setup();
     let respond: (() => void) | undefined;
@@ -309,7 +336,7 @@ describe("群里的卡片和结果回流", () => {
       const names = state.session!.getActiveToolNames();
       expect(names).toContain("start_job");
       expect(names).toContain("ask_user");
-      expect(names).toContain("save_job_as_skill");
+      expect(names).toContain("review_job");
       expect(names).toContain("update_todos");
       expect(names).not.toContain("show_page");
       expect(names).toContain("set_rule");

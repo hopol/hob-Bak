@@ -10,14 +10,13 @@ import {
   listMcpImports,
   mcpEnabled,
   mcpView,
-  MCP_SESSION_TOOLS,
   normalizeMcpName,
   patchMcpServer,
   removeMcpServer,
   saveMcpServer,
   testMcpServer,
 } from "../src/mcp.ts";
-import { call, makeHob, text, waitFor } from "./helpers.ts";
+import { call, makeHob, text } from "./helpers.ts";
 
 const FIXTURE = fileURLToPath(new URL("./fixtures/mcp-fixture.mjs", import.meta.url));
 
@@ -318,87 +317,22 @@ describe("从本机导入", () => {
   });
 });
 
-describe("任务会话里的 MCP", () => {
-  it("有启用服务时任务能调用 MCP 工具，过程显示「服务 · 工具」", async () => {
+describe("迁移后的任务会话", () => {
+  it("旧服务迁移后可由任务调用", async () => {
     const hob = makeHob();
     try {
       writeConfig(hob.home, { mcpServers: { fx: { ...FIXTURE_SERVER, exposure: "direct" } } });
-      expect(mcpEnabled(hob.home)).toBe(true);
-      hob.faux.setResponses([
-        call("mcp__fx__echo", { message: "你好" }),
-        call("report", { outcome: "done", result: "echo 完成" }),
-      ]);
+      hob.runtime.plugins.store.migrateLegacy();
+      await hob.runtime.plugins.start();
+      hob.faux.setResponses([call("fx_echo", { message: "你好" }), call("report", { outcome: "done", result: "echo 完成" })]);
       hob.faux.appendResponses([text("完成了。")]);
       const job = await hob.runtime.jobs.start("hob", { title: "测 MCP", instruction: "调用 echo" });
       await hob.runtime.jobs.waitIdle(30_000);
-      const done = hob.runtime.store.job(job.id)!;
-      expect(done.status).toBe("done");
-      const steps = hob.runtime.jobs.transcript(job.id);
-      const echoStep = steps.find((step) => step.kind === "tool" && step.name === "fx · echo");
-      expect(echoStep).toBeTruthy();
-      expect(echoStep?.title).toContain("fx · echo");
-      expect(echoStep?.output).toContain("echo: 你好");
+      expect(hob.runtime.store.job(job.id)?.status).toBe("done");
+      expect(hob.runtime.jobs.transcript(job.id).some(step => step.name === "fx · echo" && step.output?.includes("echo: 你好"))).toBe(true);
     } finally {
+      await hob.runtime.plugins.close();
       hob.close();
     }
   }, 60_000);
-
-  it("停用的服务不加载；不加载 MCP 的会话（对话层）没有 MCP 工具", async () => {
-    const hob = makeHob();
-    try {
-      writeConfig(hob.home, { mcpServers: { fx: { ...FIXTURE_SERVER, enabled: false, exposure: "direct" } } });
-      expect(mcpEnabled(hob.home)).toBe(false);
-      const opened = await hob.runtime.pi.open({
-        file: join(hob.home, "assistants", "hob", "jobs", "t-mcp", "worker.jsonl"),
-        cwd: hob.home,
-        model: "hob-faux/faux-1",
-        thinking: "off",
-        systemPrompt: () => "测试",
-        tools: ["read"],
-      });
-      try {
-        // 没传 mcp 就不该有任何 MCP 工具（Router 的打开方式）
-        expect(opened.session.getActiveToolNames().some((name) => name.startsWith("mcp__"))).toBe(false);
-      } finally {
-        opened.session.dispose();
-      }
-    } finally {
-      hob.close();
-    }
-  });
-
-  it("关掉的单个工具拿不到，其余工具可用", async () => {
-    const hob = makeHob();
-    try {
-      writeConfig(hob.home, {
-        mcpServers: { fx: { ...FIXTURE_SERVER, exposure: "direct", toolExposure: { echo: "hidden" } } },
-      });
-      expect(mcpEnabled(hob.home)).toBe(true);
-      const opened = await hob.runtime.pi.open({
-        file: join(hob.home, "assistants", "hob", "jobs", "t-mcp2", "worker.jsonl"),
-        cwd: hob.home,
-        model: "hob-faux/faux-1",
-        thinking: "off",
-        systemPrompt: () => "测试",
-        tools: ["read", ...MCP_SESSION_TOOLS],
-        mcp: true,
-      });
-      try {
-        await waitFor(() => opened.session.getActiveToolNames().includes("mcp__fx__fail"), 15_000);
-        const names = opened.session.getActiveToolNames();
-        expect(names).not.toContain("mcp__fx__echo");
-        expect(names).toContain("tool_search");
-      } finally {
-        opened.session.dispose();
-      }
-    } finally {
-      hob.close();
-    }
-  }, 60_000);
-});
-
-describe("会话工具白名单", () => {
-  it("包含 MCP 全体工具和按需搜索", () => {
-    expect(MCP_SESSION_TOOLS).toEqual(["mcp__*", "tool_search"]);
-  });
 });

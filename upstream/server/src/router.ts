@@ -1,17 +1,20 @@
+import { pluginCommandToolsForAssistant, pluginToolsForAssistant } from "./plugin-host.ts";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { parseStreamingJson } from "@earendil-works/pi-ai/utils/json-parse";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { newId } from "./ids.ts";
 import type { AgentSession, AgentSessionEvent, SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import { SessionManager as SessionManagerImpl } from "@earendil-works/pi-coding-agent";
 import { t } from "../../shared/i18n.ts";
 import { readTodos, releaseIdleTodos, todosBusy } from "./todos.ts";
-import { assistantTodosPath, assistantWorkDir } from "./config.ts";
+import { assistantTodosPath, assistantWorkDir, engineDir } from "./config.ts";
 import type {
   Assistant,
   AssistantSummary,
   Bootstrap,
+  CardRecord,
   Group,
   Iso,
   Item,
@@ -27,7 +30,9 @@ import type {
 } from "../../shared/types.ts";
 import type { HobRuntime } from "./runtime.ts";
 import { refreshSystemPrompt } from "./pi.ts";
-import { conversationPick, assistantInGroup, defaultWorkRef, jobModel, nameOf, noteOf, thinkingForPick, thinkingLevelsOf, fitThinking, usableRefs, NO_MODEL_NOTE, NoModelError } from "./models.ts";
+import { conversationPick, assistantInGroup, defaultWorkRef, followUpPick, jobModel, nameOf, noteOf, thinkingForPick, thinkingLevelsOf, fitThinking, usableRefs, NO_MODEL_NOTE, NoModelError } from "./models.ts";
+import { scriptToolList } from "./script-tools.ts";
+import { proxyEnvironment } from "./network-proxy.ts";
 import { buildRouterTools } from "./router-tools.ts";
 import { isInPagesDir } from "./files.ts";
 import { boundKnowledge, formatKnowledge, KNOWLEDGE_INTRO } from "./knowledge-tools.ts";
@@ -37,12 +42,15 @@ import { visibleSkills } from "./skills.ts";
 import { activityLabel, thinkingLine } from "./router-activity.ts";
 import { imageContents } from "./jobs.ts";
 import { nowBlock } from "./now.ts";
+import { loadWorkspaceAgentsFile, resolveWorkspaceCwd, validateWorkspaceCwd } from "./workspace.ts";
 
 import { pushAssistantTurnEnd } from "./push.ts";
 import { browserShellEnv, DesktopToolSession } from "./desktop-tools.ts";
 import { textOfContent } from "./transcript.ts";
 import { briefModelError } from "./text.ts";
 import { saysNoReply, stripNoReply } from "../../shared/no-reply.ts";
+import { reactionsList } from "./store.ts";
+import { generateFollowUpSuggestions, groupHistory, routerHistory } from "./follow-up.ts";
 
 export const IDLE_COMPACTION_IDLE_MS = 6 * 60 * 60 * 1000;
 export const IDLE_COMPACTION_TOKEN_THRESHOLD = 150_000;
@@ -87,8 +95,8 @@ export type NewItem = Item extends infer T ? (T extends Item ? Omit<T, "id" | "a
  * 群里给做事、沟通和管理本群规则、定时、技能的工具；页面按助手存，进群要另做。
  */
 const GROUP_TOOL_NAMES = new Set([
-  "read", "bash", "edit", "write", "check_job", "start_job", "reply_job", "stop_job", "ask_user", "send_file", "save_job_as_skill", "set_rule", "remove_rule", "create_routine", "update_routine", "delete_routine", "edit_skill", "delete_skill", "update_todos",
-  "find_knowledge", "search_knowledge", "web_search", "web_fetch", "generate_image",
+  "read", "bash", "edit", "write", "search_history", "search_plugins", "check_job", "start_job", "reply_job", "stop_job", "ask_user", "send_card", "send_file", "react", "save_skill", "review_job", "set_rule", "remove_rule", "create_routine", "update_routine", "delete_routine", "delete_skill", "update_todos",
+  "find_knowledge", "search_knowledge", "web_search", "web_fetch", "generate_image", "login", "fill_new_password",
   "open_topic", "close_topic",
 ]);
 
@@ -145,6 +153,10 @@ interface RouterState {
   turnLastText?: string;
   /** 这一轮最后一段以 NO_REPLY 收尾：助手决定不出声，没有新内容给用户看，不推「做完了」 */
   turnSilent?: boolean;
+  /** 这一轮成功点过表情回应：只点表情没出文字时不推「做完了」 */
+  turnReacted?: boolean;
+  /** 这一轮收到的用户消息（单聊）：以 NO_REPLY 收尾时替助手在它上面挂 👀 */
+  turnUserItem?: string;
   /** agent_settled 捕获的失败原因，reportTurnFailure 会清掉 turnError */
   turnFailure?: string;
   /** 这一轮开始前或事件带来的工作状态 */
@@ -166,6 +178,7 @@ interface RouterState {
   terminatingTools?: Set<string>;
   /** 本轮已经查看过的任务快照，用于无变化时压缩 check_job 返回。 */
   checkJobSnapshots?: Map<string, string>;
+  scriptRevokes?: Set<() => void>;
   desktop?: DesktopToolSession;
   /** 这个会话装的工具在界面上叫什么名字（只盯 Hob 自己装的那批） */
   toolLabels?: Map<string, string>;
@@ -207,7 +220,7 @@ function messageText(content: unknown): string {
  * 只读的工具失败了不留提示行：模型看得见，接着说就行，用户不需要知道这次没读到。
  * 其余工具都算有副作用，以后新加的也照样算。
  */
-const READ_ONLY_TOOLS = new Set(["read", "check_job", "overview", "show_assistant", "show_group", "find_knowledge", "search_knowledge", "web_search", "web_fetch", "tool_search"]);
+const READ_ONLY_TOOLS = new Set(["read", "search_history", "search_plugins", "check_job", "overview", "show_assistant", "show_group", "find_knowledge", "search_knowledge", "web_search", "web_fetch", "tool_search"]);
 
 /**
  * 有副作用的调用按「工具 + 对象」分开算：转交看助手，交给群看群，其余看工具本身。
@@ -347,6 +360,8 @@ export class RouterManager {
   private livePages = new Map<string, Map<string, { page: PageLive; timer?: NodeJS.Timeout; last: number }>>();
   private liveJson = new Map<string, string>();
   private idleCompactionTimer?: NodeJS.Timeout;
+  private suggestions = new Map<string, string[]>();
+  private suggestionEpoch = new Map<string, number>();
   /** 不在内存里的会话：上次查过的会话文件修改时间，文件没变就不再打开 */
   private idleChecked = new Map<string, number>();
 
@@ -497,18 +512,53 @@ export class RouterManager {
     }
     const abilities = assistant.abilities ?? { exec: true, write: true, image: true };
     const directToolNames = ["read", ...(abilities.exec ? ["bash"] : []), ...(abilities.write ? ["edit", "write"] : [])];
-    const workDir = assistantWorkDir(this.runtime.home, assistant.id);
-    mkdirSync(workDir, { recursive: true });
-    const customTools = buildRouterTools(this.runtime, assistant.id, state.groupId, workDir);
+    const ownWorkDir = assistantWorkDir(this.runtime.home, assistant.id);
+    mkdirSync(ownWorkDir, { recursive: true });
+    const resolved = resolveWorkspaceCwd(this.store, this.runtime.home, assistant.id, state.groupId);
+    let sessionCwd = resolved.sessionCwd;
+    let workspacePrompt: { cwd: string; source: "topic" | "group" | "assistant"; ownDir: string } | undefined;
+    let workspaceWarning: string | undefined;
+    let agentsFiles: Array<{ path: string; content: string }> = [];
+    if (resolved.bound && resolved.source !== "default") {
+      try {
+        sessionCwd = validateWorkspaceCwd(resolved.bound, this.runtime.home);
+        workspacePrompt = { cwd: sessionCwd, source: resolved.source, ownDir: ownWorkDir };
+        agentsFiles = loadWorkspaceAgentsFile(sessionCwd);
+      } catch {
+        sessionCwd = ownWorkDir;
+        workspaceWarning = resolved.bound;
+      }
+    }
+    const customTools = buildRouterTools(this.runtime, assistant.id, state.groupId, sessionCwd, ownWorkDir);
+    const existingNames = new Set([...directToolNames, ...customTools.map(tool => tool.name), "tool_search"]);
+    const pluginTools = pluginToolsForAssistant(this.runtime.plugins, assistant.id, existingNames, {
+      onCard: (payload) => this.addPluginCard(assistant.id, state.groupId, payload),
+      onCardError: (pluginId, message) => this.addPluginCardError(assistant.id, state.groupId, message),
+    });
     const availableToolNames = [...new Set([...directToolNames, ...customTools.map((tool) => tool.name)])];
     const allowedTools = state.groupId ? availableToolNames.filter((name) => groupTool(name, assistant.primary)) : availableToolNames;
-    const tools = customTools.filter((tool) => allowedTools.includes(tool.name));
+    const tools = [...customTools.filter((tool) => allowedTools.includes(tool.name)), ...pluginTools];
+    allowedTools.push(...pluginTools.map(tool => tool.name));
+    const toolSearch = pluginTools.some(tool => tool.exposure === "deferred");
+    if (toolSearch) allowedTools.push("tool_search");
+    await this.runtime.scriptTools.start();
     const file = this.sessionFile(state);
     const groupId = state.groupId;
     const opened = await this.runtime.pi.open({
       file,
       spillDir: state.groupId ? join(dirname(file), `${assistant.id}-spill`) : join(dirname(file), "spill"),
-      cwd: workDir,
+      cwd: sessionCwd,
+      agentsFiles,
+      writeGuard: {
+        home: this.runtime.home,
+        roots: () => [
+          ...new Set([
+            sessionCwd,
+            ownWorkDir,
+            ...this.store.jobs().filter((job) => job.assistantId === assistant.id).map((job) => job.cwd ?? this.store.workDir(job.id)),
+          ]),
+        ],
+      },
       model: pick.ref,
       thinking: thinkingForPick(pick, this.runtime.models),
       memory: this.runtime.settings.memory().provider,
@@ -526,17 +576,36 @@ export class RouterManager {
           imageEnabled: tools.some((tool) => tool.name === "generate_image"),
           showPageEnabled: tools.some((tool) => tool.name === "show_page"),
           desktopEnabled: desktopEnabled,
+          credentialsEnabled: desktopEnabled && this.runtime.plugins.hasCredentialProvider(assistant.id),
           models: this.promptModels(assistant.id, groupId),
           skills: visibleSkills(this.runtime, assistant.id, group),
           thinkingChoice: this.runtime.settings.settings.models.thinkingChoice,
           abilities,
           knowledgeNames: state.knowledgeNames,
           ...(group ? { group } : {}),
+          ...(workspacePrompt ? { workspace: workspacePrompt } : {}),
+          ...(workspaceWarning ? { workspaceWarning } : {}),
         });
       },
       tools: allowedTools,
       customTools: tools,
-      bashSpawnHook: ({ command, cwd, env }) => ({ command, cwd, env: browserShellEnv(env, cliEnvironment) }),
+      toolSearch,
+      stall: { milliseconds: () => this.stallMs(), onRetry: () => this.setActivity(state, { state: "thinking", label: t("模型没有响应，正在重试") }) },
+      bashSpawnHook: ({ command, cwd, env }) => {
+        const credential = this.runtime.scriptTools.issue({
+          tools: async () => {
+            const reserved = new Set(existingNames);
+            const livePlugins = pluginToolsForAssistant(this.runtime.plugins, assistant.id, reserved);
+            for (const tool of livePlugins) reserved.add(tool.name);
+            const commandTools = pluginCommandToolsForAssistant(this.runtime.plugins, assistant.id, reserved);
+            return scriptToolList(tools, !!(await boundKnowledge(this.runtime, assistant.id)).length, livePlugins, commandTools);
+          },
+          onCall: (tool) => this.setActivity(state, { state: "tool", label: tool.label }),
+        });
+        (state.scriptRevokes ??= new Set()).add(credential.revoke);
+        const binDirs = [join(engineDir(this.runtime.home), "bin"), ...this.runtime.plugins.binDirsForAssistant(assistant.id)];
+        return { command, cwd, env: this.runtime.scriptTools.environment(proxyEnvironment(browserShellEnv(env, cliEnvironment), this.runtime.settings.settings.general), credential.token, binDirs) };
+      },
     });
     state.toolLabels = new Map(tools.map((tool) => [tool.name, tool.label]));
     state.session = opened.session;
@@ -552,7 +621,7 @@ export class RouterManager {
   private async refreshTools(state: RouterState): Promise<void> {
     state.knowledgeNames = (await boundKnowledge(this.runtime, state.assistantId)).map((collection) => collection.name);
     const primary = this.store.assistant(state.assistantId)?.primary === true;
-    const names = state.session!.getActiveToolNames().filter((name) => name !== "search_knowledge" && (!state.groupId || groupTool(name, primary)));
+    const names = state.session!.getActiveToolNames().filter((name) => name !== "search_knowledge" && (!state.groupId || name === "tool_search" || state.toolLabels?.has(name) || groupTool(name, primary)));
     if (state.knowledgeNames.length) names.push("search_knowledge");
     refreshSystemPrompt(state.session!, names);
   }
@@ -622,6 +691,11 @@ export class RouterManager {
     if (event.type === "message_end" && event.message.role === "assistant") {
       // 这一次调模型没成（重试成功的话下一条会把这个清掉）
       const message = event.message;
+      if (message.stopReason === "error" && message.errorMessage === "模型没有响应") {
+        state.stalled = true;
+        const assistant = this.store.assistant(state.assistantId);
+        void this.note(state, "info", t("{assistant} 无响应，已停止，可重新发送", { assistant: assistant?.name ?? state.assistantId }));
+      }
       state.turnError = message.stopReason === "error" || (message.stopReason === "aborted" && !!message.errorMessage)
         ? message.errorMessage ?? "模型服务出错"
         : undefined;
@@ -647,6 +721,7 @@ export class RouterManager {
       if (event.type === "agent_start") {
         state.turnLastText = undefined;
         state.turnFailure = undefined;
+        state.turnReacted = undefined;
         state.checkJobSnapshots = new Map();
       }
     }
@@ -698,6 +773,7 @@ export class RouterManager {
       return;
     }
     if (event.type === "tool_execution_end") {
+      if (event.toolName === "bash") { state.scriptRevokes?.forEach((revoke) => revoke()); state.scriptRevokes?.clear(); }
       // 有副作用的调用：失败了先记着，后面同一个对象成功了就划掉
       const subject = state.callSubjects?.get(event.toolCallId);
       if (subject) {
@@ -710,6 +786,7 @@ export class RouterManager {
         const result = event.result as { details?: { path?: string }; content?: { text?: string }[] } | undefined;
         this.liveFinish(assistantId, event.toolCallId, event.isError ? undefined : result?.details?.path, result?.content?.[0]?.text);
       }
+      if (event.toolName === "react" && !event.isError) state.turnReacted = true;
       if (state.currentDelegationId && (event.result as { terminate?: boolean } | undefined)?.terminate) state.terminatingTools?.add(event.toolCallId);
       return;
     }
@@ -878,6 +955,9 @@ export class RouterManager {
   private progress(state: RouterState): void {
     state.lastEventAt = Date.now();
     if (state.stallTimer) clearTimeout(state.stallTimer);
+    state.stallTimer = undefined;
+    // 模型请求和工具调用各自有时限；这里只照看尚未进入会话的准备过程。
+    if (state.session?.isStreaming) return;
     state.stallTimer = setTimeout(() => void this.onStall(state), this.stallMs());
     state.stallTimer.unref?.();
   }
@@ -921,6 +1001,8 @@ export class RouterManager {
   private close(state: RouterState): void {
     if (state.idleTimer) clearTimeout(state.idleTimer);
     state.idleTimer = undefined;
+    state.scriptRevokes?.forEach((revoke) => revoke());
+    state.scriptRevokes?.clear();
     state.session?.dispose();
     void state.desktop?.dispose();
     state.desktop = undefined;
@@ -1106,6 +1188,36 @@ export class RouterManager {
       void this.runtime.knowledge.collect({ origin: "output", path: full.path, assistantId, itemId: full.id, ...(page ? { name: full.name, description: full.meta } : {}) }).catch((error) => console.error("知识库收集失败：", error));
     }
     return full;
+  }
+
+  async addCard(assistantId: string, record: CardRecord, groupId?: string): Promise<Item> {
+    const card: CardRecord = { ...record, ...(groupId ? { groupId } : {}) };
+    this.store.saveCard(card);
+    const item = await this.addItem(assistantId, { kind: "card", cardId: card.id }, groupId);
+    this.bus.emit({ type: "card", card });
+    return item;
+  }
+
+  updateCard(record: CardRecord): void {
+    this.store.saveCard(record);
+    this.bus.emit({ type: "card", card: record });
+  }
+
+  private async addPluginCard(assistantId: string, groupId: string | undefined, payload: { pluginId: string; pluginName: string; service: string; callbackTool?: string; card: CardRecord["card"] }): Promise<void> {
+    const record: CardRecord = {
+      id: newId("c-"),
+      owner: { type: "plugin", pluginId: payload.pluginId, assistantId },
+      plugin: { service: payload.service, ...(payload.callbackTool ? { callbackTool: payload.callbackTool } : {}), pluginName: payload.pluginName },
+      ...(groupId ? { groupId } : {}),
+      card: payload.card,
+      status: "open",
+      createdAt: new Date().toISOString(),
+    };
+    await this.addCard(assistantId, record, groupId);
+  }
+
+  private async addPluginCardError(assistantId: string, groupId: string | undefined, message: string): Promise<void> {
+    await this.addItem(assistantId, { kind: "note", icon: "info", text: message }, groupId);
   }
 
   async updateImage(
@@ -1311,7 +1423,13 @@ export class RouterManager {
     const error = state.turnFailure;
     const busy = todosBusy(this.runtime, state.assistantId, state.groupId);
     if (!error && !busy) releaseIdleTodos(this.runtime, state.assistantId, state.groupId);
-    if ((state.turnHadWork || state.turnWorkDone || error) && !state.turnDelegation && !busy && (error || !state.turnSilent)) {
+    // 收到了用户的消息、这一轮回了 NO_REPLY、自己也没点表情：替它挂 👀，用户看得出消息到了
+    if (!state.groupId && state.turnSilent && state.turnUserItem && !this.store.state(state.assistantId).reactions?.[state.turnUserItem]?.[state.assistantId]) {
+      this.react(state.assistantId, "👀", state.turnUserItem);
+    }
+    const reactedOnly = Boolean(state.turnReacted && !state.turnLastText);
+    const silent = Boolean(state.turnSilent || reactedOnly);
+    if ((state.turnHadWork || state.turnWorkDone || error) && !state.turnDelegation && !busy && (error || !silent)) {
       pushAssistantTurnEnd(
         { push: this.runtime.push, store: this.store },
         {
@@ -1322,11 +1440,16 @@ export class RouterManager {
       );
     }
     void this.runtime.jobs.finishUnansweredQuestions(state.assistantId, state.groupId).catch((error) => console.error("收尾任务提问失败：", error));
+    if (!state.groupId && !error && !busy && !state.stalled && !silent && state.turnLastText && !this.hasIdleWork(state)) {
+      void this.generateSuggestionsFor(state.assistantId);
+    }
     state.turnHadWork = false;
     state.turnWorkDone = false;
     state.turnDelegation = false;
     state.turnFailure = undefined;
     state.turnSilent = undefined;
+    state.turnReacted = undefined;
+    state.turnUserItem = undefined;
     state.turnLastText = undefined;
   }
 
@@ -1423,6 +1546,7 @@ export class RouterManager {
   }
 
   async send(assistantId: string, body: SendMessageBody): Promise<Item> {
+    this.clearSuggestions(assistantId);
     this.runtime.delegations.takeOver(assistantId);
     for (const approval of this.store.approvals()) {
       if (approval.assistantId !== assistantId || approval.groupId || approval.source !== "router" || approval.status !== "pending") continue;
@@ -1451,10 +1575,13 @@ export class RouterManager {
     for (const path of body.files ?? []) void this.runtime.knowledge.collect({ origin: "chat", path, assistantId, itemId: id }).catch((error) => console.error("知识库收集失败：", error));
 
     const lines = [body.text];
+
     if (body.quote) lines.unshift(`（引用我之前的话：「${body.quote.text}」）`);
     if (body.files?.length) lines.push(`附件：${body.files.join("、")}`);
     const basePrompt = `${nowBlock(this.runtime, assistantId)}\n\n${lines.filter(Boolean).join("\n")}`;
-    void this.deliver(state, basePrompt, { ...(body.files?.length ? { files: body.files } : {}), knowledgeQuery: body.text });
+    // 模型收到这条时记下来：你的消息下面挂 👀，看得出到了
+    const received = () => { state.turnUserItem = id; };
+    void this.deliver(state, basePrompt, { ...(body.files?.length ? { files: body.files } : {}), knowledgeQuery: body.text, received });
     return item;
   }
 
@@ -1509,6 +1636,7 @@ export class RouterManager {
     text: string,
     options: { files?: string[]; knowledgeQuery?: string; received?: () => void; workDone?: boolean } = {},
   ): Promise<void> {
+    this.clearSuggestions(state.assistantId, state.groupId);
     const previousDelivery = state.pendingDelivery;
     let releaseDelivery!: () => void;
     const delivery = new Promise<void>((resolve) => { releaseDelivery = resolve; });
@@ -1661,19 +1789,40 @@ export class RouterManager {
     return this.derived(assistantId).result.items.filter((item): item is Extract<Item, { kind: "user" | "assistant" }> => item.kind === "user" || item.kind === "assistant");
   }
 
+  /** 给单聊里最新的一条用户消息（或指定的那条）点表情回应；再点会换掉。 */
+  react(assistantId: string, emoji: string, itemId?: string): { ok: true; itemId: string } | { ok: false; error: string } {
+    this.assistant(assistantId);
+    const target = this.derived(assistantId).result.items.findLast((item) => item.kind === "user" && (!itemId || item.id === itemId));
+    if (!target || target.kind !== "user") return { ok: false, error: "对话里还没有用户的消息，无法添加表情回应。" };
+    const all = this.store.state(assistantId).reactions ?? {};
+    const forItem = { ...(all[target.id] ?? {}), [assistantId]: emoji };
+    this.store.saveState(assistantId, { reactions: { ...all, [target.id]: forItem } });
+    const reactions = reactionsList(forItem);
+    this.bus.emit({ type: "item", assistantId, item: { ...target, ...(reactions ? { reactions } : {}) } });
+    return { ok: true, itemId: target.id };
+  }
+
   items(assistantId: string, options: { before?: string; limit?: number } = {}): ItemsPage {
     const derived = this.derived(assistantId);
     const all = derived.result.items;
     const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
     const end = options.before ? derived.positions.get(options.before) ?? all.length : all.length;
     const start = Math.max(0, end - limit);
-    const page = all.slice(start, end);
+    const storedReactions = this.store.state(assistantId).reactions;
+    const page = all.slice(start, end).map((item) => {
+      if (item.kind !== "user") return item;
+      const reactions = reactionsList(storedReactions?.[item.id]);
+      return reactions ? { ...item, reactions } : item;
+    });
     const jobIds = new Set(page.filter((item) => item.kind === "job").map((item) => (item as { jobId: string }).jobId));
     const draftIds = new Set(
       page.filter((item) => item.kind === "draft").map((item) => (item as { draftId: string }).draftId),
     );
     const approvalIds = new Set(
       page.filter((item) => item.kind === "question").map((item) => (item as { approvalId: string }).approvalId),
+    );
+    const cardIds = new Set(
+      page.filter((item) => item.kind === "card").map((item) => (item as { cardId: string }).cardId),
     );
     const ids = new Set(page.filter((item) => item.kind === "delegation").map((item) => (item as { delegationId: string }).delegationId));
     const delegations = this.store.delegations().filter((item) => ids.has(item.id));
@@ -1687,6 +1836,7 @@ export class RouterManager {
       approvals: this.store.approvals().filter((approval) => approvalIds.has(approval.id)),
       jobs: [...jobIds].flatMap((id) => { const job = this.store.job(id); return job ? [job] : []; }),
       drafts: this.store.drafts().filter((draft) => draftIds.has(draft.id)),
+      cards: this.store.cards().filter((card) => cardIds.has(card.id)),
       delegations,
       hasMore: start > 0,
     };
@@ -1717,6 +1867,54 @@ export class RouterManager {
     return this.derived(assistantId).last;
   }
 
+  private suggestionKey(assistantId: string, groupId?: string): string {
+    return groupId ? `group:${groupId}` : assistantId;
+  }
+
+  suggestionsFor(assistantId: string, groupId?: string): string[] | undefined {
+    return this.suggestions.get(this.suggestionKey(assistantId, groupId));
+  }
+
+  clearSuggestions(assistantId: string, groupId?: string): void {
+    const key = this.suggestionKey(assistantId, groupId);
+    this.suggestionEpoch.set(key, (this.suggestionEpoch.get(key) ?? 0) + 1);
+    const had = this.suggestions.delete(key);
+    if (!had) return;
+    if (groupId) this.runtime.groups?.publish(groupId);
+    else {
+      const assistant = this.store.assistant(assistantId);
+      if (assistant) this.bus.emit({ type: "assistant", assistant: this.summary(assistant) });
+    }
+  }
+
+  /** 在一轮真正停下后后台生成推荐提问；结果只接受当前这一轮。 */
+  async generateSuggestionsFor(assistantId: string, groupId?: string): Promise<void> {
+    const key = this.suggestionKey(assistantId, groupId);
+    const epoch = this.suggestionEpoch.get(key) ?? 0;
+    const assistant = this.store.assistant(assistantId);
+    if (!assistant) return;
+    try {
+      await this.runtime.models.get();
+      const group = groupId ? this.store.group(groupId) : undefined;
+      const effective = assistantInGroup(assistant, group, this.runtime.models, this.runtime.settings.settings.models);
+      const pick = followUpPick(this.runtime.settings.settings.models, effective, this.runtime.models);
+      if (!pick) return;
+      const model = await this.runtime.pi.model(pick.ref);
+      const turns = groupId
+        ? groupHistory(this.store.groupItems(groupId), (speaker) => speaker === "user" ? "用户" : this.store.assistant(speaker)?.name ?? speaker)
+        : routerHistory(this.entries(assistantId));
+      const suggestions = await generateFollowUpSuggestions(await this.runtime.pi.runtime(), model, turns);
+      if ((this.suggestionEpoch.get(key) ?? 0) !== epoch || !suggestions.length) return;
+      const state = this.routers.get(this.keyOf(assistantId, groupId));
+      if (state && (state.running > 0 || state.session?.isStreaming || this.hasIdleWork(state))) return;
+      this.suggestions.set(key, suggestions);
+      if (groupId) this.runtime.groups?.publish(groupId);
+      else this.bus.emit({ type: "assistant", assistant: this.summary(assistant) });
+    } catch (error) {
+      console.error("推荐提问准备失败：", error instanceof Error ? error.message : String(error));
+    }
+  }
+
   summary(assistant: Assistant): AssistantSummary {
     const last = this.last(assistant.id);
     return {
@@ -1727,6 +1925,7 @@ export class RouterManager {
       busy: this.isBusy(assistant.id),
       activity: this.routers.get(assistant.id)?.activity ?? null,
       todos: readTodos(assistantTodosPath(this.runtime.home, assistant.id)),
+      ...(this.suggestionsFor(assistant.id)?.length ? { suggestions: this.suggestionsFor(assistant.id) } : {}),
     };
   }
 
@@ -1742,6 +1941,7 @@ export class RouterManager {
 
   bootstrap(): Bootstrap {
     const jobCutoff = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+    const update = this.runtime.update.status();
     return {
       assistants: this.store.assistants().map((assistant) => this.summary(assistant)),
       jobs: this.store
@@ -1751,6 +1951,7 @@ export class RouterManager {
       approvals: this.store.approvals().filter((approval) => approval.status === "pending" && approval.source !== "job"),
       delegations: this.store.delegations(),
       settings: this.runtime.settings.get(),
+      ...(update ? { update } : {}),
     };
   }
 

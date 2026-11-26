@@ -81,6 +81,12 @@
 
 | 中文 | English |
 |---|---|
+| 更多设置 | More settings |
+| 邮箱 / 应用专用密码 | Email / App password |
+| 插件 / 市场 / 已安装 | plugin / marketplace / installed |
+| 配置（插件的一套独立配置） | configuration (an independent plugin configuration) |
+| 连接 / 已连接 / 待配置 / 需要重新登录 / 重新连接 | connect / connected / setup required / sign in again / reconnect |
+| 只读 / 会改动 / 回调地址 | read-only / makes changes / callback URL |
 | 助手 / 主助手 | assistant / main assistant |
 | 任务 / 任务卡 / 任务记录 | job / job card / job history |
 | 转交 / 转交卡 | delegation / delegation card |
@@ -90,7 +96,10 @@
 | 技能 / 沉淀技能 | skill / save as a skill |
 | 通用技能 / 本群技能 / 你的技能 | shared skill / group skill / your skill |
 | 职责简介 / 详细职责 | role / responsibilities |
+| 补充提示词（助手） | Additional prompt |
 | 个人信息 | About you |
+| 网络代理 | Network proxy |
+| 不走代理的地址 | Bypass proxy for |
 | 群 / 群主 / 成员 | group / owner / member |
 | 话题 | topic |
 | 待办 / 一项待办 | To-dos / to-do item |

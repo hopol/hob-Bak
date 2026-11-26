@@ -1,0 +1,11 @@
+{
+  "name": "cap-plugin",
+  "displayName": "Fixture Service",
+  "version": "1.0.0",
+  "description": "Minimal fixture plugin exercising login and command capabilities",
+  "extensions": {
+    "com.hob.plugins": {
+      "bin": "bin"
+    }
+  }
+}

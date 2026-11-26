@@ -2,18 +2,18 @@ import { t } from "../../../shared/i18n.ts";
 import { byStarted } from "../home.ts";
 import { panelAssistant } from "../panel-stack.ts";
 import { DelayedText, Empty } from "./Empty.tsx";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { fileIcon } from "../file-icons.ts";
 import { Icon } from "../icons.tsx";
 import { jobStatusIcon } from "./status-meta.tsx";
 import { DetailRow } from "./DetailRow.tsx";
 import { groupSidebarFiles, routineSummary, sidebarInfoValues } from "../sidebar-data.ts";
-import { loadAssistantSkills, loadGroupProfile, loadSidebarCollections, loadSidebarFiles, loadSidebarJobs, openFilePreview, openJob, openSidebarPage, useApp } from "../store.ts";
+import { loadAssistantSkills, loadGroupProfile, loadSidebarCollections, loadSidebarFiles, loadSidebarJobs, openFilePreview, openJob, openPlugins, openSidebarPage, useApp } from "../store.ts";
 import { fmtBytes, fmtDuration, fmtElapsed, fmtWhen } from "../util.ts";
 
 function LoadingRow() { return <div className="sidebar-loading" role="status"><DelayedText text={t("正在读取…")} /></div>; }
 
-export function PanelRootDetails({ groupId, part }: { groupId?: string; part?: "info" | "tabs" } = {}) {
+export function PanelRootDetails({ groupId, part, desktopRow, replyModeRow }: { groupId?: string; part?: "info" | "tabs"; desktopRow?: ReactNode; replyModeRow?: ReactNode } = {}) {
   const s = useApp();
   const aid = groupId ?? panelAssistant(s.panelStack, s.sel);
   const groupProfile = groupId ? s.groupProfiles[groupId] : undefined;
@@ -52,9 +52,12 @@ export function PanelRootDetails({ groupId, part }: { groupId?: string; part?: "
   return <>
     {part !== "tabs" ? <div className="group-card sidebar-info">
       <button onClick={() => openSidebarPage("routines", groupId)}><Icon name="clock" size={15} /><span>{t("定时任务")}</span><small>{routineSummary(routines, s.settings.settings.general.timezone)}</small><b>›</b></button>
-      <button onClick={() => openSidebarPage("skills", groupId)}><Icon name="mem" size={15} /><span>{t("技能")}</span><small>{skills?.error ? t("加载失败") : !skills?.loaded ? <DelayedText key={aid} text={t("正在加载…")} /> : values.skills}</small><b>›</b></button>
+      {desktopRow}
+      <button onClick={() => openSidebarPage("skills", groupId)}><Icon name="book" size={15} /><span>{t("技能")}</span><small>{skills?.error ? t("加载失败") : !skills?.loaded ? <DelayedText key={aid} text={t("正在加载…")} /> : values.skills}</small><b>›</b></button>
+      {!groupId ? <button onClick={() => openPlugins()}><Icon name="plugin" size={15} /><span>{t("插件")}</span><b>›</b></button> : null}
       {!groupId ? <button onClick={() => openSidebarPage("knowledge")}><Icon name="archive" size={15} /><span>{t("知识库")}</span><small>{collectionsError ? t("加载失败") : collectionsLoading ? <DelayedText text={t("正在加载…")} /> : values.knowledge}</small><b>›</b></button> : null}
       <button onClick={() => openSidebarPage("rules", groupId)}><Icon name="rule" size={15} /><span>{t("执行前确认")}</span><small>{groupId && groupProfile?.error ? t("加载失败") : groupId && !groupProfile?.value ? <DelayedText text={t("正在加载…")} /> : values.rules}</small><b>›</b></button>
+      {replyModeRow}
     </div> : null}
     {part !== "info" ? <>
     <div className="sidebar-tabs"><div className="seg" style={{ "--seg-count": 2, "--seg-index": tab === "jobs" ? 0 : 1 } as React.CSSProperties}>{([{ key: "jobs", label: t("任务") }, { key: "files", label: t("文件") }] as const).map(({ key, label }) => <button key={key} className={tab === key ? "on" : ""} onClick={() => setTab(key)}>{label}</button>)}</div></div>

@@ -91,6 +91,30 @@ describe("建群", () => {
       ownerId: "po",
       members: ["po", "dev"],
     });
+    expect(createBody(" Pix 开发 ", " 仓库的事 ", ["po", "dev"], "", "   ")).toEqual({
+      name: "Pix 开发",
+      purpose: "仓库的事",
+      ownerId: "po",
+      members: ["po", "dev"],
+    });
+    expect(createBody(" Pix 开发 ", " 仓库的事 ", ["po", "dev"], "dev", " /workspace/pix ")).toEqual({
+      name: "Pix 开发",
+      purpose: "仓库的事",
+      ownerId: "dev",
+      members: ["po", "dev"],
+      cwd: "/workspace/pix",
+    });
+  });
+
+  it("沿用已有群设置时不复制原群工作目录，弹窗包含可选工作目录输入框", () => {
+    const withCwd: Group = { ...groups[0]!, cwd: "/workspace/hob" };
+    expect(membersOfGroup(withCwd)).toEqual({ members: ["po", "dev"], ownerId: "po" });
+    expect("cwd" in membersOfGroup(withCwd)).toBe(false);
+    const html = dialog();
+    expect(html).toContain("工作目录（可选）");
+    expect(html).toContain("如 /workspace/app，创建后不可修改");
+    expect(html.indexOf("职责")).toBeLessThan(html.indexOf("工作目录（可选）"));
+    expect(html.indexOf("工作目录（可选）")).toBeLessThan(html.indexOf("成员"));
   });
 
   it("对话框标题是新建群，没有工作方式，照着的下拉只列群不列话题", () => {

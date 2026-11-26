@@ -6,6 +6,7 @@ import type { Locale } from "../../shared/i18n.ts";
 import { t } from "../../shared/i18n.ts";
 import type {
   Approval,
+  CardRecord,
   Assistant,
   Delegation,
   Draft,
@@ -15,6 +16,8 @@ import type {
   Routine,
   Rule,
   WorklogEntry,
+  StarredMessage,
+  ConversationRef,
 } from "../../shared/types.ts";
 
 function writeJsonAtomic(path: string, value: unknown): void {
@@ -64,15 +67,25 @@ export function publicDelegation(record: StoredDelegation): Delegation {
   return visible;
 }
 
-/** 助手的本地状态（不属于前后端契约，只存未读位置）。 */
-export interface AssistantState {
-  readAt?: string;
+export type StoredReactions = Record<string, Record<string, string>>;
+
+export function reactionsList(map: Record<string, string> | undefined): { by: string; emoji: string }[] | undefined {
+  if (!map) return undefined;
+  const list = Object.entries(map).map(([by, emoji]) => ({ by, emoji }));
+  return list.length ? list : undefined;
 }
 
-/** 群的本地状态：已读到哪条；每个成员上一轮给到时间线的哪一条（assistantId → 条目 id）。 */
+/** 助手的本地状态（不属于前后端契约，存未读位置和单聊表情回应）。 */
+export interface AssistantState {
+  readAt?: string;
+  reactions?: StoredReactions;
+}
+
+/** 群的本地状态：已读到哪条；每个成员上一轮给到时间线的哪一条（assistantId → 条目 id）；表情回应。 */
 export interface GroupState {
   readAt?: string;
   seen?: Record<string, string>;
+  reactions?: StoredReactions;
 }
 
 /**
@@ -122,13 +135,13 @@ export class Store {
   /** 启动时先检查系统数据；单条任务和日志记录在各自列表中跳过并记录。 */
   validate(): void {
     this.globalRules();
-    for (const file of ["config.json", "settings.json", "secrets.json", "push.json", "seeded.json", "moves.json"]) {
+    for (const file of ["config.json", "settings.json", "secrets.json", "push.json", "seeded.json", "moves.json", "stars.json"]) {
       readJson(join(this.home, "system", file), null);
     }
-    for (const path of ["knowledge/entries.json", "knowledge/collections.json", "system/lore/config.json", "system/engine/mcp.json"]) readJson(join(this.home, path), null);
+    for (const path of ["knowledge/entries.json", "knowledge/collections.json", "system/lore/config.json"]) readJson(join(this.home, path), null);
     for (const root of [join(this.home, "assistants"), archiveAssistantsDir(this.home)]) {
       if (existsSync(root)) for (const id of readdirSync(root)) {
-        for (const name of ["profile.json", "rules.json", "state.json", "approvals.json", "routines.json", "drafts.json", "delegations.json"]) {
+        for (const name of ["profile.json", "rules.json", "state.json", "approvals.json", "cards.json", "routines.json", "drafts.json", "delegations.json"]) {
           readJson(join(root, id, name), null);
         }
       }
@@ -136,15 +149,35 @@ export class Store {
     const archivedGroups = archiveGroupsDir(this.home);
     if (existsSync(archivedGroups)) for (const folder of readdirSync(archivedGroups)) {
       const dir = join(archivedGroups, folder);
-      for (const name of ["group.json", "rules.json", "state.json", "routines.json"]) readJson(join(dir, name), null);
+      for (const name of ["group.json", "rules.json", "state.json", "cards.json", "routines.json"]) readJson(join(dir, name), null);
       const topics = join(dir, "topics");
       if (existsSync(topics)) for (const topic of readdirSync(topics)) {
         for (const name of ["group.json", "state.json"]) readJson(join(topics, topic, name), null);
       }
     }
     for (const id of this.groupIds()) {
-      for (const name of ["group.json", "rules.json", "state.json", "routines.json"]) readJson(join(groupDir(this.home, id), name), null);
+      for (const name of ["group.json", "rules.json", "state.json", "cards.json", "routines.json"]) readJson(join(groupDir(this.home, id), name), null);
     }
+  }
+
+  stars(): StarredMessage[] {
+    const stars = readJson<unknown>(join(this.home, "system", "stars.json"), []);
+    if (!Array.isArray(stars)) throw new Error("收藏文件格式无效");
+    return stars as StarredMessage[];
+  }
+
+  saveStar(star: StarredMessage): StarredMessage {
+    const all = this.stars();
+    const existing = all.find((item) => item.conversation.kind === star.conversation.kind && item.conversation.id === star.conversation.id && item.itemId === star.itemId);
+    if (existing) return existing;
+    writeJsonAtomic(join(this.home, "system", "stars.json"), [...all, star]);
+    return star;
+  }
+
+  deleteStar(conversation: ConversationRef, itemId: string): void {
+    const all = this.stars();
+    const next = all.filter((item) => item.conversation.kind !== conversation.kind || item.conversation.id !== conversation.id || item.itemId !== itemId);
+    if (next.length !== all.length) writeJsonAtomic(join(this.home, "system", "stars.json"), next);
   }
 
   globalRules(): Rule[] {
@@ -207,8 +240,9 @@ export class Store {
     return readJson<AssistantState>(join(this.assistantDir(id), "state.json"), {});
   }
 
-  saveState(id: string, state: AssistantState): void {
-    writeJsonAtomic(join(this.assistantDir(id), "state.json"), state);
+  /** 只改给出的字段，别的照旧。 */
+  saveState(id: string, patch: AssistantState): void {
+    writeJsonAtomic(join(this.assistantDir(id), "state.json"), { ...this.state(id), ...patch });
   }
 
   routerFile(id: string): string {
@@ -285,8 +319,10 @@ export class Store {
       members: parent.members,
       ...(parent.models ? { models: parent.models } : {}),
       ...(parent.memberModels ? { memberModels: parent.memberModels } : {}),
+      ...(own.replyMode ? { replyMode: own.replyMode } : {}),
       createdAt: own.createdAt,
       parentId: own.parentId,
+      ...(own.cwd ? { cwd: own.cwd } : {}),
       ...(own.createdBy ? { createdBy: own.createdBy } : {}),
       ...(own.closedAt ? { closedAt: own.closedAt } : {}),
       ...(own.closeNote ? { closeNote: own.closeNote } : {}),
@@ -306,7 +342,9 @@ export class Store {
       id: group.id,
       parentId: group.parentId,
       name: group.name,
+      ...(group.replyMode ? { replyMode: group.replyMode } : {}),
       createdAt: group.createdAt,
+      ...(group.cwd ? { cwd: group.cwd } : {}),
       ...(existing && Object.prototype.hasOwnProperty.call(existing, "workflow") ? { workflow: existing.workflow } : {}),
       ...(group.createdBy ? { createdBy: group.createdBy } : {}),
       ...(group.closedAt ? { closedAt: group.closedAt } : {}),
@@ -461,6 +499,49 @@ export class Store {
       const list = readJson<Routine[]>(file, []);
       const next = list.filter((r) => r.id !== id);
       if (next.length !== list.length) writeJsonAtomic(file, next);
+    }
+  }
+
+  // ---------- 通用卡片 ----------
+  private cardFiles(): string[] {
+    const assistants = this.recordFiles("cards.json", true);
+    const groups = this.groupIds().map((id) => join(groupDir(this.home, id), "cards.json"));
+    return [...new Set([...assistants, ...groups])];
+  }
+
+  private cardOwnerFile(card: CardRecord): string {
+    if (card.groupId && this.group(card.groupId)) return join(groupDir(this.home, card.groupId), "cards.json");
+    return this.ownerFile(card.owner.assistantId, "cards.json");
+  }
+
+  cards(): CardRecord[] {
+    const found = new Map<string, { item: StoredRecord<CardRecord>; modified: bigint }>();
+    for (const file of this.cardFiles()) for (const item of readJson<StoredRecord<CardRecord>[]>(file, [])) {
+      if (!item || typeof item.id !== "string") continue;
+      const modified = statSync(file, { bigint: true }).mtimeNs;
+      const old = found.get(item.id);
+      if (!old || (item._hobRevision ?? 0) > (old.item._hobRevision ?? 0) || ((item._hobRevision ?? 0) === (old.item._hobRevision ?? 0) && modified > old.modified)) found.set(item.id, { item, modified });
+    }
+    return [...found.values()].map(({ item }) => withoutRevision(item));
+  }
+
+  card(id: string): CardRecord | undefined {
+    return this.cards().find((item) => item.id === id);
+  }
+
+  saveCard(card: CardRecord): void {
+    const target = this.cardOwnerFile(card);
+    const files = [...new Set([...this.cardFiles(), target])];
+    const records = files.map((file) => ({ file, list: readJson<StoredRecord<CardRecord>[]>(file, []) }));
+    const revision = 1 + Math.max(0, ...records.flatMap(({ list }) => list.filter((item) => item.id === card.id).map((item) => item._hobRevision ?? 0)));
+    const owner = records.find(({ file }) => file === target)!;
+    const list = owner.list.filter((item) => item.id !== card.id);
+    list.push({ ...card, _hobRevision: revision });
+    writeJsonAtomic(target, list);
+    for (const { file, list: old } of records) {
+      if (file === target) continue;
+      const next = old.filter((item) => item.id !== card.id);
+      if (next.length !== old.length) writeJsonAtomic(file, next);
     }
   }
 
@@ -625,10 +706,7 @@ export class Store {
     return path;
   }
 
-  /**
-   * 一次性迁移：从助手和群资料中移除旧的补充说明，并把非空原文留在同目录的
-   * instructions.archived.md 里；草稿中的补充说明直接丢弃。重复启动不会覆盖档案。
-   */
+  /** 旧群补充说明归档；助手和草稿的说明保留。 */
   migrateInstructions(): void {
     const archive = (path: string): void => {
       const record = readJson<Record<string, unknown> | null>(path, null);
@@ -641,11 +719,6 @@ export class Store {
       }
       writeJsonAtomic(path, rest);
     };
-    const assistantRoots = [join(this.home, "assistants"), archiveAssistantsDir(this.home)];
-    for (const root of assistantRoots) {
-      if (!existsSync(root)) continue;
-      for (const folder of readdirSync(root)) archive(join(root, folder, "profile.json"));
-    }
     const groupRoots = [groupsDir(this.home), archiveGroupsDir(this.home)];
     for (const root of groupRoots) {
       if (!existsSync(root)) continue;
@@ -659,8 +732,12 @@ export class Store {
     }
     const draftPath = this.hobFile("drafts.json");
     const drafts = readJson<Record<string, unknown>[]>(draftPath, []);
-    if (drafts.some((draft) => Object.prototype.hasOwnProperty.call(draft, "instructions"))) {
-      writeJsonAtomic(draftPath, drafts.map(({ instructions: _instructions, ...draft }) => draft));
+    if (drafts.some((draft) => draft.instructions !== undefined && typeof draft.instructions !== "string")) {
+      writeJsonAtomic(draftPath, drafts.map((draft) => {
+        if (draft.instructions === undefined || typeof draft.instructions === "string") return draft;
+        const { instructions: _instructions, ...rest } = draft;
+        return rest;
+      }));
     }
   }
 

@@ -3,12 +3,14 @@ import { memo } from "react";
 import { t } from "../../../shared/i18n.ts";
 import { conversations, pinList } from "../home.ts";
 import { Icon } from "../icons.tsx";
-import { openKnowledge, openSettings, setQuery, setSearch, shallow, useAppSelect, type PanelPage, type State } from "../store.ts";
+import { openKnowledge, openPlugins, openSettings, openStars, setQuery, setSearch, shallow, useAppSelect, type PanelPage, type State } from "../store.ts";
+import { HistoryResults } from "./HistoryResults.tsx";
 import { HomeSections, pinLayout, Pin } from "./HomeSections.tsx";
 import { GroupPin } from "./Groups.tsx";
 import { PlusButton } from "./GroupCreate.tsx";
 import { Panel } from "./Panel.tsx";
 import { usePinDrag } from "./PinDrag.ts";
+import { UpdateDot, availableVersion } from "./SettingsParts.tsx";
 
 /** 手机首页只关心这几位：切页（mobile/sel/gsel）变了不重画这一大片。 */
 const pickList = (s: State) => ({
@@ -17,10 +19,12 @@ const pickList = (s: State) => ({
   groupPrefs: s.groupPrefs,
   query: s.query,
   search: s.search,
+  update: s.update,
 });
 
 export const MobileList = memo(function MobileList() {
   const s = useAppSelect(pickList, shallow);
+  const updateVersion = availableVersion(s.update);
   const pins = pinList(conversations(s.assistants, s.groups, s.groupPrefs), s.query);
   const drag = usePinDrag(pins, s.query.trim().length > 0);
   const layout = pinLayout(pins.length);
@@ -28,24 +32,31 @@ export const MobileList = memo(function MobileList() {
   return (
     <>
       <div className="mhead">
-        <button className="me" title={t("设置")} onClick={openSettings}>
+        <button
+          className={`me${updateVersion ? " has-update" : ""}`}
+          title={updateVersion ? `${t("设置")} · ${t("有新版本 {version}", { version: updateVersion })}` : t("设置")}
+          onClick={openSettings}
+        >
           <Icon name="user" size={17} />
+          {updateVersion ? <UpdateDot version={updateVersion} /> : null}
         </button>
         <span className="sp" />
         {s.search ? (
           <div className="msearch">
             <Icon name="search" size={15} />
-            <input autoFocus value={s.query} placeholder={t("搜索助手")} onChange={(e) => setQuery(e.target.value)} />
+            <input autoFocus value={s.query} placeholder={t("搜索对话和消息")} onChange={(e) => setQuery(e.target.value)} />
             <button onClick={() => setSearch(false)} title={t("关闭搜索")}>
               <Icon name="close" size={14} />
             </button>
           </div>
         ) : (
           <>
+            <button className="hob-icon-btn" title={t("收藏")} onClick={openStars}><Icon name="star" size={19} /></button>
+            <button className="hob-icon-btn" title={t("插件")} onClick={() => openPlugins()}><Icon name="plugin" size={19} /></button>
             <button className="hob-icon-btn" title={t("知识库")} onClick={openKnowledge}>
               <Icon name="archive" size={19} />
             </button>
-            <button className="hob-icon-btn" title={t("搜索助手")} onClick={() => setSearch(true)}>
+            <button className="hob-icon-btn" title={t("搜索对话和消息")} onClick={() => setSearch(true)}>
               <Icon name="search" size={19} />
             </button>
             <PlusButton size={21} />
@@ -65,6 +76,7 @@ export const MobileList = memo(function MobileList() {
       </div>
       <div className="mlist">
         <HomeSections size={36} />
+        <HistoryResults />
       </div>
     </>
   );

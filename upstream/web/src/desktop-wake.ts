@@ -20,15 +20,16 @@ export class DesktopWakeTracker {
     for (const state of this.states.values()) state.watched = false;
   }
 
-  observe(screens: readonly DesktopScreen[], activeScreenId: string | undefined, eligible: boolean, collapsed: boolean, nowWide: boolean): "expand" | "restore" | undefined {
+  /** watched：用户此刻看着的屏幕（单聊是这个助手的，群信息页是全体成员的）。 */
+  observe(screens: readonly DesktopScreen[], watched: readonly string[], eligible: boolean, collapsed: boolean, nowWide: boolean): "expand" | "restore" | undefined {
     // 空列表是连不上云桌面（断线、Hob 重启），状态未知：什么都不动，不然重连会被当成一次唤醒
     if (!screens.length) return undefined;
-    const ids = new Set([...this.states.keys(), ...screens.map((screen) => screen.id), ...(activeScreenId ? [activeScreenId] : [])]);
+    const ids = new Set([...this.states.keys(), ...screens.map((screen) => screen.id), ...watched]);
     let action: "expand" | "restore" | undefined;
     for (const id of ids) {
       // 列表里没有这块屏幕：它还没建过，算没在运行
       const running = screens.some((screen) => screen.id === id && screen.running);
-      const watching = id === activeScreenId && eligible;
+      const watching = watched.includes(id) && eligible;
       const previous = this.states.get(id);
       const next: ScreenState = { running, watched: watching, autoExpanded: false };
       if (previous?.running && running) {

@@ -5,6 +5,7 @@ import { useMenu } from "./use-menu.ts";
 import { createPortal } from "react-dom";
 import { knowledgeGroup, type KnowledgeCollection, type KnowledgeEntry, type KnowledgeGroup } from "../../../shared/knowledge.ts";
 import type { AssistantSummary } from "../../../shared/types.ts";
+import { SetNavHead } from "./SettingsParts.tsx";
 import { Icon } from "../icons.tsx";
 import {
   closeKnowledge, createKnowledgeCollection, deleteKnowledgeCollection, deleteKnowledgeEntry,
@@ -69,9 +70,7 @@ function Categories({ collections, selected, narrow }: { collections: KnowledgeC
   const [renaming, setRenaming] = useState<string | null>(null);
   const menu = useMenu();
   const current = collections.find((c) => c.id === menu.menu?.id);
-  return (
-    <nav className={narrow ? "knowledge-categories" : "setnav"} aria-label={t("知识库分类")}>
-      {!narrow && <div className="setnavtitle">{t("知识库")}</div>}
+  const rows = <>
       {[["all", "all"], ["output", "output"], ["chat", "chat"]].map(([id, key]) => (
         <div key={id}>
           <button className={`navrow${selected === id ? " sel" : ""}`} onClick={() => setKnowledgeFilter({ category: id })}>
@@ -110,7 +109,10 @@ function Categories({ collections, selected, narrow }: { collections: KnowledgeC
           <button className="navrow knowledge-new" onClick={() => setCreating(true)}>＋ {t("新建")}</button>
         )}
       </div>
-      {!narrow && <><span className="sp" /><button className="navrow" onClick={closeKnowledge}>{t("返回 Hob")}</button></>}
+  </>;
+  return (
+    <nav className={narrow ? "knowledge-categories" : "setnav"} aria-label={t("知识库分类")}>
+      {narrow ? rows : <><SetNavHead title={t("知识库")} onBack={closeKnowledge} /><div className="setnav-scroll">{rows}</div></>}
       {current && createPortal(
         <div className="amenu knowledge-popup" ref={menu.box}>
           <button onClick={() => { menu.close(); setRenaming(current.id); }}>{t("改名")}</button>

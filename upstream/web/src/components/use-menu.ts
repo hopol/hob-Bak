@@ -10,7 +10,9 @@ export function useMenu(align: "left" | "right" = "right") {
     const rect = box.current.getBoundingClientRect();
     const x = align === "left" ? anchor.left : anchor.right - rect.width;
     box.current.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
-    box.current.style.top = `${Math.max(8, Math.min(anchor.bottom + 4, window.innerHeight - rect.height - 8))}px`;
+    // 下面放不下就开在按钮上面（比如输入框里的加号），不压住按钮
+    const below = anchor.bottom + 4 + rect.height <= window.innerHeight - 8;
+    box.current.style.top = `${below ? anchor.bottom + 4 : Math.max(8, anchor.top - rect.height - 4)}px`;
   });
   useEffect(() => {
     if (!menu) return;

@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import type { Assistant, Group, GroupItem, Item } from "../../shared/types.ts";
-import { answerApproval } from "../src/actions.ts";
+import { describe, expect, it, vi } from "vitest";
+import type { Approval, Assistant, Group, GroupItem, Item } from "../../shared/types.ts";
+import { answerApproval, MAX_ANSWER_TEXT } from "../src/actions.ts";
+import { buildSystemPrompt } from "../src/prompt.ts";
 import { buildRouterTools } from "../src/router-tools.ts";
 import { askOptions } from "../src/worker-tools.ts";
 import { makeHob, text, waitFor, type TestHob } from "./helpers.ts";
@@ -258,15 +259,207 @@ describe("一张卡问几个问题", () => {
   });
 });
 
-describe.skipIf(!doc)("工具说明和设计稿逐字一致", () => {
-  it("ask_user 的 questions 参数说明与第五节一字不差", () => {
+describe("填空题", () => {
+  it("参数校验：两样都带、都不带、类型不对、带 recommended 都会指出具体题号", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
-      const line = doc.split("\n").find((item) => item.startsWith("- `questions`："));
-      expect(line, "design-projects.md 第五节里找不到 questions 那条").toBeTruthy();
-      const described = line!.split("：").slice(1).join("：");
+      const both = await run(hob, {
+        title: "订场地",
+        questions: [
+          { title: "人数", options: [{ label: "10 人" }, { label: "20 人" }], input: "number" },
+        ],
+      });
+      expect(both.isError).toBe(true);
+      expect(both.text).toContain("第 1 个问题");
+      expect(both.text).toContain("options");
+      expect(both.text).toContain("input");
+
+      const neither = await run(hob, {
+        title: "订场地",
+        questions: [
+          { title: "场地", options: [{ label: "A 厅" }, { label: "B 厅" }] },
+          { title: "日期" },
+        ],
+      });
+      expect(neither.isError).toBe(true);
+      expect(neither.text).toContain("第 2 个问题");
+
+      const badType = await run(hob, {
+        title: "订场地",
+        questions: [{ title: "预算", input: "currency" }],
+      });
+      expect(badType.isError).toBe(true);
+      expect(badType.text).toContain("第 1 个问题");
+      expect(badType.text).toContain("currency");
+
+      const withRec = await run(hob, {
+        title: "订场地",
+        questions: [{ title: "日期", input: "date", recommended: "2026-12-01" }],
+      });
+      expect(withRec.isError).toBe(true);
+      expect(withRec.text).toContain("第 1 个问题");
+      expect(withRec.text).toContain("recommended");
+
+      expect(hob.runtime.store.approvals()).toHaveLength(0);
+    } finally {
+      hob.close();
+    }
+  });
+
+  it("创建混合选择题与五种填空题，按类型校验答案并按格式回给模型", async () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
+      const created = await run(hob, {
+        title: "活动安排",
+        detail: "确认下面几项就可以发通知",
+        questions: [
+          { title: "形式", why: "决定订哪类场地", options: [{ label: "线下沙龙" }, { label: "线上分享" }], recommended: "线下沙龙" },
+          { title: "主题名称", input: "text", placeholder: "例如：秋季读书会" },
+          { title: "简介说明", input: "multiline", placeholder: "写几句活动内容" },
+          { title: "预计人数", input: "number", placeholder: "填数字" },
+          { title: "活动日期", input: "date" },
+          { title: "开始时间", input: "time" },
+        ],
+      });
+      expect(created).toMatchObject({ text: "问题卡已显示给用户。", terminate: true });
+
+      const approval = hob.runtime.store.approvals()[0]!;
+      expect(approval.questions).toEqual([
+        { title: "形式", why: "决定订哪类场地", options: [{ key: "A", label: "线下沙龙" }, { key: "B", label: "线上分享" }], recommended: "A" },
+        { title: "主题名称", options: [], input: "text", placeholder: "例如：秋季读书会" },
+        { title: "简介说明", options: [], input: "multiline", placeholder: "写几句活动内容" },
+        { title: "预计人数", options: [], input: "number", placeholder: "填数字" },
+        { title: "活动日期", options: [], input: "date" },
+        { title: "开始时间", options: [], input: "time" },
+      ]);
+
+      const valid = [
+        { key: "A" as const },
+        { text: "秋季读书会" },
+        { text: "一起聊两本近期的书\n带一杯茶来" },
+        { text: "18" },
+        { text: "2026-11-28" },
+        { text: "14:30" },
+      ];
+
+      // 空白 text / multiline
+      expect((await answerApproval(hob.runtime, approval.id, { answers: valid.map((a, i) => (i === 1 ? { text: "   " } : a)) })).status).toBe(400);
+      expect((await answerApproval(hob.runtime, approval.id, { answers: valid.map((a, i) => (i === 2 ? { text: "\n  " } : a)) })).status).toBe(400);
+      // 超过 MAX_ANSWER_TEXT
+      expect((await answerApproval(hob.runtime, approval.id, { answers: valid.map((a, i) => (i === 1 ? { text: "字".repeat(MAX_ANSWER_TEXT + 1) } : a)) })).status).toBe(400);
+      // 非法 number（文本、Infinity）
+      expect((await answerApproval(hob.runtime, approval.id, { answers: valid.map((a, i) => (i === 3 ? { text: "大概二十人" } : a)) })).status).toBe(400);
+      expect((await answerApproval(hob.runtime, approval.id, { answers: valid.map((a, i) => (i === 3 ? { text: "Infinity" } : a)) })).status).toBe(400);
+      // 非法 date（格式不对、不存在的日期）
+      expect((await answerApproval(hob.runtime, approval.id, { answers: valid.map((a, i) => (i === 4 ? { text: "2026/11/28" } : a)) })).status).toBe(400);
+      expect((await answerApproval(hob.runtime, approval.id, { answers: valid.map((a, i) => (i === 4 ? { text: "2026-02-30" } : a)) })).status).toBe(400);
+      // 非法 time（小时或分钟越界）
+      expect((await answerApproval(hob.runtime, approval.id, { answers: valid.map((a, i) => (i === 5 ? { text: "24:00" } : a)) })).status).toBe(400);
+      expect((await answerApproval(hob.runtime, approval.id, { answers: valid.map((a, i) => (i === 5 ? { text: "14:60" } : a)) })).status).toBe(400);
+      // 填空题不能传 key
+      expect((await answerApproval(hob.runtime, approval.id, { answers: valid.map((a, i) => (i === 1 ? { key: "A" } : a)) })).status).toBe(400);
+
+      // 合法提交：回给模型时填空题写成 "{n}. {问题}：{值}"，不写「没有选给出的选项」
+      hob.faux.setResponses([text("收到，我来准备通知。")]);
+      const res = await answerApproval(hob.runtime, approval.id, { answers: valid });
+      expect(res.status).toBe(200);
+      await hob.runtime.router.waitIdle("hob");
+
+      const reply = events(join(hob.home, "assistants", "hob", "router.jsonl")).at(-1)!;
+      expect(reply).toBe(
+        [
+          "用户回答了「活动安排」：",
+          "1. 形式：选了 A：线下沙龙",
+          "2. 主题名称：秋季读书会",
+          "3. 简介说明：一起聊两本近期的书\n带一杯茶来",
+          "4. 预计人数：18",
+          "5. 活动日期：2026-11-28",
+          "6. 开始时间：14:30",
+        ].join("\n"),
+      );
+      expect(reply).not.toContain("没有选给出的选项");
+    } finally {
+      hob.close();
+    }
+  });
+
+  it("旧的选择题数据和任务的提问照旧能答", async () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
+      // 模拟历史存储中不带 input 字段的多问题审批
+      const legacy: Approval = {
+        id: "q-legacy",
+        assistantId: "hob",
+        title: "旧卡片",
+        options: [],
+        questions: [
+          { title: "输出格式", options: [{ key: "A", label: "Markdown" }, { key: "B", label: "纯文本" }], recommended: "A" },
+        ],
+        status: "pending",
+        source: "router",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      };
+      hob.runtime.store.saveApproval(legacy);
+      hob.faux.setResponses([text("好。")]);
+      expect((await answerApproval(hob.runtime, legacy.id, { answers: [{ key: "B" }] })).status).toBe(200);
+      expect(hob.runtime.store.approval(legacy.id)).toMatchObject({ status: "answered", answers: [{ key: "B" }] });
+
+      // 任务的提问（source: "job"）照旧通过 resolveAsk 唤醒任务
+      const jobApproval: Approval = {
+        id: "q-job",
+        assistantId: "hob",
+        title: "是否覆盖已有导出文件？",
+        options: [{ key: "A", label: "覆盖" }, { key: "B", label: "另存新文件" }],
+        status: "pending",
+        source: "job",
+        jobId: "t-ask",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      };
+      hob.runtime.store.saveApproval(jobApproval);
+      const resolveSpy = vi.spyOn(hob.runtime.jobs, "resolveAsk").mockImplementation(() => {});
+      expect((await answerApproval(hob.runtime, jobApproval.id, { key: "B" })).status).toBe(200);
+      expect(resolveSpy).toHaveBeenCalledWith(expect.objectContaining({ id: "q-job", status: "answered", chosen: "B" }), "用户选择了：另存新文件");
+    } finally {
+      hob.close();
+    }
+  });
+
+  it("ask_user 工具说明和系统提示词与票 263 原文一字不差", () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
       const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "ask_user")!;
-      expect(tool.parameters.properties.questions.description).toBe("可选，一次问几个问题时用，每个写 `title`（问题）、`why`（为什么要定它）、`options`（2 到 3 个选项）、`recommended`（推荐哪个选项）。用户答完，答案一起回来。");
+      expect(tool.description).toBe(
+        "在对话里出一张提问卡，用户答完，答案会回到对话。问题可以是选择题（2 到 3 个选项），也可以是填空题（一行字、一段话、数字、日期、时间）。",
+      );
+      expect(tool.parameters.properties.questions.description).toBe(
+        "可选，一次问几个问题时用。每个问题写 `title`（问题）、`why`（为什么要问它）；选择题写 `options`（2 到 3 个选项）和 `recommended`（推荐哪个选项），填空题不写 `options`，写 `input`（`text` 一行字、`multiline` 一段话、`number` 数字、`date` 日期、`time` 时间）和可选的 `placeholder`。用户答完，答案一起回来。",
+      );
+      const qProps = tool.parameters.properties.questions.items.properties;
+      expect(qProps.input.description).toBe("填空题的类型：text 一行字、multiline 一段话、number 数字、date 日期、time 时间。不写 options 时必填。");
+      expect(qProps.placeholder.description).toBe("可选，输入框里的提示文字。");
+
+      const prompt = buildSystemPrompt(hob.runtime.store, "hob", {
+        timezone: "Asia/Shanghai",
+        aboutYou: { name: "", language: "", notes: "" },
+        memory: "off",
+      });
+      expect(prompt).toContain(
+        "要用户拿主意，或者要用户给几项只有他知道的信息（日期、数量、一段说明），用 ask_user 一次问完：要选的给选项，要填的出填空题，用户在一张卡上答完一起交回，比一问一答省事。能自己查到、按常理就能定的，自己定了再告诉用户。内容有了形状时用 send_card 发卡片：有几项能并排比较的数字或条目，有用户先不用看、需要时再展开的细节，或者是一份要用户扫一眼就抓住重点的汇报、对比、总览。卡片把这些摆成标题、并排的关键数字和折起来的段落，比一长段文字好读。对话、解释、一两句话就说完的结果，直接回复。用户要交给你密码、密钥这类值时",
+      );
+    } finally {
+      hob.close();
+    }
+  });
+});
+
+describe.skipIf(!doc)("工具说明和设计稿逐字一致", () => {
+  it("ask_user 的 questions 参数说明按票 263 保持一致", () => {
+    const hob = makeHob({}, { memory: "off" });
+    try {
+      const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "ask_user")!;
+      expect(tool.parameters.properties.questions.description).toBe(
+        "可选，一次问几个问题时用。每个问题写 `title`（问题）、`why`（为什么要问它）；选择题写 `options`（2 到 3 个选项）和 `recommended`（推荐哪个选项），填空题不写 `options`，写 `input`（`text` 一行字、`multiline` 一段话、`number` 数字、`date` 日期、`time` 时间）和可选的 `placeholder`。用户答完，答案一起回来。",
+      );
     } finally {
       hob.close();
     }

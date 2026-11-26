@@ -1,0 +1,26 @@
+#!/usr/bin/env node
+const action = process.argv[2] ?? "token";
+const url = process.env.HOB_TOOLS_URL;
+const token = process.env.HOB_TOOLS_TOKEN;
+if (!url || !token) {
+  console.error("missing HOB_TOOLS_URL or HOB_TOOLS_TOKEN");
+  process.exit(2);
+}
+
+const toolName = action === "internal" ? "cap-plugin_internal_secret" : "cap-plugin_command_token";
+const response = await fetch(url, {
+  method: "POST",
+  headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+  body: JSON.stringify({ name: toolName, args: {} }),
+});
+const body = await response.json();
+if (!response.ok) {
+  console.error(body.error ?? `HTTP ${response.status}`);
+  process.exit(1);
+}
+if (action === "token") {
+  const value = body.value;
+  console.log(typeof value === "object" && value !== null ? value.token : String(value));
+} else {
+  console.log(JSON.stringify(body.value));
+}

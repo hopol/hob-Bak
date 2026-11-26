@@ -1,9 +1,10 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { Approval, Assistant, Group, GroupItem, GroupSummary, Job } from "../../shared/types.ts";
 import { createApp } from "../src/http.ts";
-import { buildSystemPrompt, PROJECT_RECALL_LINE, TOPIC_OPEN_LINE, topicPromptLine } from "../src/prompt.ts";
+import { buildSystemPrompt, PROJECT_RECALL_LINE, TOPIC_OPEN_LINE, topicPromptLine, topicSection } from "../src/prompt.ts";
 import { buildRouterTools } from "../src/router-tools.ts";
 import { CLOSED_TOPIC_REASON, TOPIC_CLOSED, requestText } from "../src/groups.ts";
 import { call, makeHob, text, waitFor, type TestHob } from "./helpers.ts";
@@ -387,7 +388,35 @@ describe("close_topic：结论", () => {
       const topic = hob.runtime.groups.createTopic(group.id, "直接结束", "user");
       const result = await toolOf(hob, "close_topic", topic.id).execute("c", {});
       expect(isError(result)).toBe(false);
+      expect(result).toMatchObject({ terminate: true });
       expect(hob.runtime.store.group(topic.id)?.closedAt).toBeTruthy();
+    } finally { hob.close(); }
+  });
+
+  it("在综合里关别的话题，本轮接着走", async () => {
+    const { hob, group } = setup();
+    try {
+      const topic = hob.runtime.groups.createTopic(group.id, "待关闭", "user");
+      const result = await toolOf(hob, "close_topic", group.id).execute("c", { topic: topic.id, note: "好了" });
+      expect(isError(result)).toBe(false);
+      expect((result as { terminate?: boolean }).terminate).not.toBe(true);
+      expect(hob.runtime.store.group(topic.id)?.closedAt).toBeTruthy();
+    } finally { hob.close(); }
+  });
+
+  it("话题里先回完话再关掉这个话题：不再多请求一轮，话题不挂着「正在思考」", async () => {
+    const { hob, group } = setup();
+    try {
+      const topic = hob.runtime.groups.createTopic(group.id, "收尾", "user");
+      hob.faux.setResponses([
+        fauxAssistantMessage([{ type: "text", text: "办完了，这个话题我关掉。" }, fauxToolCall("close_topic", { note: "已完成" })], { stopReason: "toolUse" }),
+        text("不该有这一轮"),
+      ]);
+      await hob.runtime.groups.send(topic.id, { text: "收个尾" });
+      await waitFor(() => !!hob.runtime.store.group(topic.id)?.closedAt);
+      await waitFor(() => hob.runtime.groups.summary(topic.id).busy.length === 0);
+      expect(hob.runtime.groups.summary(topic.id).activity).toBeUndefined();
+      expect(hob.runtime.store.groupItems(topic.id).filter((item) => item.kind === "assistant").map((item) => item.text)).toEqual(["办完了，这个话题我关掉。"]);
     } finally { hob.close(); }
   });
 });
@@ -421,7 +450,7 @@ describe("工具和提示词按话题会话分开", () => {
       const overview = prompt(hob, "hob", group, []);
       expect(overview).toContain(TOPIC_OPEN_LINE);
       expect(overview).toContain("## 这个群的话题");
-      expect(overview).toContain(`- 「相册备份出错」（${topic.id}）· 进行中 · `);
+      expect(overview).toContain(`- 「相册备份出错」（${topic.id}）· 进行中\n`);
       expect(overview).toContain(PROJECT_RECALL_LINE);
 
       const inside = prompt(hob, "hob", topic);
@@ -441,6 +470,34 @@ describe("工具和提示词按话题会话分开", () => {
     } finally {
       hob.close();
     }
+  });
+
+  it("话题清单按创建时间倒序排，保留全部进行中 + 按关闭时间取最近关闭 5 个", () => {
+    const mk = (id: string, name: string, createdAt: string, closedAt?: string): Group => ({
+      id, name, purpose: "测试", ownerId: "hob", members: ["hob", "ops"], parentId: "g-host", createdAt, closedAt,
+    });
+    const section = topicSection([
+      mk("g-c1", "旧关1", "2026-11-01T01:00:00.000Z", "2026-11-01T10:00:00.000Z"),
+      mk("g-c2", "旧关2", "2026-11-02T01:00:00.000Z", "2026-11-02T10:00:00.000Z"),
+      mk("g-c3", "旧关3", "2026-11-03T01:00:00.000Z", "2026-11-03T10:00:00.000Z"),
+      mk("g-c4", "旧关4", "2026-11-04T01:00:00.000Z", "2026-11-04T10:00:00.000Z"),
+      mk("g-c5", "旧关5", "2026-11-05T01:00:00.000Z", "2026-11-05T10:00:00.000Z"),
+      mk("g-c6", "最晚关闭但最早建", "2026-10-20T01:00:00.000Z", "2026-11-09T10:00:00.000Z"),
+      mk("g-o1", "进行中旧", "2026-11-02T12:00:00.000Z"),
+      mk("g-o2", "进行中新", "2026-11-08T12:00:00.000Z"),
+    ]);
+    // g-c1 是关闭时间最早的第 6 个，应被截掉；g-c6 关闭时间最晚应保留，但最终按创建时间倒序排在最后
+    expect(section).toBe([
+      "## 这个群的话题",
+      "- 「进行中新」（g-o2）· 进行中",
+      "- 「旧关5」（g-c5）· 已关闭",
+      "- 「旧关4」（g-c4）· 已关闭",
+      "- 「旧关3」（g-c3）· 已关闭",
+      "- 「进行中旧」（g-o1）· 进行中",
+      "- 「旧关2」（g-c2）· 已关闭",
+      "- 「最晚关闭但最早建」（g-c6）· 已关闭",
+      PROJECT_RECALL_LINE,
+    ].join("\n"));
   });
 
 });

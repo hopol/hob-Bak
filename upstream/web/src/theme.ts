@@ -15,7 +15,7 @@ export function resolveTheme(theme: Theme, systemDark: boolean) {
 
 interface StatusPage {
   phase: "loading" | "login" | "ready" | "error";
-  page: "main" | "settings" | "knowledge";
+  page: "main" | "settings" | "knowledge" | "plugins" | "stars";
   sheet: boolean;
   panelStack: Array<{ kind: string; full?: boolean }>;
 }
@@ -25,6 +25,7 @@ export function statusSurface(page: StatusPage, narrow: boolean): "bg" | "side" 
   if (page.phase !== "ready") return narrow ? "bg" : "side";
   const top = page.panelStack.at(-1);
   if (top?.kind === "file" && (narrow || top.full)) return "bg";
+  if (page.page === "plugins") return "bg";
   if (narrow) return top?.kind === "job" || top?.kind === "jobs" || page.page === "settings" || page.page === "knowledge" ? "bg" : top || page.sheet ? "panel" : "bg";
   return page.page === "settings" || page.page === "knowledge" ? "bg" : "side";
 }
@@ -41,11 +42,23 @@ export function updateManifest(dark: boolean) {
   document.getElementById("manifest")?.setAttribute("href", dark ? DARK_MANIFEST : LIGHT_MANIFEST);
 }
 
+let statusKey = "";
+
 export function updateStatusColor(page: StatusPage, narrow: boolean) {
   const root = document.documentElement;
-  root.style.setProperty("--status-background", `var(--${statusSurface(page, narrow)})`);
+  // 根元素上的变量一改，整页样式都要重算；没变就不写（回首页、开关右栏都会走到这里）
+  const surface = statusSurface(page, narrow);
+  const background = `var(--${surface})`;
+  if (root.style.getPropertyValue("--status-background") !== background) root.style.setProperty("--status-background", background);
+  // 读计算样式会逼浏览器当场重算整页样式；底色、深浅、配色都没变就不读
+  const key = `${background}|${root.classList.contains("dark")}|${root.getAttribute("data-palette")}`;
+  if (key === statusKey) return;
+  statusKey = key;
   // 写成 #rrggbb，和 index.html、manifest 一致（iPhone 主屏应用其实不用它画状态栏，见 styles.css 手机深色那段）
-  const color = toHex(getComputedStyle(root).backgroundColor);
+  const computed = getComputedStyle(root);
+  // 主题切换会暂时给背景加 CSS transition。读 backgroundColor 会拿到过渡中的旧色，
+  // 让 meta theme-color 落后一套配色；直接读当前 surface 变量得到稳定的最终色。
+  const color = toHex(computed.getPropertyValue(`--${surface}`).trim() || computed.backgroundColor);
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta?.getAttribute("content") === color) return;
   meta?.setAttribute("content", color);

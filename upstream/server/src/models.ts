@@ -70,7 +70,12 @@ export function thinkingForPick(pick: ModelPick, catalog: ModelCatalog): Thinkin
 function infoOf(model: Model<any>, settings: ModelSettings): ModelInfo {
   const ref = `${model.provider}/${model.id}`;
   const reasoning = Boolean(model.reasoning);
-  const plan = thinkingPlan(model.id, reasoning, settings.thinking?.[ref], model.api);
+  const userCustom = settings.thinking?.[ref];
+  const pluginMap =
+    userCustom === undefined && model.provider.startsWith("plugin-") && model.thinkingLevelMap
+      ? (model.thinkingLevelMap as ThinkingLevelMapSetting)
+      : undefined;
+  const plan = thinkingPlan(model.id, reasoning, userCustom ?? pluginMap, model.api);
   return {
     ref,
     provider: model.provider,
@@ -208,6 +213,19 @@ export function conversationPick(settings: ModelSettings, assistant: Assistant):
   return pick;
 }
 
+/** 推荐提问这一轮使用的模型：null 关闭，缺省跟随这个助手的对话模型，思考固定关闭。 */
+export function followUpPick(settings: ModelSettings, assistant: Assistant, catalog: ModelCatalog): ModelPick | undefined {
+  if (settings.suggest === null) return undefined;
+  let pick: ModelPick;
+  try {
+    pick = settings.suggest ?? conversationPick(settings, assistant);
+  } catch (error) {
+    if (error instanceof NoModelError) return undefined;
+    throw error;
+  }
+  return pick.ref && catalog.find(pick.ref) ? { ref: pick.ref, thinking: "off" } : undefined;
+}
+
 export interface JobModelInput {
   settings: ModelSettings;
   assistant: Assistant;
@@ -342,6 +360,13 @@ export async function checkModelsPatch(
     if (!pick.ref) throw new Error(`未选择${label}模型。`);
     if (!rosterRefs.has(pick.ref)) throw new Error(`${label}模型 ${pick.ref} 不在模型列表中。`);
     checkThinking(pick.thinking);
+  }
+  if (next.suggest !== undefined && next.suggest !== null) {
+    if (next.suggest.ref.trim()) {
+      if (!rosterRefs.has(next.suggest.ref)) throw new Error(`推荐提问模型 ${next.suggest.ref} 不在模型列表中。`);
+      if (!catalog.find(next.suggest.ref)) throw new Error(`推荐提问模型 ${next.suggest.ref} 当前不可用（该模型的服务商已删除或未配置 Key）。`);
+    }
+    checkThinking(next.suggest.thinking);
   }
 }
 

@@ -15,6 +15,76 @@ describe("renderMarkdown", () => {
     expect(renderMarkdown("$\\href{javascript:alert(1)}{bad}$")).not.toContain("<a ");
   });
 
+  it("模板变量、Shell 变量、金额和裸中文不误匹配为行内公式", async () => {
+    await loadMath();
+    const repro = "删掉了「，是『${name}』指定的现成目录」，改为：工作目录：${job.cwd}：你的命令默认在这里运行，改动直接落在这里。任务自己的目录是 ${ownDir}：要另拉一份代码隔离着执行。";
+    expect(hasMath(repro)).toBe(false);
+    const reproHtml = renderMarkdown(repro);
+    expect(reproHtml).not.toContain('class="katex');
+    expect(reproHtml).toContain("${name}");
+    expect(reproHtml).toContain("${job.cwd}");
+    expect(reproHtml).toContain("${ownDir}");
+
+    const nonMathCases = [
+      "${a} 和 ${b}",
+      "${a}和${b}",
+      "${a}/${b}",
+      "$HOME 到 $PATH",
+      "$HOME到$PATH",
+      "$HOME 和 $PATH",
+      "$HOME/$PATH",
+      "$10 到 $20",
+      "$10到$20",
+      "foo$bar$baz",
+      "正则 /^foo$/ 和 /^bar$/",
+      "价格 $10（原价 $20）",
+      "变量以$开头，这里用$符号",
+    ];
+    for (const input of nonMathCases) {
+      expect(hasMath(input), input).toBe(false);
+      const html = renderMarkdown(input);
+      expect(html, input).not.toContain('class="katex');
+      expect(html, input).toContain(input);
+    }
+
+    // 模板变量与合法公式同段出现：前者原样保留，后者正常渲染
+    const mixed = "目录是 ${job.cwd}，公式是 $\\alpha + \\beta$；还有 ${a}:$\\gamma$";
+    expect(hasMath(mixed)).toBe(true);
+    const mixedHtml = renderMarkdown(mixed);
+    expect(mixedHtml).toContain("${job.cwd}");
+    expect(mixedHtml).toContain("${a}:");
+    expect(mixedHtml).toContain('class="katex');
+  });
+
+  it("合法单字符、中文 \\text 命令和块级公式继续正常渲染", async () => {
+    await loadMath();
+    const validCases = [
+      "$x$",
+      "$E=mc^2$",
+      "$x + y$",
+      "$x_1 + y_1$",
+      "$\\alpha + \\beta$",
+      "$\\frac{a}{b}$",
+      "$a + \\text{中文}$",
+      "$\\text{总价} = n \\times p$",
+      "$\\mathrm{速度} = \\frac{\\text{路程}}{\\text{时间}}$",
+      "令$x=1$时",
+      "$a$和$b$",
+      "${x}^2$",
+      "CO$_2$",
+      "面积 100 m$^2$",
+      "转 90$^\\circ$",
+      "$利润 = 收入 - 成本$",
+      "$v = \\frac{路程}{时间}$",
+      "\\(a+b\\)",
+      "$$x^2$$",
+    ];
+    for (const input of validCases) {
+      expect(hasMath(input), input).toBe(true);
+      expect(renderMarkdown(input), input).toContain('class="katex');
+    }
+  });
+
   it("代码块显示语言和复制按钮且保留代码原文", () => {
     const result = renderMarkdown('```js\nconst x = "<&";\n```');
     expect(result).toContain('class="code-copy"');

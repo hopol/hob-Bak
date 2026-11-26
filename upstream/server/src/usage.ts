@@ -152,12 +152,20 @@ export class UsageService {
       store: Store;
       settings: SettingsStore;
       prices: PriceTable;
+      /** models.dev 数据拉到或更新以后（供应商插件模型要按新的上限重新注册） */
+      onPricesLoaded?: () => Promise<void>;
     },
   ) {}
 
-  /** 启动后先扫一遍；服务不等它。 */
+  /**
+   * 启动后先扫一遍会话文件；服务不等它。
+   * models.dev 数据启动时拉一次，之后每 6 小时看一眼（一天内拉过就不拉）。
+   */
   warmup(): void {
     void this.scan().catch(() => {});
+    const loadPrices = () => void this.options.prices.ensure().then(() => this.options.onPricesLoaded?.()).catch(() => {});
+    loadPrices();
+    setInterval(loadPrices, 6 * 3600_000).unref();
   }
 
   async view(): Promise<UsageView> {

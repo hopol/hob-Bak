@@ -12,7 +12,8 @@ vi.mock("../src/store.ts", () => ({
   backPanel: () => change({ panelStack: app.panelStack.slice(0, -1) }),
   leaveChat: () => change({ mobile: app.gsel ? "topics" : "list" }),
   leaveTopicList: () => change({ mobile: "list", gsel: null }),
-  closeImageViewer: () => undefined, closeKnowledge: () => undefined, closeSettings: () => undefined, closeSheet: () => undefined, closeSub: () => undefined, setMobile: () => undefined, setSection: () => undefined,
+  goHome: () => change({ page: "main", mobile: "list" }),
+  closeImageViewer: () => undefined, closeKnowledge: () => undefined, closePlugins: () => undefined, openPlugins: () => undefined, closeSettings: () => undefined, closeSheet: () => undefined, closeSub: () => undefined, setMobile: () => undefined, setSection: () => undefined,
 }));
 
 const entries: { hobDepth: number }[] = [];

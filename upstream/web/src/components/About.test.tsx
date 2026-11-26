@@ -31,4 +31,33 @@ describe("设置页的关于", () => {
     expect(html).toContain("正在读取版本信息");
     expect(html).not.toContain("github.com");
   });
+
+  it("有新版本时在 Hob 版本下面显示提示和 Release 链接", () => {
+    const html = renderToStaticMarkup(
+      <AboutView about={{ version: "1.14.0", home: "/data", update: { status: "available", latest: "1.15.0" } }} />,
+    );
+    expect(html).toContain("有新版本 1.15.0");
+    expect(html).toContain("查看更新内容");
+    expect(html).toContain('href="https://github.com/FFatTiger/hob/releases/tag/v1.15.0"');
+    expect(html.indexOf(">Hob 版本<")).toBeLessThan(html.indexOf("有新版本 1.15.0"));
+    expect(html.indexOf("有新版本 1.15.0")).toBeLessThan(html.indexOf(">数据目录<"));
+  });
+
+  it("已是最新时显示已是最新版本，不出现更新链接", () => {
+    const html = renderToStaticMarkup(
+      <AboutView about={{ version: "1.14.0", home: "/data", update: { status: "up-to-date", latest: "1.14.0" } }} />,
+    );
+    expect(html).toContain("已是最新版本");
+    expect(html).not.toContain("查看更新内容");
+    expect(html).not.toContain("releases/tag");
+  });
+
+  it("检查失败时如实显示原因，不冒充成最新", () => {
+    const html = renderToStaticMarkup(
+      <AboutView about={{ version: "1.14.0", home: "/data", update: { status: "error", error: "请求超时" } }} />,
+    );
+    expect(html).toContain("检查更新失败：请求超时");
+    expect(html).not.toContain("已是最新版本");
+    expect(html).not.toContain("查看更新内容");
+  });
 });

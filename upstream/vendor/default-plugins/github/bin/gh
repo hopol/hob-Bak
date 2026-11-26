@@ -1,0 +1,144 @@
+#!/usr/bin/env node
+// Hob GitHub plugin wrapper for gh CLI.
+// Injects GH_TOKEN from Hob's GitHub plugin and appends Hob attribution on pr/issue create.
+
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { appendAttribution } from "../attribution.mjs";
+import {
+  detectGitHubRemote,
+  fetchHobCredentials,
+  findRealBinary,
+  finishWith,
+  parseGitHubRepoSpec,
+  runPassthrough,
+} from "../cli-helper.mjs";
+
+const selfDir = dirname(fileURLToPath(import.meta.url));
+const realGh = findRealBinary("gh", selfDir);
+if (!realGh) {
+  process.stderr.write("这台机器没有安装 gh\n");
+  process.exit(127);
+}
+
+function parseGhScopeAndCommand(args) {
+  let scope = {};
+  const positionals = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") break;
+    if (arg === "-R" || arg === "--repo") {
+      if (i + 1 < args.length) {
+        scope = parseGitHubRepoSpec(args[i + 1]);
+        i++;
+      }
+      continue;
+    }
+    if (arg.startsWith("--repo=")) {
+      scope = parseGitHubRepoSpec(arg.slice("--repo=".length));
+      continue;
+    }
+    if (arg.startsWith("-R") && arg.length > 2) {
+      scope = parseGitHubRepoSpec(arg.slice(2));
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      // Skip value for common gh flags that take a separate argument before/around subcommands
+      if (["-b", "--body", "-F", "--body-file", "-t", "--title", "-B", "--base", "-H", "--head", "-a", "--assignee", "-l", "--label", "-m", "--milestone", "-p", "--project", "-r", "--reviewer", "-T", "--template", "--hostname"].includes(arg)) {
+        i++;
+      }
+      continue;
+    }
+    positionals.push(arg);
+  }
+  return { scope, positionals };
+}
+
+async function readStdinText() {
+  let text = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) text += chunk;
+  return text;
+}
+
+const rawArgs = process.argv.slice(2);
+const { scope: flagScope, positionals } = parseGhScopeAndCommand(rawArgs);
+let scope = flagScope;
+if (!scope.owner) {
+  const realGit = findRealBinary("git", selfDir);
+  scope = detectGitHubRemote(realGit, process.cwd());
+}
+
+const creds = await fetchHobCredentials(scope);
+const childEnv = { ...process.env };
+if (!childEnv.GH_TOKEN && creds?.token) {
+  childEnv.GH_TOKEN = creds.token;
+}
+
+const isPrOrIssueCreate =
+  (positionals[0] === "pr" || positionals[0] === "issue") && positionals[1] === "create";
+
+const finalArgs = [...rawArgs];
+let tempDir = null;
+let stdinData = null;
+
+try {
+  if (isPrOrIssueCreate && creds?.attribution === true) {
+    for (let i = 0; i < finalArgs.length; i++) {
+      const arg = finalArgs[i];
+      if (arg === "--") break;
+
+      if (arg === "--body" || arg === "-b") {
+        if (i + 1 < finalArgs.length) {
+          finalArgs[i + 1] = appendAttribution(finalArgs[i + 1]);
+          i++;
+        }
+        continue;
+      }
+      if (arg.startsWith("--body=")) {
+        finalArgs[i] = `--body=${appendAttribution(arg.slice("--body=".length))}`;
+        continue;
+      }
+      if (arg.startsWith("-b") && arg.length > 2) {
+        finalArgs[i] = `-b${appendAttribution(arg.slice(2))}`;
+        continue;
+      }
+
+      let bodyFilePath = null;
+      let replaceFile = null;
+      if ((arg === "--body-file" || arg === "-F") && i + 1 < finalArgs.length) {
+        bodyFilePath = finalArgs[i + 1];
+        replaceFile = (nextPath) => { finalArgs[i + 1] = nextPath; };
+      } else if (arg.startsWith("--body-file=")) {
+        bodyFilePath = arg.slice("--body-file=".length);
+        replaceFile = (nextPath) => { finalArgs[i] = `--body-file=${nextPath}`; };
+      } else if (arg.startsWith("-F") && arg.length > 2) {
+        bodyFilePath = arg.slice(2);
+        replaceFile = (nextPath) => { finalArgs[i] = `-F${nextPath}`; };
+      }
+
+      if (bodyFilePath !== null) {
+        if (bodyFilePath === "-") {
+          stdinData = appendAttribution(await readStdinText());
+        } else {
+          const content = readFileSync(bodyFilePath, "utf8");
+          tempDir = mkdtempSync(join(tmpdir(), "hob-gh-body-"));
+          const tempFile = join(tempDir, "body.md");
+          writeFileSync(tempFile, appendAttribution(content), "utf8");
+          replaceFile(tempFile);
+        }
+        if (arg === "--body-file" || arg === "-F") i++;
+      }
+    }
+  }
+
+  const outcome = await runPassthrough(realGh, finalArgs, { env: childEnv, stdinData });
+  if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+  finishWith(outcome);
+} catch (error) {
+  if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exit(1);
+}

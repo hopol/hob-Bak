@@ -1,0 +1,54 @@
+{
+  "name": "github",
+  "displayName": "GitHub",
+  "version": "2.0.6",
+  "description": "Connect official GitHub tools and bundled git/gh commands with hob-bot sign-in, your own GitHub App, or a personal access token, with automatic Hob attribution.",
+  "homepage": "https://github.com/github/github-mcp-server",
+  "userConfig": {
+    "GITHUB_APP_ID": {
+      "type": "string",
+      "title": "GitHub App ID",
+      "description": "用 App 身份时填，和下面的私钥一起填。PR、评论和提交会显示成这个 App 的机器人。"
+    },
+    "GITHUB_APP_PRIVATE_KEY": {
+      "type": "file",
+      "title": "GitHub App 私钥",
+      "description": "在 GitHub App 的设置页点「Generate a private key」，把下载的 .pem 文件选上来。",
+      "sensitive": true
+    },
+    "GITHUB_PERSONAL_ACCESS_TOKEN": {
+      "type": "string",
+      "title": "个人访问令牌",
+      "description": "不用 App、也没登录时填，以你本人的身份操作。在 [GitHub](https://github.com/settings/personal-access-tokens) 创建。",
+      "sensitive": true
+    },
+    "ATTRIBUTION": {
+      "type": "boolean",
+      "title": "署名 Hob",
+      "description": "开 PR、开 issue 时在正文末尾加一行「Generated with Hob」，提交时把 hob-bot 加为共同作者。",
+      "default": true
+    }
+  },
+  "extensions": {
+    "com.hob.plugins": {
+      "icon": "icon.svg",
+      "publisher": "GitHub",
+      "categories": [
+        "development"
+      ],
+      "bin": "bin",
+      "permissions": [
+        "network",
+        "subprocess"
+      ],
+      "summary": {
+        "zh": "连接 GitHub 官方工具与 git/gh 命令行，支持 hob-bot 登录、自有 GitHub App 或个人访问令牌，自动带 Hob 署名。",
+        "en": "Connect official GitHub tools and git/gh commands via hob-bot sign-in, your own GitHub App, or a personal access token, with automatic Hob attribution."
+      },
+      "description": {
+        "zh": "让助手查看和操作 GitHub 上的仓库、issue 和 PR，命令行里的 git、gh 也自动用同一个身份。\n身份三选一：用 hob-bot 登录（最省事，显示成你本人）；填自己的 GitHub App（显示成这个 App 的机器人）；或者填个人访问令牌。",
+        "en": "Let assistants read and work on GitHub repositories, issues and pull requests; git and gh on the command line use the same identity.\nPick one identity: sign in with hob-bot (easiest, acts as you), your own GitHub App (acts as its bot), or a personal access token."
+      }
+    }
+  }
+}

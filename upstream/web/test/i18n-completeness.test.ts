@@ -31,7 +31,7 @@ function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) return sourceFiles(path);
-    return /\.(ts|tsx)$/.test(entry.name) && !entry.name.endsWith(".test.ts") && !entry.name.endsWith(".test.tsx") && entry.name !== "mock.ts" ? [path] : [];
+    return /\.(ts|tsx)$/.test(entry.name) && !entry.name.endsWith(".test.ts") && !entry.name.endsWith(".test.tsx") && !/^mock(-.*)?\.ts$/.test(entry.name) ? [path] : [];
   });
 }
 
@@ -109,6 +109,8 @@ function untranslated(file: string): string[] {
     else if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) text = node.text;
     else if (ts.isTemplateExpression(node)) text = [node.head.text, ...node.templateSpans.map((span) => span.literal.text)].join("…");
     if (!text || !isChinese(text) || text in KEEP_CHINESE) return;
+    // 厂商识别表里的中文是用户输入的匹配关键词，并非界面文字。
+    if (file.endsWith("/brand-recognition.ts") && ["通义", "智谱", "豆包", "字节跳动", "硅基流动"].includes(text)) return;
     if (isTCall(node.parent) && node.parent.arguments[0] === node) return;
     // import 路径、对象键这类不显示的，AST 上也是字符串，按位置跳过
     if (ts.isImportDeclaration(node.parent) || ts.isPropertyAssignment(node.parent) && node.parent.name === node) return;

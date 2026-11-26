@@ -1,5 +1,5 @@
 import { t } from "../../../shared/i18n.ts";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { copyText } from "../clipboard.ts";
 import { iconSvg } from "../icons.tsx";
 import { hasMath, loadMath, renderMarkdown } from "../markdown.ts";
@@ -25,6 +25,9 @@ export function Markdown({ text, className, streaming, mentions, onMathRendered 
     return () => { active = false; };
   }, [text]);
   useEffect(() => { if (mathVersion) onMathRendered?.(); }, [mathVersion, onMathRendered]);
+  // 整个界面跟着一份状态重画（回首页、任务进度推送），正文没变就不再解析一遍，长任务、长对话才不卡
+  const mentionKey = mentions?.join("\n");
+  const html = useMemo(() => renderMarkdown(text, mentions), [text, mentionKey, mathVersion]);
   return <div className={className} onClick={(event) => {
     const link = (event.target as Element).closest<HTMLAnchorElement>("a.knowledge-citation");
     const citation = link && parseKnowledgeLink(link.getAttribute("href") ?? "");
@@ -52,5 +55,5 @@ export function Markdown({ text, className, streaming, mentions, onMathRendered 
       button.setAttribute("aria-label", t("已复制"));
       window.setTimeout(() => { button.innerHTML = iconSvg("copy", 15); button.setAttribute("aria-label", t("复制代码")); }, 1500);
     });
-  }} dangerouslySetInnerHTML={{ __html: renderMarkdown(text, mentions) + (streaming ? '<span class="cur"></span>' : "") }} />;
+  }} dangerouslySetInnerHTML={{ __html: html + (streaming ? '<span class="cur"></span>' : "") }} />;
 }

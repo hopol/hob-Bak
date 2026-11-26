@@ -1,7 +1,6 @@
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { t } from "../../shared/i18n.ts";
 import type { AssistantSkill } from "../../shared/skills.ts";
 import type { Group } from "../../shared/types.ts";
 
@@ -39,26 +38,6 @@ function pathName(name: string): void {
   if (!isSkillName(name)) throw new Error("技能名称无效");
 }
 
-/**
- * 正在沉淀的技能目录（目录 → 正在沉淀的助手或群的名字）。
- * 沉淀从拍底稿到对账或恢复结束独占这个目录：这期间别的入口改了，底稿就对不上了。
- */
-const sedimentingDirs = new Map<string, string>();
-
-/** 锁上一个技能目录，owner 是正在沉淀的助手或群的名字（报错时说给用户听）。 */
-export function lockSkillsDir(dir: string, owner: string): void {
-  sedimentingDirs.set(resolve(dir), owner);
-}
-
-export function unlockSkillsDir(dir: string): void {
-  sedimentingDirs.delete(resolve(dir));
-}
-
-/** 改、删、回滚、导入之前先问一句：这个目录正在沉淀就先别动。 */
-export function assertSkillsDirFree(dir: string): void {
-  const owner = sedimentingDirs.get(resolve(dir));
-  if (owner) throw new Error(t("「{owner}」正在沉淀技能，等这一轮结束再改。", { owner }));
-}
 function isLink(path: string): boolean {
   try { return lstatSync(path).isSymbolicLink(); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
@@ -78,7 +57,7 @@ function metadata(dir: string): Record<string, Metadata> {
   // 导入的技能目录里，skills.json 可能是别的工具留下的（对象形状不对就当没有，别把整个助手的技能拖没）
   return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, Metadata>) : {};
 }
-/** 技能索引：给通用技能目录对账和测试用。 */
+/** 技能索引供通用技能和测试使用。 */
 export function skillIndex(dir: string): Record<string, Metadata> {
   return metadata(dir);
 }
@@ -87,7 +66,7 @@ function saveMetadata(dir: string, data: Record<string, Metadata>): void {
   writeFileSync(temp, JSON.stringify(data, null, 2));
   renameSync(temp, join(dir, "skills.json"));
 }
-/** 写 skills.json（沉淀对账时用）。 */
+/** 写 skills.json。 */
 export function saveAssistantSkillsIndex(dir: string, data: Record<string, Metadata>): void {
   saveMetadata(dir, data);
 }
@@ -141,7 +120,6 @@ function readSkill(dir: string, name: string, data: Metadata): AssistantSkill {
 
 /**
  * 助手的技能：一份读不了就只跳过那一份并记日志。
- * 沉淀直接改技能文件，改到一半时别处要列技能，不能因此把整个助手的技能都当成没有。
  */
 export function listSkills(dir: string): AssistantSkill[] {
   return Object.entries(metadata(dir)).flatMap(([name, data]) => {
@@ -170,7 +148,6 @@ export function combinedSkills(home: string, assistantId: string, group?: Group,
   return [...groupItems, ...own.filter((item) => !names.has(item.name))];
 }
 export function saveSkill(dir: string, input: SkillInput, jobId?: string, replaceFiles = false, options?: { overwriteVersion?: boolean }): AssistantSkill {
-  assertSkillsDirFree(dir);
   mkdirSync(dir, { recursive: true });
   const all = metadata(dir);
   const old = all[input.name];
@@ -251,7 +228,6 @@ export function setAssistantSkillEnabled(home: string, assistantId: string, name
 }
 export function archiveSkill(dir: string, name: string): void {
   pathName(name);
-  assertSkillsDirFree(dir);
   const all = metadata(dir), target = join(dir, name);
   if (!all[name]) throw new Error("技能不存在");
   safeTree(target);
@@ -269,8 +245,6 @@ export function archiveAssistantSkill(home: string, assistantId: string, name: s
 export function moveSkill(fromDir: string, toDir: string, name: string, conflict: string): void {
   pathName(name);
   if (resolve(fromDir) === resolve(toDir)) return;
-  assertSkillsDirFree(fromDir);
-  assertSkillsDirFree(toDir);
   const from = metadata(fromDir), to = metadata(toDir);
   const data = from[name];
   if (!data) throw new Error("技能不存在");
@@ -297,7 +271,6 @@ export function recordAssistantSkillUse(home: string, assistantId: string, name:
 }
 export function rollbackSkill(dir: string, name: string): AssistantSkill {
   pathName(name);
-  assertSkillsDirFree(dir);
   const all = metadata(dir), target = join(dir, name);
   if (!all[name]) throw new Error("技能不存在");
   safeTree(target);

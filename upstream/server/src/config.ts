@@ -71,7 +71,7 @@ export function assistantJobsDir(home: string, id: string): string {
 }
 
 /** 这个助手自己的上传、生图、页面、截图。 */
-export function assistantFilesDir(home: string, id: string, kind?: "uploads" | "images" | "pages" | "screenshots"): string {
+export function assistantFilesDir(home: string, id: string, kind?: "uploads" | "images" | "pages" | "screenshots" | "sent"): string {
   return kind ? join(assistantDir(home, id), "files", kind) : join(assistantDir(home, id), "files");
 }
 

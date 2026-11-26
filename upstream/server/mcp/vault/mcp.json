@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "vault": {
+      "command": "node",
+      "args": ["${hob.root}/server/mcp/vault/server.mjs"],
+      "env": {
+        "VAULT_DATA": "${hob.plugin_data}"
+      }
+    }
+  }
+}

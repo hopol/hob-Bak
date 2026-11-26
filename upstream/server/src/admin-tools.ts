@@ -23,11 +23,13 @@ import type { HobRuntime } from "./runtime.ts";
 import type { Store } from "./store.ts";
 import { clampDuty } from "./text.ts";
 import { monthDayTimeText } from "./time.ts";
+import { CWD_IMMUTABLE, normalizeWorkspaceCwdInput, validateWorkspaceCwd } from "./workspace.ts";
 
 type Tool = ToolDefinition<any, any>;
 
 /** 查看工具每页几条：由代码固定，不是参数。 */
 const PAGE_SIZE = 20;
+const REPLY_MODE_DESCRIPTION = "用户没点名的消息谁来回应：owner 群主回应（默认），all 全员回应，群主先回，其他成员依次轮到。";
 
 function ok(text: string) {
   return { content: [{ type: "text" as const, text }], details: undefined };
@@ -134,6 +136,8 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
       `${target.name}（${target.id}）`,
       `职责：${target.duty || "没有"}`,
       `详细职责：${target.dutyLong?.trim() || "没有"}`,
+      ...(!target.primary ? [`工作目录：${target.cwd ?? "未设置（默认）"}`] : []),
+      ...(target.instructions ? [`补充提示词：\n${target.instructions}`] : []),
       `对话模型：${pick("conversation")}`,
       `任务模型：${pick("work")}`,
       `能力：${able.length ? able.join("、") : "无"}`,
@@ -270,10 +274,12 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
           const host = store.group(group.parentId);
           lines.push(`所属的群：${host ? `${host.name}（${host.id}）` : group.parentId}`);
           lines.push(`状态：${group.closedAt ? `已关闭${group.closeNote ? ` · 结论：${group.closeNote}` : ""}` : "进行中"}`);
+          lines.push(`工作目录：${host?.cwd ? `跟随群（${host.cwd}）` : (group.cwd ?? "未设置")}`);
         } else {
           lines.push(`职责：${group.purpose}`);
           lines.push(`群主：${nameOf(group.ownerId)}`);
           lines.push(`成员：${group.members.map(nameOf).join("、")}`);
+          lines.push(`工作目录：${group.cwd ?? "未设置"}`);
           const topics = runtime.groups.topicsOf(group.id);
           lines.push(topics.length ? "话题：" : "话题：还没有");
           for (const topic of topics) {
@@ -298,11 +304,13 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
     {
       name: "create_assistant",
       label: "创建助手",
-      description: "创建一个专属助手，创建后对话里出一张助手卡。做事的方法由所有助手共用的模板和全局规则决定，这里写它负责的范围。",
+      description: "创建一个专属助手，创建后对话里出一张助手卡。",
       parameters: Type.Object({
         name: Type.String({ description: "助手名字，职责加一个亲切的昵称，四五个字，如「写稿搭子」「记账管家」。" }),
         duty: Type.String({ description: "左栏头像下面那行小字，最多 8 个字，如「周报和文章」「账单和预算」。" }),
         dutyLong: Type.String({ description: "助手卡里的职责说明，两三句话，写完整一些" }),
+        instructions: Type.Optional(Type.String({ description: "用户给这个助手写的补充提示词：性格、说话方式、工作方法、格式要求，什么都可以。用户给了原文就原样照抄，不缩写、不改写；用户没给就不填。" })),
+        cwd: Type.Optional(Type.String({ description: "可选，助手的工作目录（绝对路径，如 /workspace/app），在和它单聊时生效；在群里用群和话题的目录。创建后不可修改；不填则使用系统默认目录。" })),
         sprite: Type.String({
           description: `内置道具：${PROP_IDS.filter((id) => id !== "hob").map((id) => `${id} ${PROPS[id].label}`).join("，")}；或 custom（同时填 prop_art，自己画一件）`,
         }),
@@ -315,7 +323,7 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
         ),
         askFirst: Type.Optional(Type.Array(Type.String(), { description: "这个领域特有、执行前需要确认的事，每项一条；全局规则已经列的不重复。" })),
       }),
-      execute: async (_id, params: any) => {
+      execute: async (_id, params: any, signal) => {
         const checked = params.prop_art !== undefined ? validateCustomProp(params.prop_art) : undefined;
         if (checked && !checked.ok) return fail(`prop_art 画得不对：${checked.error}；照着原因改好，再调用一次。`);
         const given = parseSprite(String(params.sprite ?? ""));
@@ -325,6 +333,13 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
         }
         if (given?.prop === "custom" && !checked?.ok) {
           return fail("sprite 是 custom 时要同时给 prop_art（art、pal、dx）画一件。");
+        }
+        let cwd: string | undefined;
+        try {
+          const normalized = normalizeWorkspaceCwdInput(params.cwd);
+          if (normalized) cwd = validateWorkspaceCwd(normalized, runtime.home);
+        } catch (error) {
+          return fail(error instanceof Error ? error.message : String(error));
         }
         const routinesInput: { name: string; instruction: string; schedule: string }[] = params.routines ?? [];
         const taken = store.assistants().map((item) => item.sprite);
@@ -340,6 +355,8 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
           ...(prop ? { prop } : {}),
           duty: clampDuty(String(params.duty ?? "")),
           dutyLong: String(params.dutyLong),
+          ...(typeof params.instructions === "string" && params.instructions.trim() ? { instructions: params.instructions.trim() } : {}),
+          ...(cwd ? { cwd } : {}),
           routines: routinesInput,
           routinesText: routinesInput.map((item) => `${item.name} · ${cronToChinese(item.schedule)}`).join("、"),
           askFirst: (params.askFirst as string[]) ?? [],
@@ -348,6 +365,7 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
         store.saveDraft(draft);
         await router.addItem(assistantId, { kind: "draft", draftId: draft.id });
         runtime.bus.emit({ type: "draft", draft });
+        signal?.throwIfAborted();
         // 落完草稿卡直接建好：卡片就是「已创建」的样子；没建成的话草稿还留着，用户可以在卡上点
         const created = await createFromDraft(runtime, draft.id);
         if (created.status !== 200) {
@@ -364,13 +382,14 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
       label: "修改助手",
       description: primary
         ? "修改一个助手的资料，只改填了的项，修改后立即生效。"
-        : "修改你自己的名字、职责（左栏头像下面那行小字，最多 8 个字）或详细职责，只改填了的项，修改后立即生效。",
+        : "修改你自己的名字、职责（左栏头像下面那行小字，最多 8 个字）、详细职责或补充提示词，只改填了的项，修改后立即生效。",
       parameters: primary
         ? Type.Object({
           assistantId: Type.String({ description: "助手 id" }),
           name: Type.Optional(Type.String({ description: "名字" })),
           duty: Type.Optional(Type.String({ description: "左栏头像下面那行小字，最多 8 个字" })),
           dutyLong: Type.Optional(Type.String({ description: "详细职责" })),
+          instructions: Type.Optional(Type.String({ description: "这个助手的补充提示词，整份替换。用户给了原文就原样照抄，不缩写、不改写。" })),
           conversationModel: Type.Optional(Type.String({ description: "对话模型，填模型 ref；填 default 跟随全局设置" })),
           workModel: Type.Optional(Type.String({ description: "任务模型，填模型 ref；填 default 跟随全局设置" })),
           knowledge: Type.Optional(Type.Array(Type.String(), { description: "绑定的知识库 id，整体替换" })),
@@ -382,6 +401,7 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
           name: Type.Optional(Type.String({ description: "名字" })),
           duty: Type.Optional(Type.String({ description: "左栏头像下面那行小字，最多 8 个字" })),
           dutyLong: Type.Optional(Type.String({ description: "详细职责" })),
+          instructions: Type.Optional(Type.String({ description: "这个助手的补充提示词，整份替换。用户给了原文就原样照抄，不缩写、不改写。" })),
         }),
       execute: async (_id, params: any) => {
         const id = primary ? String(params.assistantId ?? "").trim() : assistantId;
@@ -396,6 +416,7 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
           if (duty !== undefined && clampDuty(duty) !== target.duty) { patch.duty = clampDuty(duty); changes.push("职责"); }
           const dutyLong = filled(params.dutyLong);
           if (dutyLong !== undefined && dutyLong !== (target.dutyLong ?? "").trim()) { patch.dutyLong = dutyLong; changes.push("详细职责"); }
+          if (typeof params.instructions === "string" && params.instructions.trim() !== (target.instructions ?? "")) { patch.instructions = params.instructions; changes.push("补充提示词"); }
           if (!changes.length) return fail("没有要改的项：至少填一项和现在不一样的。");
           const result = await updateAssistant(runtime, id, patch);
           if (result.status !== 200) return fail((result.body as { error?: string }).error ?? "修改失败");
@@ -410,6 +431,7 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
         if (duty !== undefined && clampDuty(duty) !== target.duty) { patch.duty = clampDuty(duty); changes.push("职责"); }
         const dutyLong = filled(params.dutyLong);
         if (dutyLong !== undefined && dutyLong !== (target.dutyLong ?? "").trim()) { patch.dutyLong = dutyLong; changes.push("详细职责"); }
+        if (typeof params.instructions === "string" && params.instructions.trim() !== (target.instructions ?? "")) { patch.instructions = params.instructions; changes.push("补充提示词"); }
         // 模型：填了 ref 沿用这个助手现在的思考档，没有就用全局的；default 是去掉这一项
         const modelSettings = runtime.settings.settings.models;
         const nextModels: NonNullable<Assistant["models"]> = { ...(target.models ?? {}) };
@@ -456,6 +478,8 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
         purpose: Type.String({ description: "这个群的职责，最多 200 字" }),
         members: Type.Array(Type.String(), { description: "成员的助手 id，可以有你自己。" }),
         ownerId: Type.String({ description: "群主的助手 id，要在成员里，可以是你自己。" }),
+        replyMode: Type.Optional(Type.Union([Type.Literal("owner"), Type.Literal("all")], { description: REPLY_MODE_DESCRIPTION })),
+        cwd: Type.Optional(Type.String({ description: "可选，群的工作目录（绝对路径，如 /workspace/app）。创建后不可修改；群绑定后其下所有话题共用该目录。" })),
       }),
       execute: async (_id, params: any) => {
         try {
@@ -464,6 +488,8 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
             purpose: params.purpose,
             members: params.members,
             ownerId: params.ownerId,
+            ...(params.replyMode !== undefined ? { replyMode: params.replyMode } : {}),
+            ...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
           });
           await announce({ conversation: t("已创建群「{name}」", { name: group.name }), targetGroupId: group.id });
           return ok(t("已创建群「{name}」（{id}）。", { name: group.name, id: group.id }));
@@ -483,13 +509,14 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
         addMembers: Type.Optional(Type.Array(Type.String(), { description: "要加的成员 id" })),
         removeMembers: Type.Optional(Type.Array(Type.String(), { description: "要减的成员 id" })),
         ownerId: Type.Optional(Type.String({ description: "新群主的助手 id，要在成员里" })),
+        replyMode: Type.Optional(Type.Union([Type.Literal("owner"), Type.Literal("all")], { description: REPLY_MODE_DESCRIPTION })),
       }),
       execute: async (_id, params: any) => {
         const id = String(params.groupId ?? "").trim();
         const group = store.group(id);
         if (!group) return fail(`没有这个群：${id}`);
         if (group.parentId) return fail(`${id} 是话题，不是群；改话题名用 manage_topic。`);
-        const patch: { name?: unknown; purpose?: unknown; members?: string[]; ownerId?: unknown } = {};
+        const patch: { name?: unknown; purpose?: unknown; members?: string[]; ownerId?: unknown; replyMode?: unknown } = {};
         const changes: string[] = [];
         const name = filled(params.name);
         if (name !== undefined && name !== group.name) { patch.name = name; changes.push("名字"); }
@@ -505,6 +532,11 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
         if (addedReal.length || removedReal.length) { patch.members = members; changes.push("成员"); }
         const ownerId = filled(params.ownerId);
         if (ownerId !== undefined && ownerId !== group.ownerId) { patch.ownerId = ownerId; changes.push("群主"); }
+        if (params.replyMode !== undefined) {
+          const mode = typeof params.replyMode === "string" ? params.replyMode.trim() : params.replyMode;
+          if (mode !== "owner" && mode !== "all") return fail(`回应方式只能填 owner 或 all，收到「${String(params.replyMode)}」`);
+          if (mode !== (group.replyMode ?? "owner")) { patch.replyMode = mode; changes.push("回应方式"); }
+        }
         if (!changes.length) return fail("没有要改的项：至少填一项和现在不一样的。");
         let next: Group;
         try { next = runtime.groups.update(id, patch); }
@@ -518,6 +550,10 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
           if (addedReal.length) list.push(inGroup ? `把${who(addedReal)}拉进了群` : `把${who(addedReal)}拉进${next.name}`);
           if (removedReal.length) list.push(inGroup ? `把${who(removedReal)}移出了群` : `把${who(removedReal)}移出${next.name}`);
           if (changes.includes("群主")) list.push(inGroup ? `群主换成${nameOf(next.ownerId)}` : `把${next.name}的群主换成${nameOf(next.ownerId)}`);
+          if (changes.includes("回应方式")) {
+            const label = next.replyMode === "all" ? "全员回应" : "群主回应";
+            list.push(inGroup ? `把回应方式改成${label}` : `把${next.name}的回应方式改成${label}`);
+          }
           return list.join("；");
         };
         const conversation = t("已{changes}", { changes: clauses(false) });
@@ -536,6 +572,7 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
         topicId: Type.Optional(Type.String({ description: "close、reopen、rename 时填话题 id" })),
         title: Type.Optional(Type.String({ description: "open、rename 时填话题名" })),
         note: Type.Optional(Type.String({ description: "close 时可选，给用户的结论，显示在综合的话题卡上" })),
+        cwd: Type.Optional(Type.String({ description: "仅 action=open 且所属群未绑定工作目录时可选，话题的工作目录（绝对路径，创建后不可修改）。" })),
       }),
       execute: async (_id, params: any) => {
         const action = String(params.action ?? "");
@@ -550,13 +587,14 @@ export function buildAdminTools(runtime: HobRuntime, assistantId: string, groupI
           const here = group.parentId ? group.parentId : (current?.parentId ?? current?.id);
           if (here === group.id && group.ownerId === assistantId) return fail("在这个群创建话题用 open_topic，它会把你的交接说明放进话题。");
           try {
-            const topic = runtime.groups.createTopic(group.id, title, assistantId);
+            const topic = runtime.groups.createTopic(group.id, title, assistantId, params.cwd !== undefined ? { cwd: params.cwd } : undefined);
             await announce({ conversation: t("已在{group}创建了话题「{topic}」", { group: group.name, topic: topic.name }), group: { gid: group.id, text: t("{assistant}创建了话题「{topic}」", { assistant: nameOf(assistantId), topic: topic.name }) } });
             return ok(t("已创建话题「{name}」（{id}）。", { name: topic.name, id: topic.id }));
           } catch (error) {
             return fail(error instanceof Error ? error.message : String(error));
           }
         }
+        if (params.cwd !== undefined) return fail(CWD_IMMUTABLE);
         const topicId = String(params.topicId ?? "").trim();
         const topic = store.group(topicId);
         if (!topic) return fail(`没有这个话题：${topicId}`);

@@ -164,7 +164,7 @@ describe("删掉的工具和提示词", () => {
     } finally { hob.close(); }
   });
 
-  it("综合里的话题清单只写进行中和已关闭，有待办的加 k/n", async () => {
+  it("综合里的话题清单只写名称、id 与进行中或已关闭，不带待办进度和最后发言时间", async () => {
     const { hob, group } = setup();
     try {
       const doing = hob.runtime.groups.createTopic(group.id, "换硬盘", "user");
@@ -172,8 +172,9 @@ describe("删掉的工具和提示词", () => {
       await toolOf(hob, "update_todos", doing.id).execute("t", { items: items(["拆旧盘", "done"], ["装新盘", "doing"]) });
       hob.runtime.groups.closeByOwner(closed.id, "修好了");
       const prompt = buildSystemPrompt(hob.runtime.store, "hob", { timezone: "Asia/Shanghai", aboutYou: { name: "", language: "", notes: "" }, memory: "off", group });
-      expect(prompt).toContain(`- 「换硬盘」（${doing.id}）· 进行中 · 待办 1/2 · `);
-      expect(prompt).toContain(`- 「相册备份」（${closed.id}）· 已关闭 · `);
+      expect(prompt).toContain(`- 「换硬盘」（${doing.id}）· 进行中\n`);
+      expect(prompt).toContain(`- 「相册备份」（${closed.id}）· 已关闭\n`);
+      expect(prompt).not.toContain("待办 1/2");
       expect(prompt).toContain("用户提的事和以前的话题有关，先用 show_group 看那个话题里当时怎么说的。");
     } finally { hob.close(); }
   });

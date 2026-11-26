@@ -1,3 +1,4 @@
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Job } from "../../shared/types.ts";
 import { describe, expect, it } from "vitest";
@@ -58,9 +59,9 @@ describe("提示行写明对象", () => {
     const hob = setup();
     try {
       saveAssistantSkill(hob.home, "ops", skill);
-      const edit = await tool(hob, "edit_skill").execute("c", { name: skill.name, assistantId: "ops", edits: [{ old: "步骤", new: "新步骤" }] });
+      const edit = await tool(hob, "save_skill").execute("c", { name: skill.name, assistantId: "ops", edits: [{ old: "步骤", new: "新步骤" }] });
       expect(edit.isError).not.toBe(true);
-      expect(notes(hob).filter((item) => item.icon === "skill")).toEqual([]);
+      expect(notes(hob).filter((item) => item.icon === "skill")).toMatchObject([{ text: "已存技能「甲技能」第 2 版" }]);
       await tool(hob, "delete_skill").execute("c", { name: skill.name, assistantId: "ops" });
       expect(notes(hob).map((item) => item.text)).toContain("已删除「运维」的技能「甲技能」");
     } finally { hob.close(); }
@@ -98,17 +99,20 @@ describe("提示行写明对象", () => {
         status: "done", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [],
         model: "hob-faux/faux-1", thinking: "off",
       };
+      const cwd = join(hob.home, "work");
+      mkdirSync(join(cwd, "new-skill"), { recursive: true });
+      writeFileSync(join(cwd, "new-skill", "SKILL.md"), NEW_SKILL);
+      job.cwd = cwd;
       hob.runtime.store.saveJob(job);
-      const dir = groupSkillsDir(hob.home, group.id);
       hob.faux.setResponses([
-        call("write", { path: join(dir, "new-skill", "SKILL.md"), content: NEW_SKILL }),
+        call("save_skill", { name: "new-skill", from: "new-skill" }),
         call("report", { outcome: "done", result: "建好了" }),
         text("好"),
       ]);
       hob.runtime.jobs.startSediment(job.id);
       await hob.runtime.jobs.waitIdle();
       expect(hob.runtime.store.job(job.id)?.sediment).toMatchObject({ status: "saved", title: "新技能" });
-      expect(notes(hob, group.id).filter((item) => item.icon === "skill")).toEqual([]);
+      expect(notes(hob, group.id).filter((item) => item.icon === "skill")).toMatchObject([{ text: "已存技能「新技能」第 1 版" }]);
     } finally { hob.close(); }
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GroupItem } from "../../shared/types.ts";
 import { applyDelta, mergeItems } from "../src/merge.ts";
-import { applyMention, filterMembers, mentionAt, stepPick } from "../src/mention.ts";
+import { applyMention, filterMembers, isImeCompositionEvent, mentionAt, stepPick } from "../src/mention.ts";
 
 const members = [
   { id: "hob", name: "Hob", duty: "主助手" },
@@ -34,6 +34,12 @@ describe("@ 点名", () => {
     expect(stepPick(2, 1, 3)).toBe(0);
     expect(stepPick(0, -1, 3)).toBe(2);
     expect(stepPick(0, 1, 0)).toBe(0);
+  });
+
+  it("输入法确认键不会被当作菜单选择或发送", () => {
+    expect(isImeCompositionEvent({ isComposing: true, keyCode: 13 })).toBe(true);
+    expect(isImeCompositionEvent({ isComposing: false, keyCode: 229 })).toBe(true);
+    expect(isImeCompositionEvent({ isComposing: false, keyCode: 13 })).toBe(false);
   });
 });
 

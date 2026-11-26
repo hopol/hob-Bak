@@ -27,7 +27,7 @@ if (!metadataOnly && (!endpoint || !headers)) {
   console.error("云桌面没有开启。");
   process.exit(1);
 }
-const [{ minimist }, { readFileSync }] = await Promise.all([import(${JSON.stringify(parserUrl)}), import("node:fs")]);
+const [{ minimist }, { readFileSync, readdirSync, statSync, writeFileSync }, { join }] = await Promise.all([import(${JSON.stringify(parserUrl)}), import("node:fs"), import("node:path")]);
 const help = JSON.parse(readFileSync(${JSON.stringify(helpPath)}, "utf8"));
 const args = minimist(process.argv.slice(2), { boolean: [...help.booleanOptions, "all", "g", "help", "json", "raw", "version"], string: ["_"] });
 if (args._?.[0] === "kill-all" && !args.help && !args.h && !args.version && !args.v) {
@@ -35,16 +35,47 @@ if (args._?.[0] === "kill-all" && !args.help && !args.h && !args.version && !arg
   process.exit(1);
 }
 if (!metadataOnly) {
+  let relay;
   try {
     const url = new URL(endpoint);
     url.protocol = url.protocol === "wss:" ? "https:" : "http:";
     const colon = headers.indexOf(":");
-    const response = await fetch(url, { headers: { [headers.slice(0, colon).trim()]: headers.slice(colon + 1).trim() }, signal: AbortSignal.timeout(5000) });
+    relay = { url, headers: { [headers.slice(0, colon).trim()]: headers.slice(colon + 1).trim() } };
+    const response = await fetch(url, { headers: relay.headers, signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error(await response.text());
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
+  // Hob 填进页面的密码只留在 Hob 进程里：命令的输出和它写进 .playwright-cli 的快照文件先送回 Hob 抹掉密码，再给模型
+  const startedAt = Date.now();
+  const chunks = [];
+  const write = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (chunk) => { chunks.push(Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk)); return true; };
+  const exit = process.exit.bind(process);
+  let flushed = false;
+  const flush = async () => {
+    if (flushed) return;
+    flushed = true;
+    process.stdout.write = write;
+    let text = chunks.join("");
+    try {
+      const dir = join(process.cwd(), ".playwright-cli");
+      const files = readdirSync(dir).filter((name) => /\\.(ya?ml|md|json)$/.test(name)).map((name) => join(dir, name)).filter((path) => statSync(path).mtimeMs >= startedAt);
+      const contents = files.map((path) => readFileSync(path, "utf8"));
+      if (!text && !contents.length) return;
+      const response = await fetch(relay.url, { method: "POST", headers: { ...relay.headers, "content-type": "application/json" }, body: JSON.stringify({ texts: [text, ...contents] }), signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) throw new Error(await response.text());
+      const result = (await response.json()).texts ?? [];
+      if (typeof result[0] === "string") text = result[0];
+      files.forEach((path, index) => { if (typeof result[index + 1] === "string" && result[index + 1] !== contents[index]) writeFileSync(path, result[index + 1]); });
+    } catch {
+      // 转发入口不在了（会话已结束）：照原样输出
+    }
+    if (text) write(text);
+  };
+  process.exit = (code) => { void flush().finally(() => exit(code)); };
+  process.on("beforeExit", () => { if (!flushed) void flush(); });
 }
 const { program } = await import(${JSON.stringify(moduleUrl)});
 await program();

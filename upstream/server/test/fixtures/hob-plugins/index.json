@@ -1,0 +1,32 @@
+{
+  "name": "Hob 官方",
+  "plugins": [
+    {
+      "id": "github",
+      "path": "github",
+      "files": [
+        "icon.svg",
+        "mcp.json",
+        "plugin.json"
+      ]
+    },
+    {
+      "id": "gmail",
+      "path": "gmail",
+      "files": [
+        "icon.svg",
+        "mcp.json",
+        "plugin.json"
+      ]
+    },
+    {
+      "id": "email",
+      "path": "email",
+      "files": [
+        "icon.svg",
+        "mcp.json",
+        "plugin.json"
+      ]
+    }
+  ]
+}

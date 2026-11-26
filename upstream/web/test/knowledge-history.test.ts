@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { State } from "../src/store.ts";
 
 vi.mock("../src/store.ts", () => ({
-  backPanel: vi.fn(), closeImageViewer: vi.fn(), closeKnowledge: vi.fn(),
-  closeSettings: vi.fn(), closeSheet: vi.fn(), closeSub: vi.fn(), getState: vi.fn(),
+  backPanel: vi.fn(), closeImageViewer: vi.fn(), closeKnowledge: vi.fn(), closePlugins: vi.fn(), openPlugins: vi.fn(),
+  closeSettings: vi.fn(), closeSheet: vi.fn(), closeSub: vi.fn(), getState: vi.fn(), goHome: vi.fn(),
   leaveChat: vi.fn(), leaveTopicList: vi.fn(),
   setMobile: vi.fn(), setSection: vi.fn(), subscribe: vi.fn(),
 }));
@@ -35,5 +35,11 @@ describe("知识库手机历史层级", () => {
     expect(layers({ ...list, mobile: "list", gsel: null } as State, true)).toEqual([]);
     // 单聊没有话题列表这一层
     expect(layers({ page: "main", mobile: "chat", sel: "hob", panelStack: [] } as State, true)).toEqual(["chat"]);
+  });
+
+  it("收藏页独占一层，侧滑能退回首页", () => {
+    const state = { page: "stars", mobile: "list", panelStack: [] } as unknown as State;
+    expect(layers(state, true)).toEqual(["stars"]);
+    expect(layers(state, false)).toEqual([]);
   });
 });

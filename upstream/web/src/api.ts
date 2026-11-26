@@ -1,6 +1,9 @@
 // 真实客户端：REST 路由见 docs/architecture.md，事件契约见 shared/types.ts。
 import { t } from "../../shared/i18n.ts";
 import type {
+  StarRequest,
+  StarredMessage,
+  HistorySearchResult,
   AboutInfo,
   AnswerApprovalBody,
   Assistant,
@@ -39,8 +42,16 @@ import type {
   MemoryConfig,
   MemoryProvider,
   ModelThinkingPatch,
+  PluginModelOverridePatch,
   ModelThinkingSaved,
+  PluginAuthPromptView,
+  PluginCliStatusView,
+  PluginProviderModelView,
+  PluginProviderUsageView,
+  PluginProviderView,
+  PluginSignInSessionView,
   Profile,
+  ProviderHostStatusView,
   ProviderImportView,
   ProvidersView,
   PushSubscriptionJson,
@@ -60,7 +71,7 @@ import type { KnowledgeCollection, KnowledgeEntry, KnowledgeGroup, KnowledgeOrig
 
 import type { AssistantSkill, SkillImportResult, SkillImportSource, SkillImportView, SkillsView } from "../../shared/skills.ts";
 import type { SearchSettings, SearchView } from "../../shared/search.ts";
-import type { McpImportResult, McpImportView, McpSecretMutation, McpServerPatch, McpServerSave, McpServerView, McpTestResult, McpView } from "../../shared/mcp.ts";
+import type { PluginCatalogView, PluginLoginsView, PluginPatch, PluginToolLoginPollResult, PluginToolLoginStartResult, PluginToolLoginStatus, PluginView, PluginsView } from "../../shared/types.ts";
 
 export type KnowledgeQuery = { origin?: KnowledgeOrigin; collection?: string; kind?: KnowledgeGroup; assistantId?: string; groupId?: string; q?: string; before?: string; limit?: number };
 
@@ -105,6 +116,10 @@ export interface EventHandlers {
 }
 
 export interface HobApi {
+  stars(): Promise<{ stars: StarredMessage[] }>;
+  addStar(body: StarRequest): Promise<{ star: StarredMessage }>;
+  deleteStar(body: StarRequest): Promise<{ ok: true }>;
+  searchHistory(query: string): Promise<HistorySearchResult>;
   knowledge(query?: KnowledgeQuery): Promise<KnowledgePage>;
   knowledgeEntry(id: string, chunk?: number): Promise<KnowledgeEntryView>;
   reindexKnowledge(id: string): Promise<{ ok: true }>;
@@ -156,16 +171,52 @@ export interface HobApi {
 
   saveDesktop(body: { revision: number; url: string; enabled: boolean; token?: string }): Promise<DesktopView>;
   testDesktop(): Promise<DesktopTestResult>;
-  mcp(): Promise<McpView>;
-  putMcp(name: string, body: McpServerSave): Promise<McpView>;
-  patchMcp(name: string, patch: McpServerPatch): Promise<McpView>;
-  deleteMcp(name: string): Promise<McpView>;
-  testMcp(name: string, refresh: boolean): Promise<McpTestResult>;
-  mcpImports(): Promise<McpImportView>;
-  importMcp(ids: string[]): Promise<McpImportResult>;
+  plugins(): Promise<PluginsView>;
+  pluginCatalog(): Promise<PluginCatalogView>;
+  installPlugin(id: string, source?: string): Promise<PluginView>;
+  addPluginSource(url: string): Promise<import("../../shared/types.ts").PluginSourceView>;
+  deletePluginSource(id: string): Promise<{ ok: true }>;
+  refreshPluginSources(): Promise<{ ok: true }>;
+  updatePlugin(id: string): Promise<PluginView>;
+  patchPlugin(id: string, patch: PluginPatch): Promise<PluginView>;
+  savePluginConfig(id: string, values: Record<string, unknown>): Promise<PluginView>;
+  addPluginProfile(id: string, name: string): Promise<PluginView>;
+  updatePluginProfile(id: string, profileId: string, name: string): Promise<PluginView>;
+  deletePluginProfile(id: string, profileId: string): Promise<PluginView>;
+  savePluginProfileConfig(id: string, profileId: string, values: Record<string, unknown>): Promise<PluginView>;
+  deletePlugin(id: string): Promise<{ ok: true }>;
+  addCustomPlugin(id: string, server: Record<string, unknown>): Promise<PluginView>;
+  startPluginOAuth(id: string, service: string): Promise<{ callbackUrl: string; authorizationUrl?: string; authorized?: boolean }>;
+  disconnectPluginOAuth(id: string, service: string): Promise<PluginView>;
+  pluginLoginStatus(id: string, service?: string): Promise<PluginToolLoginStatus>;
+  startPluginToolLogin(id: string, service?: string): Promise<PluginToolLoginStartResult>;
+  pollPluginToolLogin(id: string, service?: string): Promise<PluginToolLoginPollResult>;
+  logoutPluginToolLogin(id: string, service?: string): Promise<{ ok: true; status?: PluginToolLoginStatus }>;
+  removePluginLoginAuto(id: string, host: string, username: string): Promise<PluginView>;
+  pluginLogins(id: string, service?: string): Promise<PluginLoginsView>;
+  pluginLoginSecret(id: string, loginId: string, service?: string): Promise<{ username: string; password: string; totp?: string }>;
+  savePluginLogin(id: string, body: { id?: string; service?: string; name: string; uris: string[]; username: string; password: string; folder?: string }): Promise<{ id: string; folder?: string }>;
+  deletePluginLogin(id: string, loginId: string, service?: string): Promise<{ ok: true }>;
+  pluginProviderHost(): Promise<ProviderHostStatusView>;
+  approvePlugin(id: string): Promise<PluginView>;
+  pluginProviders(id: string, load?: boolean): Promise<{ providers: PluginProviderView[]; providerHost: ProviderHostStatusView }>;
+  refreshPluginModels(id: string, providerId: string, accountId?: string): Promise<{ models: PluginProviderModelView[]; plugin: PluginView }>;
+  setPluginModelOverride(id: string, providerId: string, body: PluginModelOverridePatch): Promise<{ providers: PluginProviderView[] }>;
+  pluginProviderUsage(id: string, providerId: string, accountId?: string): Promise<PluginProviderUsageView>;
+  setPluginActiveAccount(id: string, providerId: string, accountId: string): Promise<PluginView>;
+  deletePluginAccount(id: string, providerId: string, accountId: string): Promise<PluginView>;
+  pluginAuthPrompt(id: string, providerId: string, body: { methodIndex: number; inputs?: Record<string, string>; validateKey?: string; validateValue?: string }): Promise<{ prompt?: PluginAuthPromptView | null; error?: string | null }>;
+  pluginAuthApiKey(id: string, providerId: string, body: { methodIndex: number; key?: string; displayName?: string; inputs?: Record<string, string>; accountId?: string }): Promise<{ accountId: string; models: PluginProviderModelView[]; modelsError?: string; plugin: PluginView }>;
+  pluginAuthStart(id: string, providerId: string, body: { methodIndex: number; inputs?: Record<string, string>; accountId?: string }): Promise<PluginSignInSessionView>;
+  pluginAuthSession(id: string, providerId: string, sessionId: string): Promise<PluginSignInSessionView>;
+  pluginAuthPaste(id: string, providerId: string, body: { sessionId: string; url: string }): Promise<PluginSignInSessionView>;
+  pluginAuthCode(id: string, providerId: string, body: { sessionId: string; code: string }): Promise<PluginSignInSessionView>;
+  pluginAuthCancel(id: string, providerId: string, sessionId: string): Promise<PluginSignInSessionView>;
+  pluginProviderCli(id: string, providerId: string): Promise<PluginCliStatusView>;
+  installPluginProviderCli(id: string, providerId: string): Promise<PluginCliStatusView>;
   search(): Promise<SearchView>;
   putSearch(revision: number, providers: SearchSettings, keys?: Record<string, string>): Promise<SettingsFile>;
-  testSearch(name: string, baseUrl?: string, apiKey?: string): Promise<{ ok: boolean; count?: number; error?: string }>;
+  testSearch(name: string, baseUrl?: string, apiKey?: string, extra?: { providerId?: string; model?: string }): Promise<{ ok: boolean; count?: number; error?: string }>;
   imageKey(): Promise<ImageKeyView>;
   putImage(revision: number, image: ImageSettings, apiKey?: string): Promise<ImageSettingsSaved>;
   imageTest(body: { image?: ImageSettings; apiKey?: string }): Promise<ImageTestResult>;
@@ -189,6 +240,7 @@ export interface HobApi {
   deleteRule(assistantId: string, ruleId: string): Promise<void>;
   retryDelegation(id: string): Promise<void>;
   answerApproval(approvalId: string, answer: AnswerApprovalBody): Promise<void>;
+  answerCard(cardId: string, action: import("../../shared/cards.ts").CardActionRequest): Promise<{ card?: import("../../shared/cards.ts").CardRecord }>;
   createDraft(draftId: string): Promise<void>;
   dismissDraft(draftId: string): Promise<void>;
   createRoutine(body: Omit<Routine, "id" | "createdAt" | "runs">): Promise<{ routine: Routine }>;
@@ -207,12 +259,12 @@ export interface HobApi {
   deleteGroupSkill(groupId: string, name: string): Promise<{ ok: true }>;
   deleteGroupRule(groupId: string, ruleId: string): Promise<void>;
   groups(): Promise<GroupSummary[]>;
-  createGroup(body: { name: string; purpose: string; ownerId: string; members: string[] }): Promise<Group>;
-  patchGroup(groupId: string, patch: { rule?: { id?: string; text?: string; mode?: "ask" | "allow" }; name?: string; purpose?: string; listOrder?: number; models?: { conversation?: import("../../shared/types.ts").ModelPick | null; work?: import("../../shared/types.ts").ModelPick | null }; ownerId?: string; members?: string[] }): Promise<Group>;
+  createGroup(body: { name: string; purpose: string; ownerId: string; members: string[]; replyMode?: import("../../shared/types.ts").GroupReplyMode; cwd?: string }): Promise<Group>;
+  patchGroup(groupId: string, patch: { rule?: { id?: string; text?: string; mode?: "ask" | "allow" }; name?: string; purpose?: string; replyMode?: import("../../shared/types.ts").GroupReplyMode; listOrder?: number; models?: { conversation?: import("../../shared/types.ts").ModelPick | null; work?: import("../../shared/types.ts").ModelPick | null }; ownerId?: string; members?: string[] }): Promise<Group>;
   patchGroupMemberModels(groupId: string, assistantId: string, patch: { conversation?: import("../../shared/types.ts").ModelPick | null; work?: import("../../shared/types.ts").ModelPick | null }): Promise<Group>;
   archiveGroup(groupId: string): Promise<void>;
   /** 在群里开一个话题 */
-  createTopic(groupId: string, body: { title: string }): Promise<Group>;
+  createTopic(groupId: string, body: { title: string; cwd?: string }): Promise<Group>;
   /** 关闭话题 */
   closeTopic(topicId: string, body?: { note?: string }): Promise<Group>;
   reopenTopic(topicId: string): Promise<Group>;
@@ -243,6 +295,7 @@ const EVENT_TYPES: HobEvent["type"][] = [
   "job_step",
   "activity",
   "approval",
+  "card",
   "draft",
   "routine",
   "routine_removed",
@@ -254,6 +307,8 @@ const EVENT_TYPES: HobEvent["type"][] = [
   "group-item",
   "group-delta",
   "group-activity",
+  "plugin-install",
+  "plugin-providers",
 ];
 export const realApi: HobApi = {
   knowledge: (query = {}) => {
@@ -288,6 +343,10 @@ export const realApi: HobApi = {
   providers: () => req<ProvidersView>("/api/providers"),
   claude: () => req<ClaudeCodeView>("/api/claude"),
   saveClaude: (revision, claude) => req<ClaudeCodeView>("/api/claude", json({ revision, claude }, "PUT")),
+  stars: () => req<{ stars: StarredMessage[] }>("/api/stars"),
+  addStar: (body) => req<{ star: StarredMessage }>("/api/stars", json(body)),
+  deleteStar: (body) => req<{ ok: true }>("/api/stars", json(body, "DELETE")),
+  searchHistory: (query) => req<HistorySearchResult>(`/api/history/search?query=${encodeURIComponent(query)}`),
   putProvider: (id, body) => req<ProvidersView>(`/api/providers/${encodeURIComponent(id)}`, json(body, "PUT")),
   putThinking: (body) => req<ModelThinkingSaved>("/api/models/thinking", json(body, "PUT")),
   deleteProvider: (id) => req<ProvidersView>(`/api/providers/${encodeURIComponent(id)}`, { method: "DELETE" }),
@@ -309,21 +368,58 @@ export const realApi: HobApi = {
   desktopScreens: () => req<{ screens: DesktopScreen[]; profiles: Record<string, string> }>("/api/desktop/screens"),
   saveDesktop: (body) => req<DesktopView>("/api/desktop", json(body, "PUT")),
   testDesktop: () => req<DesktopTestResult>("/api/desktop/test", json({})),
-  mcp: () => req<McpView>("/api/mcp"),
-  putMcp: (name, body) => req<McpView>(`/api/mcp/${encodeURIComponent(name)}`, json(body, "PUT")),
-  patchMcp: (name, patch) =>
-    req<McpView>(`/api/mcp/${encodeURIComponent(name)}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(patch),
-    }),
-  deleteMcp: (name) => req<McpView>(`/api/mcp/${encodeURIComponent(name)}`, { method: "DELETE" }),
-  testMcp: (name, refresh) => req<McpTestResult>(`/api/mcp/${encodeURIComponent(name)}/test`, json({ refresh })),
-  mcpImports: () => req<McpImportView>("/api/mcp/import"),
-  importMcp: (ids) => req<McpImportResult>("/api/mcp/import", json({ ids })),
+  plugins: () => req<PluginsView>("/api/plugins"),
+  pluginCatalog: () => req<PluginCatalogView>("/api/plugins/catalog"),
+  installPlugin: (id, source) => req<PluginView>(`/api/plugins/${encodeURIComponent(id)}/install`, json({ source })),
+  addPluginSource: (url) => req<import("../../shared/types.ts").PluginSourceView>("/api/plugins/sources", json({ url })),
+  deletePluginSource: (id) => req<{ ok: true }>(`/api/plugins/sources/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  refreshPluginSources: () => req<{ ok: true }>("/api/plugins/sources/refresh", { method: "POST" }),
+  updatePlugin: (id) => req<PluginView>(`/api/plugins/${encodeURIComponent(id)}/update`, json({})),
+  patchPlugin: (id, patch) => req<PluginView>(`/api/plugins/${encodeURIComponent(id)}`, json(patch, "PATCH")),
+  savePluginConfig: (id, values) => req<PluginView>(`/api/plugins/${encodeURIComponent(id)}/config`, json({ values }, "PUT")),
+  addPluginProfile: (id, name) => req<PluginView>(`/api/plugins/${encodeURIComponent(id)}/profiles`, json({ name }, "POST")),
+  updatePluginProfile: (id, profileId, name) => req<PluginView>(`/api/plugins/${encodeURIComponent(id)}/profiles/${encodeURIComponent(profileId)}`, json({ name }, "PATCH")),
+  deletePluginProfile: (id, profileId) => req<PluginView>(`/api/plugins/${encodeURIComponent(id)}/profiles/${encodeURIComponent(profileId)}`, { method: "DELETE" }),
+  savePluginProfileConfig: (id, profileId, values) => req<PluginView>(`/api/plugins/${encodeURIComponent(id)}/profiles/${encodeURIComponent(profileId)}/config`, json({ values }, "PUT")),
+  deletePlugin: (id) => req<{ ok: true }>(`/api/plugins/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  addCustomPlugin: (id, server) => req<PluginView>("/api/plugins/custom", json({ id, server })),
+  startPluginOAuth: (id, service) => req<{ callbackUrl: string; authorizationUrl?: string; authorized?: boolean }>(`/api/plugins/${encodeURIComponent(id)}/services/${encodeURIComponent(service)}/oauth`, json({})),
+  disconnectPluginOAuth: (id, service) => req<PluginView>(`/api/plugins/${encodeURIComponent(id)}/services/${encodeURIComponent(service)}/oauth`, { method: "DELETE" }),
+  pluginLoginStatus: (id, service) => req<PluginToolLoginStatus>(`/api/plugins/${encodeURIComponent(id)}/login/status${service ? `?service=${encodeURIComponent(service)}` : ""}`),
+  startPluginToolLogin: (id, service) => req<PluginToolLoginStartResult>(`/api/plugins/${encodeURIComponent(id)}/login/start`, json(service ? { service } : {})),
+  pollPluginToolLogin: (id, service) => req<PluginToolLoginPollResult>(`/api/plugins/${encodeURIComponent(id)}/login/poll`, json(service ? { service } : {})),
+  logoutPluginToolLogin: (id, service) => req<{ ok: true; status?: PluginToolLoginStatus }>(`/api/plugins/${encodeURIComponent(id)}/login/logout`, json(service ? { service } : {})),
+  removePluginLoginAuto: (id, host, username) => req<PluginView>(`/api/plugins/${encodeURIComponent(id)}/login-auto`, json({ host, username }, "DELETE")),
+  pluginLogins: (id, service) => req<PluginLoginsView>(`/api/plugins/${encodeURIComponent(id)}/logins${service ? `?service=${encodeURIComponent(service)}` : ""}`),
+  pluginLoginSecret: (id, loginId, service) => req<{ username: string; password: string; totp?: string }>(`/api/plugins/${encodeURIComponent(id)}/logins/secret`, json({ id: loginId, ...(service ? { service } : {}) })),
+  savePluginLogin: (id, body) => req<{ id: string; folder?: string }>(`/api/plugins/${encodeURIComponent(id)}/logins`, json(body)),
+  deletePluginLogin: (id, loginId, service) => req<{ ok: true }>(`/api/plugins/${encodeURIComponent(id)}/logins/${encodeURIComponent(loginId)}${service ? `?service=${encodeURIComponent(service)}` : ""}`, { method: "DELETE" }),
+  pluginProviderHost: () => req<ProviderHostStatusView>("/api/plugins/provider-host"),
+  approvePlugin: (id) => req<PluginView>(`/api/plugins/${encodeURIComponent(id)}/approve`, json({})),
+  pluginProviders: (id, load) => req<{ providers: PluginProviderView[]; providerHost: ProviderHostStatusView }>(`/api/plugins/${encodeURIComponent(id)}/providers${load ? "?load=1" : ""}`),
+  refreshPluginModels: (id, providerId, accountId) => req<{ models: PluginProviderModelView[]; plugin: PluginView }>(`/api/plugins/${encodeURIComponent(id)}/providers/${encodeURIComponent(providerId)}/models/refresh`, json(accountId ? { accountId } : {})),
+  setPluginModelOverride: (id, providerId, body) => req<{ providers: PluginProviderView[] }>(`/api/plugins/${encodeURIComponent(id)}/providers/${encodeURIComponent(providerId)}/model`, json(body, "PUT")),
+  pluginProviderUsage: (id, providerId, accountId) => req<PluginProviderUsageView>(`/api/plugins/${encodeURIComponent(id)}/providers/${encodeURIComponent(providerId)}/usage${accountId ? `?accountId=${encodeURIComponent(accountId)}` : ""}`),
+  setPluginActiveAccount: (id, providerId, accountId) => req<PluginView>(`/api/plugins/${encodeURIComponent(id)}/providers/${encodeURIComponent(providerId)}/accounts/active`, json({ accountId })),
+  deletePluginAccount: (id, providerId, accountId) => req<PluginView>(`/api/plugins/${encodeURIComponent(id)}/providers/${encodeURIComponent(providerId)}/accounts/${encodeURIComponent(accountId)}`, { method: "DELETE" }),
+  pluginAuthPrompt: (id, providerId, body) => req<{ prompt?: PluginAuthPromptView | null; error?: string | null }>(`/api/plugins/${encodeURIComponent(id)}/providers/${encodeURIComponent(providerId)}/auth/prompt`, json(body)),
+  pluginAuthApiKey: (id, providerId, body) => req<{ accountId: string; models: PluginProviderModelView[]; modelsError?: string; plugin: PluginView }>(`/api/plugins/${encodeURIComponent(id)}/providers/${encodeURIComponent(providerId)}/auth/api-key`, json(body)),
+  pluginAuthStart: (id, providerId, body) => req<PluginSignInSessionView>(`/api/plugins/${encodeURIComponent(id)}/providers/${encodeURIComponent(providerId)}/auth/start`, json(body)),
+  pluginAuthSession: (id, providerId, sessionId) => req<PluginSignInSessionView>(`/api/plugins/${encodeURIComponent(id)}/providers/${encodeURIComponent(providerId)}/auth/session/${encodeURIComponent(sessionId)}`),
+  pluginAuthPaste: (id, providerId, body) => req<PluginSignInSessionView>(`/api/plugins/${encodeURIComponent(id)}/providers/${encodeURIComponent(providerId)}/auth/paste`, json(body)),
+  pluginAuthCode: (id, providerId, body) => req<PluginSignInSessionView>(`/api/plugins/${encodeURIComponent(id)}/providers/${encodeURIComponent(providerId)}/auth/code`, json(body)),
+  pluginAuthCancel: (id, providerId, sessionId) => req<PluginSignInSessionView>(`/api/plugins/${encodeURIComponent(id)}/providers/${encodeURIComponent(providerId)}/auth/cancel`, json({ sessionId })),
+  pluginProviderCli: (id, providerId) => req<PluginCliStatusView>(`/api/plugins/${encodeURIComponent(id)}/providers/${encodeURIComponent(providerId)}/cli`),
+  installPluginProviderCli: (id, providerId) => req<PluginCliStatusView>(`/api/plugins/${encodeURIComponent(id)}/providers/${encodeURIComponent(providerId)}/cli/install`, json({})),
   search: () => req<SearchView>("/api/search"),
   putSearch: (revision, providers, keys) => req<SettingsFile>("/api/search", json({ revision, providers, keys }, "PUT")),
-  testSearch: (name, baseUrl, apiKey) => req<{ ok: boolean; count?: number; error?: string }>("/api/search/test", json({ name, baseUrl, apiKey })),
+  testSearch: (name, baseUrl, apiKey, extra) => req<{ ok: boolean; count?: number; error?: string }>("/api/search/test", json({
+    name,
+    baseUrl,
+    apiKey,
+    ...(extra?.providerId !== undefined ? { providerId: extra.providerId } : {}),
+    ...(extra?.model !== undefined ? { model: extra.model } : {}),
+  })),
   imageKey: () => req<ImageKeyView>("/api/image"),
   putImage: (revision, image, apiKey) =>
     req<ImageSettingsSaved>("/api/image", json({ revision, image, ...(apiKey ? { apiKey } : {}) }, "PUT")),
@@ -366,6 +462,8 @@ export const realApi: HobApi = {
   retryDelegation: (id) => req<void>(`/api/delegations/${encodeURIComponent(id)}/retry`, { method: "POST" }),
   answerApproval: (approvalId, answer) =>
     req<void>(`/api/approvals/${encodeURIComponent(approvalId)}`, json(answer)),
+  answerCard: (cardId, action) =>
+    req<{ card?: import("../../shared/cards.ts").CardRecord }>(`/api/cards/${encodeURIComponent(cardId)}`, json(action)),
   createDraft: (draftId) =>
     req<void>(`/api/drafts/${encodeURIComponent(draftId)}/create`, { method: "POST" }),
   dismissDraft: (draftId) =>

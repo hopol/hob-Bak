@@ -14,13 +14,21 @@
         const root = document.documentElement;
         root.classList.toggle("dark", dark);
         root.style.colorScheme = dark ? "dark" : "light";
+        // 配色主题：设置里的值只在登录后才拿得到，这里先按上次用的那套刷，别先闪一下默认色。
+        // 默认配色不挂属性（用的就是样式表里原有的 :root / .dark）。
+        try {
+          const palette = localStorage.getItem("hob.palette");
+          if (palette && palette !== "default") root.setAttribute("data-palette", palette);
+        } catch {}
         // iPhone 主屏应用冷启动时这段脚本跑得早，innerWidth 偶尔还是 980 这类默认值，会被当成宽屏取 --side（深色 #1b1b1d），
         // 而 iOS 状态栏只认启动时的颜色。屏幕宽度启动时就是准的，取两者较小的。
         const narrow = Math.min(innerWidth || Infinity, screen.width || Infinity) < 768;
         // 和 theme.ts 的 statusSurface 一致：手机用 --bg，宽屏用 --side。
         // 这里先写上，React 挂载前顶栏就不会先露一层 :root 兜底的 --side（浅色是米白 #f6f6f4），开头不闪色。
         root.style.setProperty("--status-background", `var(--${narrow ? "bg" : "side"})`);
-        document.querySelector('meta[name="theme-color"]').content = narrow ? (dark ? "#151516" : "#ffffff") : dark ? "#1b1b1d" : "#f6f6f4";
+        // 优先读当前配色的 --bg / --side（下面这两块样式已经挂在 html 上了）；拿不到就按默认配色的老值
+        const cssVar = getComputedStyle(root).getPropertyValue(narrow ? "--bg" : "--side").trim();
+        document.querySelector('meta[name="theme-color"]').content = cssVar || (narrow ? (dark ? "#151516" : "#ffffff") : dark ? "#1b1b1d" : "#f6f6f4");
         // 装到主屏后，iOS 的状态栏和启动屏取 manifest 里的 theme_color / background_color，
         // 而 manifest 只有一份、不跟系统主题走，所以按当前主题换一份深色的。
         if (dark) document.getElementById("manifest").href = "/manifest-dark.webmanifest?v=4";

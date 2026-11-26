@@ -124,7 +124,7 @@ describe("通用技能和别的两档一样能改", () => {
     try {
       importedSkill(generalSkillsDir(hob.home));
       const dir = join(generalSkillsDir(hob.home), "vendor-summary");
-      const edit = buildRouterTools(hob.runtime, "hob").find((tool) => tool.name === "edit_skill")!;
+      const edit = buildRouterTools(hob.runtime, "hob").find((tool) => tool.name === "save_skill")!;
       const edited = await edit.execute("e", { name: "vendor-summary", edits: [{ old: "最后给一张表", new: "最后给一张按用量排序的表" }] });
       expect(edited.isError).not.toBe(true);
       const kept = readFileSync(join(dir, "SKILL.md"), "utf8");
@@ -148,11 +148,11 @@ describe("通用技能和别的两档一样能改", () => {
       // 沉淀进去：任务直接改文件，对账只查底线（说明超 120 字、没有 metadata.title 都不算错）
       hob.runtime.store.saveJob({ id: "t-general", assistantId: "hob", title: "汇总", instruction: "汇总", status: "done", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [] });
       hob.faux.setResponses([
-        call("edit", { path: join(dir, "SKILL.md"), edits: [{ oldText: "最后给一张表", newText: "最后给一张按金额排序的表" }] }),
+        call("save_skill", { name: "vendor-summary", edits: [{ old: "最后给一张表", new: "最后给一张按金额排序的表" }] }),
         call("report", { outcome: "done", result: "补了一句" }),
         text("好了"),
       ]);
-      hob.runtime.jobs.startSediment("t-general", { into: "vendor-summary" });
+      hob.runtime.jobs.startSediment("t-general");
       await hob.runtime.jobs.waitIdle();
       const after = readFileSync(join(dir, "SKILL.md"), "utf8");
       expect(after).toContain("按金额排序");
@@ -181,21 +181,19 @@ describe("通用技能和别的两档一样能改", () => {
       writeFileSync(join(local, "SKILL.md"), "---\nname: local-only\ndescription: 本机别的工具也用\n---\n正文\n");
       process.env.HOME = temp;
       const tools = buildRouterTools(hob.runtime, "hob");
-      const edit = tools.find((tool) => tool.name === "edit_skill")!;
+      const edit = tools.find((tool) => tool.name === "save_skill")!;
       const remove = tools.find((tool) => tool.name === "delete_skill")!;
       const result = await edit.execute("e", { name: "local-only", edits: [{ old: "正文", new: "新正文" }] });
-      expect(result.content[0].text).toBe("local-only 在本机 ~/.agents/skills 里，只能照着用，Hob 里改不了；要改得在那个目录里改，或者让任务另存一份 Hob 的技能。");
+      expect(result.content[0].text).toBe("local-only 是只读的技能，不能改；换个名字另存一份。");
       expect((await remove.execute("d", { name: "local-only" })).content[0].text).toContain("本机 ~/.agents/skills 里");
 
-      hob.runtime.store.saveJob({ id: "t-done", assistantId: "hob", title: "任务", instruction: "做", status: "done", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [] });
-      const save = tools.find((tool) => tool.name === "save_job_as_skill")!;
-      expect((await save.execute("s", { jobId: "t-done", into: "local-only" })).content[0].text).toContain("本机 ~/.agents/skills 里");
+      expect(tools.find((tool) => tool.name === "review_job")?.parameters.properties.into).toBeUndefined();
 
       hob.runtime.pi.loreSkillPaths = [join(hob.home, "lore-skills")];
       mkdirSync(join(hob.home, "lore-skills", "lore-only"), { recursive: true });
       writeFileSync(join(hob.home, "lore-skills", "lore-only", "SKILL.md"), "---\nname: lore-only\ndescription: Lore 里的\n---\n正文\n");
       const loreResult = await edit.execute("e2", { name: "lore-only", edits: [{ old: "正文", new: "新" }] });
-      expect(loreResult.content[0].text).toBe("lore-only 来自 Lore，只能照着用，Hob 里改不了；要改，到 Lore 里改，或者让任务另存一份 Hob 的技能。");
+      expect(loreResult.content[0].text).toBe("lore-only 是只读的技能，不能改；换个名字另存一份。");
     } finally {
       if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous;
       hob.close();
@@ -207,15 +205,18 @@ describe("新建在哪、换范围", () => {
   it("save_job_as_skill 的 general：新技能落在 HOB_HOME/skills", async () => {
     const hob = makeHob({}, { memory: "off" });
     try {
-      hob.runtime.store.saveJob({ id: "t-gen", assistantId: "hob", title: "转表", instruction: "转", status: "done", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [] });
-      const save = buildRouterTools(hob.runtime, "hob").find((tool) => tool.name === "save_job_as_skill")!;
-      const dir = join(generalSkillsDir(hob.home), "csv-to-json");
+      const cwd = join(hob.home, "drafts");
+      const dir = join(cwd, "csv-to-json");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "SKILL.md"), "---\nname: csv-to-json\ndescription: 把表格转成 JSON 时使用\nmetadata:\n  title: 表格转 JSON\n---\n\n步骤\n");
+      hob.runtime.store.saveJob({ id: "t-gen", assistantId: "hob", title: "转表", instruction: "转", status: "done", createdAt: new Date().toISOString(), stats: { reads: 0, commands: 0, edits: 0 }, activity: [], cwd });
+      const review = buildRouterTools(hob.runtime, "hob").find((tool) => tool.name === "review_job")!;
       hob.faux.setResponses([
-        call("write", { path: join(dir, "SKILL.md"), content: "---\nname: csv-to-json\ndescription: 把表格转成 JSON 时使用\nmetadata:\n  title: 表格转 JSON\n---\n\n步骤\n" }),
+        call("save_skill", { name: "csv-to-json", from: "csv-to-json", general: true }),
         call("report", { outcome: "done", result: "新建了 csv-to-json" }),
         text("存好了"),
       ]);
-      expect((await save.execute("s", { jobId: "t-gen", general: true })).isError).not.toBe(true);
+      expect((await review.execute("s", { jobId: "t-gen" })).isError).not.toBe(true);
       await hob.runtime.jobs.waitIdle();
       expect(listSkills(generalSkillsDir(hob.home)).map((skill) => skill.name)).toEqual(["csv-to-json"]);
       expect(listSkills(join(hob.home, "assistants", "hob", "skills"))).toEqual([]);
@@ -228,7 +229,7 @@ describe("新建在哪、换范围", () => {
       const saved = saveAssistantSkill(hob.home, "hob", { ...hobSkill, content: "第一版" });
       saveAssistantSkill(hob.home, "hob", { ...hobSkill, content: "第二版" });
       const tools = buildRouterTools(hob.runtime, "hob");
-      const edit = tools.find((tool) => tool.name === "edit_skill")!;
+      const edit = tools.find((tool) => tool.name === "save_skill")!;
       const result = await edit.execute("e", { name: hobSkill.name, general: true });
       expect(result.isError).not.toBe(true);
       const dir = join(generalSkillsDir(hob.home), hobSkill.name);
@@ -236,13 +237,13 @@ describe("新建在哪、换范围", () => {
       expect(existsSync(join(dir, ".history", "1", "SKILL.md"))).toBe(true);
       expect(listSkills(join(hob.home, "assistants", "hob", "skills"))).toEqual([]);
       const notes = hob.runtime.router.items("hob").items.filter((item) => item.kind === "note");
-      expect(notes.at(-1)).toMatchObject({ icon: "skill", text: "已把技能「每周周报」改为通用技能" });
+      expect(notes.at(-1)).toMatchObject({ icon: "skill", text: "已存技能「每周周报」第 3 版" });
       expect(saved.version).toBe(1);
 
       // 收回来：还在原位置，提示行说收回
       expect((await edit.execute("e2", { name: hobSkill.name, general: false })).isError).not.toBe(true);
       expect(existsSync(join(hob.home, "assistants", "hob", "skills", hobSkill.name, "SKILL.md"))).toBe(true);
-      expect(hob.runtime.router.items("hob").items.filter((item) => item.kind === "note").at(-1)?.text).toBe("已把技能「每周周报」收回来");
+      expect(hob.runtime.router.items("hob").items.filter((item) => item.kind === "note").at(-1)?.text).toBe("已存技能「每周周报」第 4 版");
     } finally { hob.close(); }
   });
 
@@ -283,13 +284,13 @@ describe("沉淀提醒", () => {
     try {
       hob.runtime.store.saveJob(job);
       const none = sedimentHint(hob.home, job);
-      expect(none).toBe("这个任务没用到技能。用 save_job_as_skill 让它回顾一遍，把能复用的做法沉淀下来，有没有值得沉淀的由它判断；已经有同类的技能，into 填那份。");
+      expect(none).toBe("这个任务没用到技能。可以用 review_job 让它回顾一遍，把能复用的做法沉淀下来，有没有值得沉淀的由它判断。");
       saveAssistantSkill(hob.home, "hob", hobSkill);
       saveSkill(generalSkillsDir(hob.home), { name: "table-summary", title: "表格汇总", description: "汇总表格时使用", content: "步骤" });
       const used = { ...job, skillsUsed: [hobSkill.name, "table-summary"] };
       hob.runtime.store.saveJob(used);
       const event = assistantJobResultEvent(hob.home, used, { skills: visibleSkills(hob.runtime, "hob") });
-      expect(event).toContain("这个任务用了技能「每周周报」「表格汇总」。用 save_job_as_skill 让它回顾一遍，有没有值得沉淀的由它判断：技能里没写到的做法、写错的地方，into 填对应的那份补进去；是另一类事的做法，就新建一份。");
+      expect(event).toContain("这个任务用了技能「每周周报」「表格汇总」。可以用 review_job 让它回顾一遍，有没有值得沉淀的由它判断：技能里没写到的做法、写错的地方，它会补进对应的那份；是另一类事的做法，它会新建一份。");
       // 做完就提醒，用到了技能也一样
       expect(sedimentHint(hob.home, used)).toContain("这个任务用了技能");
       for (const status of ["stuck", "failed", "stopped"] as const) expect(sedimentHint(hob.home, { ...used, status })).toBeUndefined();

@@ -24,8 +24,8 @@ describe("长按菜单定位", () => {
     expect(menuPosition({ top: 50, bottom: 900, left: 20, right: 300 }, area, false, 3)).toEqual({ top: 590, left: 20, bubbleTop: 58, maxHeight: 524 });
   });
   it("按条目类型提供动作", () => {
-    expect(actionsFor("user")).toEqual(["reply", "copy", "select"]);
-    expect(actionsFor("assistant")).toEqual(["reply", "copy", "select"]);
+    expect(actionsFor("user")).toEqual(["reply", "copy", "star", "select"]);
+    expect(actionsFor("assistant")).toEqual(["reply", "copy", "star", "select"]);
     expect(actionsFor("job")).toEqual(["reply", "job"]);
     for (const kind of ["question", "image", "file"]) expect(actionsFor(kind)).toEqual(["reply"]);
     expect(actionsFor("note")).toEqual([]);

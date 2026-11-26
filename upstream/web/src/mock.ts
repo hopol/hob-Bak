@@ -37,30 +37,74 @@ import type {
   PushSubscriptionJson,
   PushView,
   TokenPrice,
+  UpdateCheck,
   UsageAssistant,
   UsageModelPrice,
   UsagePrices,
   UsageRow,
   UsageView,
   WorklogEntry,
+  CardRecord,
 } from "../../shared/types.ts";
+import githubIcon from "./mock-plugins/github.svg?url";
+import gmailIcon from "./mock-plugins/gmail.svg?url";
+import emailIcon from "./mock-plugins/email.svg?url";
+import cloudflareIcon from "./mock-plugins/cloudflare.svg?url";
+import bitwardenIcon from "./mock-plugins/bitwarden.svg?url";
+import copilotIcon from "./mock-plugins/copilot.svg?url";
+import chatgptIcon from "./mock-plugins/chatgpt.svg?url";
+import zcodeIcon from "./mock-plugins/zcode.svg?url";
+import agyCliIcon from "./mock-plugins/agy-cli.svg?url";
+import emailManifest from "./mock-plugins/email.json";
 import { defaultSearch } from "../../shared/search.ts";
 import { knowledgeGroup, type KnowledgeCollection, type KnowledgeEntry } from "../../shared/knowledge.ts";
-import type { McpView } from "../../shared/mcp.ts";
+import type { PluginLoginView, PluginView } from "../../shared/types.ts";
 import type { AssistantSkill } from "../../shared/skills.ts";
 import { ApiError, type HobApi } from "./api.ts";
 import { currentLocale } from "../../shared/i18n.ts";
 import { normalizeThinkingMap, thinkingPlan } from "../../shared/thinking.ts";
+import { GALLERY, galleryRecords } from "./mock-cards-gallery.ts";
 
-export type SceneId = "g-owns" | "g-owns-dark" | "readme-chat" | "readme-cards" | "readme-desktop" | "readme-knowledge" | "readme-profile" | "readme-group-now" | "readme-mobile-list" | "readme-mobile-chat" | "readme-mobile-todos" | "image" | "act-demo" | "act-think" | "act-tool" | "act-dark" | "act-home" | "boot" | "bubbles" | "bubbles-dark" | "card-130" | "card-130-dark" | "job-after" | "job-after-dark" | "routine-check-dark" | "routine-once" | "routine-once-dark" | "routine-once-list" | "ask-rounds" | "ask-rounds-answered" | "ask-rounds-group" | "ask-rounds-dark" | "ask-rounds-mobile" | "s1" | "home-attention" | "s2" | "s3" | "s4" | "s6" | "mlist" | "mchat" | "d-running" | "d-waiting" | "d-done" | "d-dark" | "d-source" | "d-mobile" | "h-hob" | "h-dark" | "h-source" | "h-settings" | "h-mobile" | "g-chat" | "g-mention" | "g-mobile" | "g-dark" | "g-team" | "todo-chat" | "todo-topic" | "todo-job" | "topics" | "topics-plain";
+const mockUpdate: UpdateCheck = { status: "available", latest: "1.19.0" };
+
+export type SceneId = "cards-demo" | "cards-gallery" | "cards-gallery-dark" | "ask-cards-single" | "ask-cards-multi" | "ask-cards-multi-answered" | "ask-cards-job" | "ask-cards-mobile" | "ask-cards-dark" | "login-cards" | "plugin-demo" | "tool-login-signed-out" | "tool-login-device" | "tool-login-signed-in" | "tool-login-optional" | "provider-demo" | "provider-install-progress" | "provider-install-done" | "provider-errors" | "provider-login-device" | "provider-login-web" | "provider-login-paste" | "provider-login-apikey" | "provider-login-cli" | "provider-update-confirm" | "vault" | "vault-empty" | "g-owns" | "g-owns-dark" | "readme-chat" | "readme-cards" | "readme-interactive-cards" | "readme-plugins" | "readme-desktop" | "readme-knowledge" | "readme-profile" | "readme-group-now" | "readme-mobile-list" | "readme-mobile-chat" | "readme-mobile-todos" | "image" | "act-demo" | "act-think" | "act-tool" | "act-dark" | "act-home" | "boot" | "bubbles" | "bubbles-dark" | "card-130" | "card-130-dark" | "job-after" | "job-after-dark" | "routine-check-dark" | "routine-once" | "routine-once-dark" | "routine-once-list" | "ask-rounds" | "ask-rounds-answered" | "ask-rounds-group" | "ask-rounds-dark" | "ask-rounds-mobile" | "s1" | "home-attention" | "s2" | "s3" | "s4" | "s6" | "mlist" | "mchat" | "d-running" | "d-waiting" | "d-done" | "d-dark" | "d-source" | "d-mobile" | "h-hob" | "h-dark" | "h-source" | "h-settings" | "h-mobile" | "g-chat" | "g-mention" | "g-mobile" | "g-dark" | "g-team" | "todo-chat" | "todo-topic" | "todo-job" | "topics" | "topics-plain" | "read-receipt" | "read-receipt-hub" | "read-receipt-chat" | "workspace-cwd" | "workspace-cwd-dark" | "group-reply-all" | "group-reply-all-dark";
 
 /** 每个截图场景对应的界面状态（选中哪个助手或群、右栏开什么）。 */
 export const SCENE_UI: Record<
   SceneId,
   { sel: string | null; gsel?: string | null; panel: string; collapsed: boolean; dark: boolean; mobile: "list" | "chat"; text?: string }
 > = {
+  "cards-demo": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "cards-gallery": { sel: "hob", panel: "now", collapsed: true, dark: false, mobile: "chat" },
+  "cards-gallery-dark": { sel: "hob", panel: "now", collapsed: true, dark: true, mobile: "chat" },
+  "ask-cards-single": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "ask-cards-multi": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "ask-cards-multi-answered": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "ask-cards-job": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "ask-cards-mobile": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "ask-cards-dark": { sel: "hob", panel: "now", collapsed: false, dark: true, mobile: "chat" },
+  "login-cards": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "plugin-demo": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "tool-login-signed-out": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "tool-login-device": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "tool-login-signed-in": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "tool-login-optional": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "provider-demo": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "provider-install-progress": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "provider-install-done": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "provider-errors": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "provider-login-device": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "provider-login-web": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "provider-login-paste": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "provider-login-apikey": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "provider-login-cli": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "provider-update-confirm": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  vault: { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
+  "vault-empty": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
   "readme-chat": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "readme-cards": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "readme-interactive-cards": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "readme-plugins": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "list" },
   "readme-desktop": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "readme-knowledge": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   "readme-profile": { sel: "page", panel: "assistant", collapsed: false, dark: false, mobile: "chat" },
@@ -123,7 +167,16 @@ export const SCENE_UI: Record<
   "todo-job": { sel: "hob", panel: "now", collapsed: false, dark: false, mobile: "chat" },
   // 话题（票 152）：一个敏捷团队群、一个家用群
   topics: { sel: null, gsel: "g-topics", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "read-receipt": { sel: null, gsel: "t-export", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "read-receipt-hub": { sel: null, gsel: "g-topics", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "read-receipt-chat": { sel: "hob", panel: "now", collapsed: true, dark: false, mobile: "chat" },
   "topics-plain": { sel: null, gsel: "g-home", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  // 工作目录绑定演示：群绑定 / 话题跟随 / 独立话题绑定 / 助手绑定
+  "workspace-cwd": { sel: null, gsel: "t-dev-cwd", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "workspace-cwd-dark": { sel: null, gsel: "t-dev-cwd", panel: "now", collapsed: false, dark: true, mobile: "chat" },
+  // 全员回应群演示（票 266）：用户没点名提问，群主回了，一个成员补充，另一个成员只挂 👀
+  "group-reply-all": { sel: null, gsel: "g-advisors", panel: "now", collapsed: false, dark: false, mobile: "chat" },
+  "group-reply-all-dark": { sel: null, gsel: "g-advisors", panel: "now", collapsed: false, dark: true, mobile: "chat" },
 };
 
 const uid = (() => {
@@ -217,7 +270,7 @@ export function desktopMockScene(): DesktopScene {
 }
 
 const DESKTOP_HEALTH = {
-  version: "1.10.0",
+  version: "1.18.0",
   display: { width: 1280, height: 800 },
   screens: [{ id: "hob", running: true, browserRunning: true, viewers: 0, lastActiveAt: null }],
 };
@@ -243,13 +296,14 @@ interface Db {
   rules: Record<string, Rule[]>;
   worklog: Record<string, WorklogEntry[]>;
   settings: Bootstrap["settings"];
+  cards: Record<string, CardRecord>;
 }
 
 /**
  * 演示数据按界面语言出两份。只有 README 截图用到的场景有英文版：界面英文时这些场景的数据
  * 也换成英文，免得截图里一半英文一半中文。别的场景照旧只有中文数据。
  */
-const ENGLISH_DEMO_SCENES: SceneId[] = ["s1", "s6", "readme-group-now", "readme-mobile-list", "readme-mobile-chat", "readme-mobile-todos"];
+const ENGLISH_DEMO_SCENES: SceneId[] = ["s1", "s6", "readme-interactive-cards", "readme-plugins", "readme-group-now", "readme-mobile-list", "readme-mobile-chat", "readme-mobile-todos"];
 
 function englishDemo(scene: SceneId): boolean {
   return currentLocale() === "en" && ENGLISH_DEMO_SCENES.includes(scene);
@@ -291,7 +345,8 @@ function buildDb(scene: SceneId): Db {
       createdAt: at(30, 9, 0),
       last: { text: L("已交给任务处理，完成后通知你。", "Handed it to a job. I'll tell you when it's done."), at: at(0, 10, 5) },
       unread: 0,
-      busy: true,
+      busy: scene !== "cards-demo",
+      ...(scene === "h-hob" || scene === "h-dark" || scene === "mchat" || scene === "todo-chat" ? { suggestions: [L("把结果里的关键数字列给我", "List the key numbers from the result"), L("再做一份适合发给同事的版本", "Make a version I can send to my colleagues")] } : {}),
     },
     {
       id: "page",
@@ -938,6 +993,21 @@ cp now.txt "$seen"`,
     items.server = [{ kind: "user", id: "d-forward", at: minsAgo(6), text: delegation.text, from: { assistantId: "hob", name: "Hob", delegationId: delegation.id } }, { kind: "job", id: "d-job", at: minsAgo(5), jobId: "t-delegated" }, ...(status === "waiting" ? [{ kind: "question" as const, id: "d-question", at: minsAgo(2), approvalId: "ap-delegation" }] : [])];
   }
 
+  if (scene === "login-cards") {
+    // 票 257 的三张登录卡：两个候选账号的批准卡、两个提供者的录入卡、自己登录卡；卡上点「我自己登录」会就地换样子
+    const candidate = (provider: string, providerName: string, id: string, username: string, folder?: string) => ({ provider, providerName, id, name: "Example 论坛", username, uris: ["https://forum.example.net"], ...(folder ? { folder } : {}) });
+    const base = { assistantId: "hob", options: [{ key: "A" as const, label: "不允许" }, { key: "B" as const, label: "这次允许" }, { key: "C" as const, label: "这个网站以后都允许", always: true }], status: "pending" as const, source: "router" as const, createdAt: minsAgo(3) };
+    approvals["ap-login-approve"] = { ...base, id: "ap-login-approve", title: "在 forum.example.net 登录", detail: "Hob 从 密码库、Bitwarden 取出密码，直接填进登录页，助手看不到。", login: { site: "Example 论坛", reason: "查看新私信", fillLogin: { host: "forum.example.net", state: "pending", candidates: [candidate("vault", "密码库", "v1", "lin@example.com"), candidate("bitwarden", "Bitwarden", "b1", "reader@example.net", "读书账号")] } } };
+    approvals["ap-login-entry"] = { ...base, id: "ap-login-entry", title: "在 wiki.example.org 登录", detail: "密码管理器里还没有这个网站的账号。在这里填一次，Hob 存进密码库再填进登录页，助手看不到。", options: [{ key: "A", label: "不登录" }, { key: "B", label: "保存并登录" }], login: { site: "Example 百科", reason: "查看收藏", entry: { host: "wiki.example.org", state: "pending", providers: [{ provider: "vault", providerName: "密码库" }, { provider: "bitwarden", providerName: "Bitwarden" }] } } };
+    approvals["ap-login-self"] = { ...base, id: "ap-login-self", title: "需要登录：chat.example.org", detail: "这个网站只能用第三方账号登录", options: [{ key: "A", label: "已登录" }], recommended: "A", login: { site: "chat.example.org", reason: "这个网站只能用第三方账号登录" } };
+    items.hob = [
+      { kind: "user", id: "lc-1", at: minsAgo(5), text: "去 Example 论坛看看有没有新私信" },
+      { kind: "question", id: "lc-2", at: minsAgo(4), approvalId: "ap-login-approve" },
+      { kind: "question", id: "lc-3", at: minsAgo(3), approvalId: "ap-login-entry" },
+      { kind: "question", id: "lc-4", at: minsAgo(2), approvalId: "ap-login-self" },
+    ];
+  }
+
   if (scene.startsWith("h-")) {
     const server = assistants.find((assistant) => assistant.id === "server");
     if (server) server.dutyLong = "维护服务器、监控服务状态和磁盘空间；代理配置由其他助手负责。";
@@ -1019,7 +1089,7 @@ cp now.txt "$seen"`,
       ];
     }
     if (scene === "readme-cards") {
-      Object.assign(draft, { status: "pending", createdAssistantId: undefined, name: "资料助手", dutyLong: "整理团队资料，维护共享目录", routinesText: "每周整理资料", askFirst: ["对外发送"],  carry: { conversations: 3 } });
+      Object.assign(draft, { status: "pending", createdAssistantId: undefined, name: "资料助手", dutyLong: "整理团队资料，维护共享目录", instructions: "先梳理资料来源。\n按主题整理目录。\n保留原有文件名。\n遇到不确定的归属时列出问题。", routinesText: "每周整理资料", askFirst: ["对外发送"],  carry: { conversations: 3 } });
       delegations["readme-delegation"] = { id: "readme-delegation", from: "hob", to: "page", text: "整理团队资料的使用方法。", createdAt: minsAgo(3), status: "running", jobIds: [] };
       items.hob = [
         { kind: "image", id: "readme-image", at: minsAgo(4), startedAt: minsAgo(4), status: "done", prompt: "团队资料封面", size: "1536x1024", path: "/mock/readme-cover.svg" },
@@ -1186,6 +1256,7 @@ cp now.txt "$seen"`,
       last: { at: at(0, 9, 27), speaker: "server", text: L("开始检查下载目录", "Started checking the downloads folder") },
       unread: 0,
       busy: ["server"],
+      ...(scene === "g-chat" || scene === "g-mobile" || scene === "g-dark" ? { suggestions: [L("先把下载目录的清理清单发我", "Send me the cleanup list for the downloads folder first"), L("让服务器继续检查剩下的旧快照", "Have Ops check the remaining old snapshots")] } : {}),
     },
     {
       id: "g-dev",
@@ -1227,6 +1298,129 @@ cp now.txt "$seen"`,
     ];
     if (scene === "todo-job") {
       items.hob.push({ kind: "job", id: "todo-job-card", at: minsAgo(6), jobId: "t-0931" });
+    }
+  }
+
+  // 票 263：提问卡改用卡片渲染（单问题带推荐和 remember、多问题混合选择与填空、已答、任务提问、手机、深色）
+  if (scene.startsWith("ask-cards-")) {
+    const hob = assistants.find((item) => item.id === "hob")!;
+    hob.busy = false;
+    const multiQuestions: ApprovalQuestion[] = [
+      {
+        title: "活动形式",
+        why: "决定预订场地还是只发会议链接。",
+        options: [{ key: "A", label: "线下沙龙" }, { key: "B", label: "线上分享" }],
+        recommended: "A",
+      },
+      {
+        title: "报名确认方式",
+        why: "人多时是否需要提前审核名额。",
+        options: [
+          { key: "A", label: "报名后自动发确认邮件并附上日程文件" },
+          { key: "B", label: "先汇总报名名单，等你核对后再统一通知" },
+        ],
+        recommended: "A",
+      },
+      { title: "主题名称", options: [], input: "text", placeholder: "例如：秋季读书分享会" },
+      { title: "预计人数", options: [], input: "number", placeholder: "填数字" },
+      { title: "活动日期", options: [], input: "date", placeholder: "选择日期" },
+      { title: "开始时间", options: [], input: "time" },
+      { title: "活动说明", why: "会直接放进邀请正文。", options: [], input: "multiline", placeholder: "简单写几句活动内容和要带的东西" },
+    ];
+
+    if (scene === "ask-cards-single") {
+      approvals["ap-263-single"] = {
+        id: "ap-263-single",
+        assistantId: "hob",
+        title: "清理旧构建缓存吗？",
+        detail: "清理后会释放约 4.2 GB 磁盘空间，不会影响当前运行的服务；下次构建需要重新拉取缓存。",
+        options: [
+          { key: "A", label: "立即清理" },
+          { key: "B", label: "暂不清理" },
+          { key: "C", label: "以后「清理旧构建缓存」直接执行", always: true },
+        ],
+        recommended: "A",
+        ruleText: "清理旧构建缓存",
+        status: "pending",
+        source: "router",
+        createdAt: minsAgo(2),
+      };
+      hob.last = { text: "找到 4.2 GB 的旧构建缓存，清理前先确认一下。", at: minsAgo(2) };
+      items.hob = [
+        { kind: "user", id: "ac-s-u", at: minsAgo(4), text: "帮忙看看构建目录占了多少空间，顺手清一下旧缓存。" },
+        asst("ac-s-a", minsAgo(3), "查了一下，过去三个月的旧构建缓存一共占了 4.2 GB，当前版本没用到。"),
+        { kind: "question", id: "ac-s-q", at: minsAgo(2), approvalId: "ap-263-single" },
+      ];
+    } else if (scene === "ask-cards-job") {
+      jobs["j-263-ask"] = {
+        id: "j-263-ask",
+        assistantId: "hob",
+        title: "批量整理季度报表",
+        instruction: "合并三个月的原始表格并生成季度汇总。",
+        status: "waiting",
+        createdAt: minsAgo(8),
+        stats: { reads: 6, commands: 2, edits: 1 },
+        activity: [
+          { at: minsAgo(7), verb: "读", text: "reports/q3-raw.csv" },
+          { at: minsAgo(5), verb: "跑", text: "node scripts/merge-report.mjs --dry-run" },
+        ],
+      };
+      approvals["ap-263-job"] = {
+        id: "ap-263-job",
+        assistantId: "hob",
+        title: "目标目录里已有旧版汇总文件，怎么处理？",
+        detail: "任务「批量整理季度报表」准备写入 `reports/q3-summary.xlsx`，但同名文件已存在（上次修改于上周五）。",
+        options: [
+          { key: "A", label: "先备份旧文件，再写入新汇总" },
+          { key: "B", label: "直接覆盖旧文件" },
+          { key: "C", label: "另存为带日期的新文件名" },
+        ],
+        recommended: "A",
+        status: "pending",
+        source: "job",
+        jobId: "j-263-ask",
+        createdAt: minsAgo(1),
+      };
+      hob.last = { text: "任务执行中需要你确认一下文件怎么处理。", at: minsAgo(1) };
+      items.hob = [
+        { kind: "user", id: "ac-j-u", at: minsAgo(9), text: "把三季度的原始报表合并成一份汇总表。" },
+        { kind: "job", id: "ac-j-job", at: minsAgo(8), jobId: "j-263-ask" },
+        { kind: "question", id: "ac-j-q", at: minsAgo(1), approvalId: "ap-263-job" },
+      ];
+    } else {
+      const answered = scene === "ask-cards-multi-answered";
+      approvals["ap-263-multi"] = {
+        id: "ap-263-multi",
+        assistantId: "hob",
+        title: "安排秋季分享会，定一下这几项",
+        detail: "填完以后我一次起草邀请和日程，发出去之前会再给你看一遍。",
+        options: [],
+        questions: multiQuestions,
+        status: answered ? "answered" : "pending",
+        ...(answered
+          ? {
+            answers: [
+              { key: "A" },
+              { key: "B" },
+              { text: "秋季读书分享会" },
+              { text: "18" },
+              { text: "2026-11-28" },
+              { text: "14:30" },
+              { text: "一起聊两本近期的书，现场备好茶点，欢迎自带一本推荐书。" },
+            ],
+            answeredAt: minsAgo(1),
+          }
+          : {}),
+        source: "router",
+        createdAt: minsAgo(3),
+      };
+      hob.last = { text: answered ? "收到，我来起草邀请和日程。" : "有几项要你定一下，填完我就去起草邀请。", at: minsAgo(2) };
+      items.hob = [
+        { kind: "user", id: "ac-m-u", at: minsAgo(5), text: "帮我安排下周末的读书分享会，顺便起草一份邀请通知。" },
+        asst("ac-m-a", minsAgo(4), "先把形式、时间和人数定一下，填好我就起草通知。"),
+        { kind: "question", id: "ac-m-q", at: minsAgo(3), approvalId: "ap-263-multi" },
+        ...(answered ? [asst("ac-m-done", minsAgo(1), "收到，我按 11 月 28 日 14:30、18 人线下沙龙起草邀请，写好发你确认。")] : []),
+      ];
     }
   }
 
@@ -1353,6 +1547,7 @@ cp now.txt "$seen"`,
       last: { at: minsAgo(1), speaker: developer.id, text: L("深色主题正在实现。", "Building the dark theme.") },
       unread: 1,
       busy: [developer.id],
+      suggestions: [L("先把深色模式的切换入口列给我", "List the dark mode switch entry points first"), L("把手机端的验收结果也发我", "Send me the mobile acceptance results too")],
     };
     // 左栏的群二级页：一件刚写好说明、一件已经做完关了，和正在做的那件一起
     const readmeSearch: GroupSummary = {
@@ -1400,7 +1595,8 @@ cp now.txt "$seen"`,
     ];
   }
 
-  if (scene === "topics" || scene === "topics-plain" || scene === "todo-topic") {
+  const receipt = scene === "read-receipt" || scene === "read-receipt-hub";
+  if (scene === "topics" || scene === "topics-plain" || scene === "todo-topic" || receipt) {
     const software = scene !== "topics-plain";
     const host: GroupSummary = software
       ? {
@@ -1524,7 +1720,10 @@ cp now.txt "$seen"`,
     topicItems[tExport.id] = [
       { kind: "user", id: "te-1", at: at(0, 9, 30), text: "每月的报表想按月份导出", speaker: "user" },
       { kind: "assistant", id: "te-2", at: at(0, 9, 31), text: "有两个问题要你定：按自然月还是按账期？导出 Excel 还是 CSV？", speaker: "po" },
+      // 已读：转进来的这句群主看过了，还没回
+      ...(receipt ? [{ kind: "user" as const, id: "te-3", at: at(0, 9, 55), text: "用户在综合补充：导出先用 CSV，Excel 下个月再说。按自然月还是账期还没定。", speaker: "user", forwardedFrom: { groupId: host.id, itemId: "gt-10" }, reactions: [{ by: "po", emoji: "👀" }] }] : []),
     ];
+
     topicItems[tUpload.id] = [
       { kind: "user", id: "tu-1", at: at(0, 9, 44), text: "上传 2 GB 的文件卡在 99%", speaker: "user" },
       { kind: "assistant", id: "tu-2", at: at(0, 9, 45), text: "看了日志：分片传完最后一块后没有合并，是我这边的问题。修好了，测试现在过两条。", speaker: "dev" },
@@ -1548,14 +1747,291 @@ cp now.txt "$seen"`,
       topicItems[host.id] = [
         { kind: "note", id: "gt-1", at: at(30, 10, 0), icon: "split", text: "已创建群「Hob 开发」：产品负责人、架构师、开发、测试、发布", speaker: "user" },
         { kind: "topic", id: "gt-2", at: at(0, 9, 30), topicId: tExport.id, speaker: "po" },
-        { kind: "user", id: "gt-4", at: at(0, 9, 39), text: "今天线上好像有点慢，是不是我们昨天发的版本？", speaker: "user" },
+        { kind: "user", id: "gt-4", at: at(0, 9, 39), text: "今天线上好像有点慢，是不是我们昨天发的版本？", speaker: "user", ...(receipt ? { reactions: [{ by: "po", emoji: "👌" }, { by: "arch", emoji: "👀" }] } : {}) },
         { kind: "assistant", id: "gt-5", at: at(0, 9, 40), text: "@架构师 看一下线上昨天以后的响应时间，和昨天的发版对得上吗？", speaker: "po" },
         { kind: "topic", id: "gt-6", at: at(0, 9, 41), topicId: tRemember.id, speaker: "po" },
         { kind: "topic", id: "gt-7", at: at(0, 9, 44), topicId: tUpload.id, speaker: "po" },
         { kind: "assistant", id: "gt-8", at: at(0, 9, 46), text: "对不上。慢的是 09:10 以后，是备份任务把磁盘占满了，和发版无关；已经告诉服务器那边。", speaker: "arch" },
         { kind: "note", id: "gt-9", at: at(0, 9, 52), icon: "split", text: "产品负责人开了话题「登录页加「记住我」」", speaker: "po" },
+        // 已读：你在综合补了一句，群主转进话题，自己没出声
+        ...(receipt ? [
+          { kind: "user" as const, id: "gt-10", at: at(0, 9, 55), text: "导出那个先用 CSV，Excel 下个月再说", speaker: "user", reactions: [{ by: "po", emoji: "👌" }] },
+          { kind: "note" as const, id: "gt-11", at: at(0, 9, 55), icon: "info" as const, text: "转到了话题「导出月度报表」", targetGroupId: tExport.id, speaker: "po" },
+        ] : []),
       ];
+
     }
+  }
+
+  if (scene === "workspace-cwd" || scene === "workspace-cwd-dark") {
+    const devGroup = groups.find((g) => g.id === "g-dev")!;
+    const homeGroup = groups.find((g) => g.id === "g-home")!;
+    devGroup.cwd = "/workspace/hob-app";
+    const devAssistant = assistants.find((a) => a.id === "dev");
+    if (devAssistant) devAssistant.cwd = "/workspace/hob-app/packages/web";
+    draft.cwd = "/workspace/ai-radar";
+
+    const tDevCwd: GroupSummary = {
+      id: "t-dev-cwd",
+      name: L("工作目录只读展示", "Read-only workspace cwd"),
+      purpose: devGroup.purpose,
+      ownerId: devGroup.ownerId,
+      members: [...devGroup.members],
+      createdAt: at(0, 9, 30),
+      parentId: devGroup.id,
+      createdBy: "po",
+      unread: 0,
+      busy: [],
+      last: { at: at(0, 9, 55), speaker: "dev", text: L("已按群目录 /workspace/hob-app 加载 AGENTS.md 并完成构建", "Loaded AGENTS.md from /workspace/hob-app and verified the build") },
+    };
+    const tHomeCwd: GroupSummary = {
+      id: "t-home-cwd",
+      name: L("NAS 自动备份脚本", "NAS backup scripts"),
+      purpose: homeGroup.purpose,
+      ownerId: homeGroup.ownerId,
+      members: [...homeGroup.members],
+      cwd: "/srv/home-nas/scripts",
+      createdAt: at(1, 14, 0),
+      parentId: homeGroup.id,
+      createdBy: "user",
+      unread: 0,
+      busy: [],
+      last: { at: at(1, 14, 20), speaker: "server", text: L("已绑定本话题目录 /srv/home-nas/scripts", "Bound to topic directory /srv/home-nas/scripts") },
+    };
+    groups.push(tDevCwd, tHomeCwd);
+    topicItems[tDevCwd.id] = [
+      { kind: "user", id: "wc-1", at: at(0, 9, 32), text: L("这个话题直接跟着群的工作目录跑，把前端构建和单测顺一遍。", "Run the frontend build and unit tests in the group workspace."), speaker: "user" },
+      { kind: "assistant", id: "wc-2", at: at(0, 9, 55), text: L("已在 /workspace/hob-app 自动加载 AGENTS.md，构建和前端测试都通过了。", "Loaded AGENTS.md in /workspace/hob-app; both build and tests passed."), speaker: "dev" },
+    ];
+    topicItems[tHomeCwd.id] = [
+      { kind: "user", id: "wc-3", at: at(1, 14, 5), text: L("帮我看下定时同步脚本为什么漏了隐藏目录。", "Check why the sync script skipped hidden folders."), speaker: "user" },
+      { kind: "assistant", id: "wc-4", at: at(1, 14, 20), text: L("在 /srv/home-nas/scripts 找到了 rsync 过滤规则问题，修好后重跑正常。", "Found the rsync filter rule issue in /srv/home-nas/scripts and verified the fix."), speaker: "server" },
+    ];
+  }
+
+  if (scene === "group-reply-all" || scene === "group-reply-all-dark") {
+    const advisors: GroupSummary = {
+      id: "g-advisors",
+      name: L("产品评审团", "Product review"),
+      purpose: L("从产品、工程和测试三个视角同步评审需求方案", "Review proposals from product, engineering, and QA perspectives"),
+      ownerId: "po",
+      members: ["po", "dev", "qa"],
+      replyMode: "all",
+      createdAt: at(3, 10, 0),
+      unread: 0,
+      busy: [],
+      last: {
+        at: at(0, 10, 14),
+        speaker: "dev",
+        text: L("工程这边补一条：同一条件并发点击需要做去重，另外大报表切分批查询，避免把主库读连接打满。", "From engineering: deduplicate concurrent requests with identical filters, and paginate large queries so exports don't saturate primary DB connections."),
+      },
+    };
+    groups.unshift(advisors);
+    topicItems[advisors.id] = [
+      {
+        kind: "user",
+        id: "ra-1",
+        at: at(0, 10, 10),
+        text: L("下个版本想把导出报表改成后台异步生成，完成后通知用户下载，大家觉得有什么遗漏？", "For the next release, I want to move report exports to an async background job and notify users when ready. Anything we're missing?"),
+        speaker: "user",
+        reactions: [{ by: "qa", emoji: "👀" }],
+      },
+      {
+        kind: "assistant",
+        id: "ra-2",
+        at: at(0, 10, 12),
+        text: L("主流程没问题，建议补两个产品细节：一是导出记录里保留 7 天下载链接，用户关了通知也能再找；二是生成中给一个预计耗时，避免重复点导出。", "The core flow looks good. Two product details to add: keep download links for 7 days in export history so users can find them later, and show an estimated wait time while generating to avoid duplicate clicks."),
+        speaker: "po",
+      },
+      {
+        kind: "assistant",
+        id: "ra-3",
+        at: at(0, 10, 14),
+        text: L("工程这边补一条：同一条件并发点击需要做去重，另外大报表切分批查询，避免把主库读连接打满。", "From engineering: deduplicate concurrent requests with identical filters, and paginate large queries so exports don't saturate primary DB connections."),
+        speaker: "dev",
+      },
+    ];
+  }
+
+  const cards: Record<string, CardRecord> = {};
+  if (scene === "cards-demo") {
+    const variant = new URLSearchParams(globalThis.location?.search ?? "").get("card") ?? "plugin";
+    const now = new Date().toISOString();
+    const makeCard = (id: string, owner: CardRecord["owner"], card: CardRecord["card"], patch: Partial<CardRecord> = {}): CardRecord => ({ id, owner, card, status: "open", createdAt: now, ...patch });
+    const namedPlugin = (id: string, pluginId: string, pluginName: string, card: CardRecord["card"], patch: Partial<CardRecord> = {}) => makeCard(id, { type: "plugin", pluginId, assistantId: "hob" }, card, { plugin: { service: pluginId, callbackTool: "callback", pluginName }, ...patch });
+    const plugin = (id: string, card: CardRecord["card"], patch: Partial<CardRecord> = {}) => namedPlugin(id, "bitwarden", "Bitwarden", card, patch);
+
+    const formButton = (text: string): CardRecord["card"]["body"]["elements"][number] => ({ tag: "button", text, type: "primary_filled", form_action_type: "submit" });
+    const secondaryButton = (text: string): CardRecord["card"]["body"]["elements"][number] => ({ tag: "button", text, type: "default", form_action_type: "submit" });
+    const cardsByVariant: Record<string, CardRecord> = {
+      plugin: plugin("mock-card-plugin", { schema: "2.0", header: { title: "保存登录信息" }, body: { elements: [{ tag: "form", name: "login", elements: [
+        { tag: "column_set", columns: [{ weight: 1, elements: [{ tag: "input", name: "name", label: "名称", default_value: "Example 论坛", required: true }] }, { weight: 1, elements: [{ tag: "select_static", name: "folder", label: "文件夹", options: [{ text: "论坛账号", value: "forum" }, { text: "工作", value: "work" }, { text: "个人", value: "personal" }, { text: "家庭", value: "family" }, { text: "财务", value: "finance" }, { text: "其他", value: "other" }], initial_option: "forum" }] }] },
+        { tag: "input", name: "url", label: "网址", default_value: "https://forum.example.net/login" },
+        { tag: "input", name: "username", label: "用户名", default_value: "lin@example.com" },
+        { tag: "input", name: "password", label: "密码", input_type: "password", default_value: "••••••••••••", min_length: 10, required: true, generate: true },
+        { tag: "button", text: "取消", type: "default", form_action_type: "reset" }, { tag: "button", text: "保存", type: "primary_filled", form_action_type: "submit" },
+      ] }] } }),
+      "plugin-done": plugin("mock-card-plugin-done", { schema: "2.0", header: { title: "保存登录信息" }, body: { elements: [{ tag: "form", name: "login", elements: [{ tag: "input", name: "name", label: "名称" }, { tag: "input", name: "url", label: "网址" }, { tag: "input", name: "username", label: "用户名" }, { tag: "input", name: "password", label: "密码", input_type: "password" }] }] } }, { status: "done", feedback: { toast: { type: "success", content: "✓ 已保存到「论坛账号」" } }, result: { action: { tag: "button" }, fields: { name: "Example 论坛", url: "https://forum.example.net/login", username: "lin@example.com", password: "已填写" } } }),
+      agent: makeCard("mock-card-agent", { type: "assistant", assistantId: "hob" }, { schema: "2.0", header: { title: "青岛行程", subtitle: "选好后点「按这个排」，不确定的可以空着。" }, body: { elements: [{ tag: "form", name: "trip", elements: [{ tag: "column_set", columns: [{ weight: 1, elements: [{ tag: "date_picker", name: "from", label: "出发", required: true, initial_date: "2026-12-12" }] }, { weight: 1, elements: [{ tag: "date_picker", name: "to", label: "回来", required: true, initial_date: "2026-12-15" }] }] }, { tag: "input", name: "people", label: "几个人", input_type: "number", default_value: 3, min: 1, max: 12 }, { tag: "multi_select_static", name: "places", label: "想去的地方", options: [{ text: "栈桥", value: "栈桥" }, { text: "八大关", value: "八大关" }, { text: "崂山", value: "崂山" }, { text: "啤酒博物馆", value: "啤酒博物馆" }, { text: "金沙滩", value: "金沙滩" }, { text: "小青岛", value: "小青岛" }], initial_options: ["栈桥", "八大关", "啤酒博物馆"] }, { tag: "select_static", name: "stay", label: "住宿", options: [{ text: "经济", value: "budget" }, { text: "舒适", value: "comfort" }, { text: "高档", value: "luxury" }], initial_option: "comfort" }, { tag: "input", name: "notes", label: "其他要求", input_type: "multiline_text", default_value: "爸妈腿脚不太好，每天别走太多路；想吃一次海鲜大排档" }, formButton("按这个排")] }] } }),
+      table: namedPlugin("mock-card-table", "cloudflare", "Cloudflare", { schema: "2.0", header: { title: "example.com 的解析记录", subtitle: "一共 6 条，下面是全部" }, body: { elements: [{ tag: "table", columns: [{ name: "type", display_name: "类型" }, { name: "name", display_name: "名称" }, { name: "content", display_name: "内容" }, { name: "proxy", display_name: "代理" }], rows: [{ type: "A", name: "@", content: "203.0.113.10", proxy: true }, { type: "A", name: "www", content: "203.0.113.10", proxy: true }, { type: "CNAME", name: "blog", content: "example.pages.dev", proxy: true }, { type: "A", name: "api", content: "203.0.113.24", proxy: false }, { type: "MX", name: "@", content: "mx.mail.example.net" }, { type: "TXT", name: "@", content: "v=spf1 include:_spf.mail.example.net ~all" }] }, secondaryButton("添加记录")] } }),
+      validate: namedPlugin("mock-card-validate", "nas", "家庭 NAS", { schema: "2.0", header: { title: "新建账号" }, body: { elements: [{ tag: "form", name: "account", elements: [{ tag: "input", name: "username", label: "用户名", default_value: "parents", required: true }, { tag: "input", name: "password", label: "密码", input_type: "password", default_value: "•••••", min_length: 8, required: true }, { tag: "multi_select_static", name: "folders", label: "能访问的文件夹", options: [{ text: "相册", value: "photos" }, { text: "家庭视频", value: "videos" }, { text: "工作", value: "work" }, { text: "下载", value: "downloads" }], initial_options: ["photos", "videos"] }, { tag: "checker", name: "remote", text: "允许从外网访问", checked: false }, { tag: "select_static", name: "quota", label: "空间上限", options: [{ text: "200 GB", value: "200" }, { text: "500 GB", value: "500" }, { text: "1 TB", value: "1000" }, { text: "2 TB", value: "2000" }, { text: "4 TB", value: "4000" }, { text: "不限制", value: "unlimited" }], initial_option: "200" }, formButton("创建")] }] } }, { feedback: { errors: { password: "密码至少 8 位" } } }),
+      unavailable: plugin("mock-card-unavailable", { schema: "2.0", header: { title: "保存登录信息" }, body: { elements: [{ tag: "markdown", content: "Bitwarden 暂时无法使用，请稍后再试。" }] } }, { feedback: { unavailable: "Bitwarden 暂时不可用" } }),
+    };
+    cardsByVariant["agent-done"] = makeCard("mock-card-agent-done", { type: "assistant", assistantId: "hob" }, { schema: "2.0", header: { title: "青岛行程" }, body: { elements: [{ tag: "markdown", content: "已经按你的选择排好行程。" }] } }, { status: "done", result: { action: { tag: "button" }, buttonText: "按这个排", fields: { 出发: "2025-12-12", 回来: "2025-12-15", 几个人: 3, 想去的地方: ["栈桥", "八大关"] } } });
+    cardsByVariant.list = namedPlugin("mock-card-list", "github", "GitHub", { schema: "2.0", header: { title: "等你审的合并请求", subtitle: "acme/notes-app" }, body: { elements: [
+      { tag: "interactive_container", elements: [{ tag: "div", text: "修复同步时偶尔丢失最后一条笔记\n#128 · 小林 · +42 −8 · 2 小时前" }, { tag: "div", text: "✓ 已合并" }] },
+      { tag: "interactive_container", elements: [{ tag: "div", text: "笔记列表支持按标签筛选\n#131 · 阿周 · +310 −54 · 昨天" }, { tag: "button", text: "合并", type: "default" }, { tag: "button", text: "···", type: "default" }] },
+      { tag: "interactive_container", elements: [{ tag: "div", text: "升级编辑器依赖到 4.2\n#133 · bot · +18 −18 · 3 天前" }, { tag: "button", text: "合并", type: "default" }, { tag: "button", text: "···", type: "default" }] },
+      { tag: "collapsible_panel", header: { title: "其余开着的 2" }, expanded: false, elements: [] },
+    ] } });
+
+    cardsByVariant.draft = namedPlugin("mock-card-draft", "email", "邮箱 · 工作邮箱", { schema: "2.0", header: { title: "回复邮件" }, body: { elements: [{ tag: "form", name: "reply", elements: [{ tag: "input", name: "to", label: "收件人", default_value: "王经理 <wang@example.com>", required: true }, { tag: "input", name: "subject", label: "主题", default_value: "回复：下周项目评审时间", required: true }, { tag: "input", name: "body", label: "正文", input_type: "multiline_text", default_value: "王经理好，\n\n周四下午 2 点到 4 点我这边都可以，评审会就定在那天吧。上周的会议纪要附在附件里，有需要补充的地方您直接回我。\n\n小林" }, { tag: "div", icon: "file", text: "项目评审会议纪要-1116.docx · 48 KB" } as any, { tag: "button", text: "存为草稿", type: "default" }, { tag: "button", text: "发送", type: "primary_filled", form_action_type: "submit" }] }] } });
+    cardsByVariant.toast = plugin("mock-card-toast", { schema: "2.0", header: { title: "保存登录信息" }, body: { elements: [{ tag: "markdown", content: "已连接 Bitwarden。" }] } }, { feedback: { toast: { type: "success", content: "已连接 Bitwarden，可以填写了" } } });
+    cardsByVariant.processing = plugin("mock-card-processing", { schema: "2.0", header: { title: "保存登录信息" }, body: { elements: [{ tag: "form", name: "login", elements: [{ tag: "input", name: "username", label: "用户名", default_value: "lin@example.com" }, formButton("保存")] }] } });
+    cardsByVariant.unavailable = plugin("mock-card-unavailable", { schema: "2.0", header: { title: "保存登录信息" }, body: { elements: [{ tag: "markdown", content: "Bitwarden 暂时无法使用，请稍后再试。" }] } }, { feedback: { unavailable: "Bitwarden 暂时不可用" } });
+    const record = cardsByVariant[variant] ?? cardsByVariant.plugin!;
+    cards[record.id] = record;
+    const userTexts: Record<string, string> = {
+      plugin: "帮我把刚注册的 Example 论坛账号存进 Bitwarden，用户名是 lin@example.com",
+      "plugin-done": "帮我把刚注册的 Example 论坛账号存进 Bitwarden，用户名是 lin@example.com",
+      agent: "下个月想带爸妈去青岛玩几天，帮我排个行程",
+      list: "看看 notes-app 里还开着的合并请求",
+      draft: "给王经理回一下，周四下午可以开评审会，顺便把上周的纪要附上",
+      table: "example.com 现在有哪些解析记录？",
+      validate: "帮我在家里的 NAS 上新建一个给爸妈用的账号",
+    };
+    const assistantTexts: Record<string, string> = {
+      plugin: "好，密码在下面的卡片里填，会直接存进 Bitwarden，我看不到。",
+      "plugin-done": "好，密码在下面的卡片里填，会直接存进 Bitwarden，我看不到。",
+      agent: "先定几件事，填完我就按这个排。",
+      list: "有 5 个开着，3 个在等你审：",
+      draft: "草稿在下面，改好了点「发送」。",
+      table: "一共 6 条，下面是全部：",
+      validate: "账号信息在下面填，密码直接交给 NAS 插件。",
+    };
+    items.hob = [
+      { kind: "user", id: "mock-card-user", at: minsAgo(3), text: userTexts[variant] ?? userTexts.plugin },
+      { kind: "assistant", id: "mock-card-assistant", at: minsAgo(2), text: assistantTexts[variant] ?? assistantTexts.plugin },
+      ...(variant === "plugin-done" ? [{ kind: "card" as const, id: "mock-card-item", at: minsAgo(1), cardId: record.id }, { kind: "assistant" as const, id: "mock-card-after", at: minsAgo(1), text: "存好了：Example 论坛（lin@example.com），在 Bitwarden 的「论坛账号」文件夹里。" }] : [{ kind: "card" as const, id: "mock-card-item", at: minsAgo(1), cardId: record.id }]),
+    ];
+  }
+
+  if (scene === "read-receipt-chat") {
+    // 单聊：前一条助手点了个赞；最后一条它接手了、正在想
+    const hob = assistants.find((item) => item.id === "hob");
+    // ?play=1 时由 store 按时间挂上 👀、换成 👍，开头先不挂
+    if (hob) hob.busy = true;
+    items.hob = [
+      { kind: "user", id: "rc-1", at: minsAgo(6), text: "周六的露营改到周日了，提醒事项也挪一下", reactions: [{ by: "hob", emoji: "👍" }] },
+      { kind: "assistant", id: "rc-2", at: minsAgo(6), text: "挪好了：周日早上 7:00 提醒你出发，周六那条删掉了。" },
+      { kind: "user", id: "rc-3", at: minsAgo(1), text: "再帮我看看周日那边的天气" },
+      { kind: "user", id: "rc-4", at: minsAgo(1), text: "要是下雨就顺延一周" },
+    ];
+  }
+
+  if (scene === "cards-gallery" || scene === "cards-gallery-dark") {
+    const now = new Date().toISOString();
+    const records = galleryRecords(now);
+    for (const record of records) cards[record.id] = record;
+    const hob = assistants.find((item) => item.id === "hob");
+    if (hob) hob.busy = false;
+    items.hob = records.flatMap((record, index) => [
+      { kind: "assistant" as const, id: `gallery-label-${index}`, at: minsAgo(60 - index), text: `${index + 1}. ${GALLERY[index]!.label}` },
+      { kind: "card" as const, id: `gallery-item-${index}`, at: minsAgo(60 - index), cardId: record.id },
+    ]);
+  }
+
+  if (scene === "readme-interactive-cards") {
+    const hob = assistants.find((item) => item.id === "hob")!;
+    hob.busy = false;
+    hob.last = { text: L("解析记录已查好，上线前还有几项等你定一下。", "DNS records are ready; a few release details need your call."), at: minsAgo(1) };
+    groups.length = 0;
+    for (const key of Object.keys(jobs)) {
+      if (key !== "readme-job") delete jobs[key];
+    }
+    for (const key of Object.keys(approvals)) delete approvals[key];
+    for (const key of Object.keys(delegations)) delete delegations[key];
+    cards["readme-card-dns"] = {
+      id: "readme-card-dns",
+      owner: { type: "plugin", pluginId: "cloudflare", assistantId: "hob" },
+      plugin: { service: "cloudflare", callbackTool: "callback", pluginName: "Cloudflare" },
+      status: "open",
+      createdAt: minsAgo(3),
+      card: {
+        schema: "2.0",
+        header: {
+          title: L("example.com 的解析记录", "DNS records for example.com"),
+        },
+        body: {
+          elements: [
+            {
+              tag: "table",
+              columns: [
+                { name: "type", display_name: L("类型", "Type") },
+                { name: "name", display_name: L("名称", "Name") },
+                { name: "content", display_name: L("内容", "Content") },
+                { name: "proxy", display_name: L("代理", "Proxied") },
+              ],
+              rows: [
+                { type: "A", name: "@", content: "203.0.113.10", proxy: true },
+                { type: "CNAME", name: "docs", content: "docs.example.pages.dev", proxy: true },
+                { type: "A", name: "api", content: "203.0.113.24", proxy: false },
+              ],
+            },
+            {
+              tag: "collapsible_panel",
+              expanded: false,
+              header: { title: L("查看其余记录与切换建议", "More records & cutover notes") },
+              elements: [
+                {
+                  tag: "markdown",
+                  content: L(
+                    "- `TXT @`：`v=spf1 include:_spf.mail.example.net ~all`\n- 建议在切换前半小时将 `@` 的 TTL 调到 60 秒。",
+                    "- `TXT @`: `v=spf1 include:_spf.mail.example.net ~all`\n- Lower the `@` TTL to 60s half an hour before cutover.",
+                  ),
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+    approvals["readme-ask-release"] = {
+      id: "readme-ask-release",
+      assistantId: "hob",
+      title: L("周末上线前，定一下这几项", "A few details before the weekend release"),
+      options: [],
+      questions: [
+        {
+          title: L("发布方式", "Rollout plan"),
+          options: [
+            { key: "A", label: L("先灰度 10%，观察半小时再全量", "Canary 10% for 30 min, then full rollout") },
+            { key: "B", label: L("直接全量切换", "Switch all traffic at once") },
+          ],
+          recommended: "A",
+        },
+        {
+          title: L("版本说明标题", "Release note title"),
+          options: [],
+          input: "text",
+          placeholder: L("例如：v2.1 首页改版上线", "e.g. v2.1 homepage refresh"),
+        },
+        {
+          title: L("计划上线日期", "Target release date"),
+          options: [],
+          input: "date",
+          placeholder: L("选择日期", "Choose a date"),
+        },
+      ],
+      status: "pending",
+      source: "router",
+      createdAt: minsAgo(1),
+    };
+    items.hob = [
+      { kind: "user", id: "rc-u", at: minsAgo(4), text: L("查下解析，安排上线。", "Check DNS & plan release.") },
+      { kind: "card", id: "rc-dns", at: minsAgo(3), cardId: "readme-card-dns" },
+      { kind: "question", id: "rc-ask", at: minsAgo(1), approvalId: "readme-ask-release" },
+    ];
   }
 
   return {
@@ -1574,9 +2050,9 @@ cp now.txt "$seen"`,
     ] },
     rules: {
       hob: [
-        { id: "rule-1", text: "花钱", mode: "ask", changedAt: at(10, 9, 0) },
-        { id: "rule-2", text: "改线上服务", mode: "ask", changedAt: at(10, 9, 0) },
-        { id: "rule-3", text: "清理我的文件", mode: "ask", changedAt: at(3, 9, 0) },
+        { id: "rule-1", text: L("花钱", "Spending money"), mode: "ask", changedAt: at(10, 9, 0) },
+        { id: "rule-2", text: L("改线上服务", "Changing live services"), mode: "ask", changedAt: at(10, 9, 0) },
+        { id: "rule-3", text: L("清理我的文件", "Deleting my files"), mode: "ask", changedAt: at(3, 9, 0) },
       ],
       page: scene.startsWith("readme-") ? [{ id: "readme-rule", text: L("向团队群发送周报", "Send the weekly report to the team group"), mode: "ask", changedAt: at(9, 9) }] : [
         { id: "rule-4", text: "删除草稿", mode: "ask", changedAt: at(9, 9, 0) },
@@ -1611,8 +2087,10 @@ cp now.txt "$seen"`,
       revision: 1,
       settings: {
         general: {
-          theme: scene.endsWith("-dark") ? "dark" : "system",
+          theme: scene.endsWith("-dark") || (typeof location !== "undefined" && new URLSearchParams(location.search).get("dark") === "1") ? "dark" : "system",
           timezone: "Asia/Tokyo",
+          proxy: scene === "s1" || scene === "h-settings" ? "http://demo-user:demo-pass@proxy.example.test:8080" : "",
+          noProxy: "localhost,127.0.0.1,::1",
           aboutYou: { name: L("小林", "Sam"), language: L("中文", "English"), notes: "" },
         },
         providers: [
@@ -1622,8 +2100,12 @@ cp now.txt "$seen"`,
             id: "my-proxy",
             name: "我的代理",
             api: "openai-completions",
-            baseUrl: "http://127.0.0.1:8080/v1",
-            models: [{ id: "gpt-x", name: "GPT X", input: ["text", "image"], reasoning: true, contextWindow: 200_000 }],
+            baseUrl: "https://models.example.invalid/v1",
+            models: [
+              { id: "gpt-x", name: "GPT X", input: ["text", "image"], reasoning: true, contextWindow: 200_000 },
+              { id: "claude-sample", name: "Claude Sample", input: ["text", "image"], reasoning: true, contextWindow: 100_000 },
+              { id: "gemini-sample", name: "Gemini Sample", input: ["text"], reasoning: false, contextWindow: 1_000_000 },
+            ],
           },
         ],
         models: scene.startsWith("readme-") ? {
@@ -1649,6 +2131,7 @@ cp now.txt "$seen"`,
         push: { email: "" },
       },
     },
+    cards,
   };
 }
 
@@ -1832,17 +2315,741 @@ const MOCK_IMPORTED_PROVIDERS: Record<string, ProviderSettings> = {
 /** 假后端：和 realApi 同一套接口，操作真的改内存里的状态并发事件。 */
 const mockUploads = new Map<string, string>();
 
-const MCP_MOCK: McpView = {
-  servers: [
-    { name: "filesystem", valid: true, kind: "stdio", enabled: true, exposure: "direct", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "."], description: "读写指定目录的文件" },
-    { name: "docs", valid: true, kind: "http", enabled: false, exposure: "deferred", url: "https://example.com/mcp", headers: { Authorization: { redacted: true } } },
-  ],
-};
-
 export function createMock(scene: SceneId = "s1"): HobApi {
   const db = buildDb(scene);
   const en = englishDemo(scene);
   const L: Say = (zh, english) => (en ? english : zh);
+  if (scene === "plugin-demo") {
+    db.assistants = db.assistants.filter(a => ["hob", "page", "bird"].includes(a.id)).map(a => ({ ...a, name: a.id === "hob" ? "Hob" : a.id === "page" ? "写作" : "研究", duty: a.id === "hob" ? "主助手" : a.id === "page" ? "整理文章" : "收集资料", last: undefined, unread: 0, busy: false }));
+    db.groups = []; db.jobs = {}; db.approvals = {}; db.delegations = {}; db.routines = []; db.items = {};
+  }
+  const pluginViews: PluginView[] = [];
+  const pluginSources: import("../../shared/types.ts").PluginSourceView[] = [{ id: "official", name: "Hob 官方", url: "https://github.com/FFatTiger/hob-plugins" }];
+  const pluginCatalog: import("../../shared/types.ts").PluginCatalogView["plugins"] = [
+    { id: "github", version: "1.0.0", manifest: { name: "GitHub", description: "查看和管理代码仓库、议题与拉取请求。", mockIcon: githubIcon, extensions: { "com.hob.plugins": { publisher: "GitHub", categories: ["development"] } } }, installed: false },
+    { id: "gmail", version: "1.0.0", manifest: { name: "Gmail", description: "查找邮件、创建草稿并管理邮件。", mockIcon: gmailIcon, extensions: { "com.hob.plugins": { publisher: "Google", categories: ["communication"] } } }, installed: false },
+    { id: "email", version: "1.0.0", manifest: { ...emailManifest, mockIcon: emailIcon }, installed: false },
+    { id: "vault", version: "1.0.0", source: "builtin", sourceName: "Hob 自带", manifest: { name: "密码库", description: "Saves the usernames and passwords for your websites on this machine, encrypted. Assistants can see which logins you have and ask you to save new ones on a card, but never the passwords: when a site needs a login, Hob fills it into the page itself after you approve. The key is stored next to the vault in Hob's data folder, so anyone who can read that folder can read the vault.", extensions: { "com.hob.plugins": { publisher: "Hob", categories: ["productivity"] } } }, installed: false },
+    { id: "calendar", version: "1.0.0", manifest: { name: "日历", description: "查看和安排日程。", extensions: { "com.hob.plugins": { categories: ["productivity"] } } }, installed: false },
+  ];
+  const mockPluginModelOriginals = new Map<string, import("../../shared/types.ts").PluginProviderModelView>();
+  const mockPlugin = (id: string): PluginView => {
+    const found = pluginViews.find(p => p.plugin.id === id);
+    if (!found) throw new Error(`插件 ${id} 未安装`);
+    return found;
+  };
+  const makePlugin = (id: string, source: "official" | "custom" | "builtin"): PluginView => {
+    const config: PluginView["config"] = id === "email" ? Object.fromEntries(Object.entries(emailManifest.userConfig).map(([key, field]) => [key, { ...field, ...("sensitive" in field && field.sensitive ? { configured: false } : {}) }])) : id === "github" ? { GITHUB_PERSONAL_ACCESS_TOKEN: { type: "string", title: "个人访问令牌", description: "在 [GitHub](https://github.com/settings/personal-access-tokens) 创建个人访问令牌。", required: true, sensitive: true, configured: false } } : id === "gmail" ? { GOOGLE_CLIENT_ID: { type: "string", title: "OAuth 客户端 ID", required: true }, GOOGLE_CLIENT_SECRET: { type: "string", title: "OAuth 客户端密钥", required: true, sensitive: true, configured: false } } : {};
+    const missing = Object.keys(config);
+    return { plugin: { id, version: "1.0.0", source, enabled: true, tools: {}, config: {} }, manifest: { name: id }, config, missing, services: [{ pluginId: id, name: id, status: missing.length ? "pending_config" : "connected", missing, tools: [], ...(id === "gmail" ? { oauth: { declared: true, loggedIn: false } } : {}) }] };
+  };
+  const github = makePlugin("github", "official");
+  github.manifest = pluginCatalog[0]!.manifest;
+  github.config.GITHUB_PERSONAL_ACCESS_TOKEN!.configured = true;
+  github.missing = [];
+  github.services[0]!.status = "connected";
+  github.services[0]!.missing = [];
+  const githubTools: [string, string, boolean][] = [
+    ["search_repositories", "Search for repositories matching a query.", true], ["get_repository", "Get details for a repository.", true], ["list_issues", "List issues in a repository.", true], ["get_issue", "Get details for an issue.", true], ["search_issues", "Search issues across repositories.", true], ["create_issue", "Create an issue in a repository.", false], ["update_issue", "Update an existing issue.", false], ["add_issue_comment", "Add a comment to an issue.", false],
+    ["list_pull_requests", "List pull requests in a repository.", true], ["get_pull_request", "Get details for a pull request.", true], ["create_pull_request", "Create a pull request.", false], ["update_pull_request", "Update a pull request.", false], ["merge_pull_request", "Merge a pull request.", false], ["get_pull_request_files", "List files changed by a pull request.", true], ["get_pull_request_comments", "List comments on a pull request.", true], ["create_pull_request_review", "Create a review for a pull request.", false],
+    ["list_branches", "List branches in a repository.", true], ["create_branch", "Create a branch in a repository.", false], ["get_file_contents", "Get the contents of a file.", true], ["search_code", "Search for code across repositories.", true], ["create_or_update_file", "Create or update a repository file.", false], ["delete_file", "Delete a file from a repository.", false], ["list_commits", "List commits on a branch.", true], ["get_commit", "Get details for a commit.", true], ["list_releases", "List releases in a repository.", true], ["get_release", "Get details for a release.", true], ["list_tags", "List tags in a repository.", true], ["get_user", "Get details for a user.", true], ["list_workflows", "List workflows in a repository.", true], ["run_workflow", "Start a workflow run.", false],
+  ];
+  github.services[0]!.tools = githubTools.map(([name, description, readOnlyHint]) => ({ name, toolName: `github_${name}`, enabled: true, description, inputSchema: {}, annotations: { readOnlyHint } }));
+  const gmail = makePlugin("gmail", "official");
+  gmail.manifest = pluginCatalog[1]!.manifest;
+  gmail.services[0]!.tools = ([ ["search_messages", "Search messages matching a query."], ["get_message", "Get the contents of a message."], ["create_draft", "Create a draft message."], ["modify_message_labels", "Add or remove labels from a message."] ] as const).map(([name, description], index) => ({ name, toolName: `gmail_${name}`, enabled: true, description, inputSchema: {}, annotations: { readOnlyHint: index < 2 } }));
+  const custom = makePlugin("custom-service", "custom");
+  custom.manifest = { name: "团队笔记", description: "自定义 MCP" };
+  custom.services[0]!.status = "error";
+  custom.services[0]!.error = "Error: connect ECONNREFUSED 127.0.0.1:7071";
+  delete custom.services[0]!.oauth;
+  const email = makePlugin("email", "official");
+  email.manifest = pluginCatalog[2]!.manifest;
+  email.profiles = ["工作邮箱", "个人"].map((name, index) => ({ id: `email-profile-${index}`, name, config: Object.fromEntries(Object.entries(email.config).map(([key, field]) => [key, { ...field, ...(key === "EMAIL_ADDRESS" ? { value: index === 0 ? "work@corp.example" : "lin@qq.example" } : key === "EMAIL_PASSWORD" ? { configured: index === 0 } : {}) }])), missing: index === 0 ? [] : ["EMAIL_PASSWORD"] }));
+  email.plugin.profiles = email.profiles.map(profile => ({ id: profile.id, name: profile.name, config: {} }));
+  email.missing = ["EMAIL_PASSWORD"];
+  email.services[0]!.missing = ["EMAIL_PASSWORD"];
+  email.services[0]!.status = "pending_config";
+  email.services[0]!.tools = ([
+    ["list_folders", "列出邮箱里的文件夹和未读数。", true], ["search_messages", "按条件搜索邮件，最新的在前。", true], ["get_message", "读一封邮件的正文和附件列表。", true], ["create_draft", "写一封草稿存进草稿箱。", false], ["send_message", "发送一封邮件。", false], ["move_message", "移动邮件到另一个文件夹。", false], ["delete_message", "删除一封邮件。", false], ["mark_message", "标记邮件已读或未读。", false],
+  ] as [string, string, boolean][]).map(([name, description, readOnlyHint]) => ({ name, toolName: `email_${name}`, enabled: true, description, inputSchema: {}, annotations: { readOnlyHint } }));
+  const vault = makePlugin("vault", "builtin");
+  vault.manifest = pluginCatalog[3]!.manifest;
+  vault.missing = [];
+  vault.services[0]!.status = "connected";
+  vault.services[0]!.missing = [];
+  vault.credentialRoles = ["list", "secret", "generate", "save", "delete"];
+  vault.autoLogins = scene === "vault-empty" ? [] : [{ provider: "vault", itemId: "vault-forum", host: "forum.example.net", username: "lin@example.com", at: new Date().toISOString() }];
+  vault.services[0]!.tools = ([
+    ["list_logins", "列出密码库里的登录，不返回密码。", true],
+    ["save_login", "请用户把一个登录存进密码库。", false],
+  ] as [string, string, boolean][]).map(([name, description, readOnlyHint]) => ({ name, toolName: `vault_${name}`, enabled: true, description, inputSchema: {}, annotations: { readOnlyHint: Boolean(readOnlyHint) } }));
+  const mockVaultLogins: PluginLoginView[] = scene === "vault-empty" ? [] : [
+    { id: "vault-forum", name: "Example 论坛", username: "lin@example.com", uris: ["https://forum.example.net/login"], folder: "论坛账号", hasPassword: true, hasTotp: true },
+    { id: "vault-photo", name: "摄影社区", username: "linphoto", uris: ["https://photo.example.org"], folder: "论坛账号", hasPassword: true, hasTotp: false },
+    { id: "vault-books", name: "二手书市", username: "lin@example.com", uris: ["https://books.example.com"], folder: "论坛账号", hasPassword: true, hasTotp: false },
+    { id: "vault-shop", name: "Example 商城", username: "lin@example.com", uris: ["https://shop.example.com"], folder: "购物", hasPassword: true, hasTotp: false },
+    { id: "vault-water", name: "水电缴费", username: "13800000000", uris: ["https://pay.example.cn"], folder: "生活", hasPassword: true, hasTotp: false },
+    { id: "vault-router", name: "家里路由器", username: "admin", uris: ["http://192.168.1.1"], folder: "家里", hasPassword: true, hasTotp: false },
+  ];
+  for (const plugin of [github, gmail, email, vault, custom]) plugin.plugin.assistants = ["hob", "page"];
+  const isProviderScene = scene.startsWith("provider-");
+  const mockHost: import("../../shared/types.ts").ProviderHostStatusView = {
+    status: scene === "provider-login-cli" || scene === "provider-login-apikey" ? "stopped" : "running",
+    bunVersion: "1.4.2",
+    bunInstalled: scene !== "provider-install-progress",
+    ...(scene === "provider-login-cli" || scene === "provider-login-apikey" ? {} : { pid: 41234 }),
+    idleMs: 600_000,
+  };
+  const nowIso = new Date().toISOString();
+  const tenMinAgo = new Date(Date.now() - 10 * 60_000).toISOString();
+  const twoHoursAgo = new Date(Date.now() - 2 * 3600_000).toISOString();
+  const in14Min = new Date(Date.now() + 14 * 60_000).toISOString();
+  const in9Min = new Date(Date.now() + 9 * 60_000).toISOString();
+  const copilotModels: import("../../shared/types.ts").PluginProviderModelView[] = [
+    { id: "claude-sonnet-4.5", apiId: "claude-sonnet-4.5", name: "Claude Sonnet 4.5", api: "anthropic-messages", reasoning: true, variants: ["low", "medium", "high"], thinkingLevels: ["off", "low", "medium", "high"], input: ["text", "image"], contextWindow: 200_000, maxTokens: 16_384 },
+    { id: "gpt-4.1", apiId: "gpt-4.1", name: "GPT-4.1", api: "openai-completions", reasoning: false, variants: [], thinkingLevels: ["off"], input: ["text", "image"], contextWindow: 128_000, maxTokens: 16_384 },
+    { id: "o3-mini", apiId: "o3-mini", name: "o3-mini", api: "openai-responses", reasoning: true, variants: ["low", "medium", "high"], thinkingLevels: ["low", "medium", "high"], input: ["text"], contextWindow: 200_000, maxTokens: 32_768 },
+    { id: "gpt-4o", apiId: "gpt-4o", name: "GPT-4o", api: "openai-completions", reasoning: false, variants: [], thinkingLevels: ["off"], input: ["text", "image"], contextWindow: 128_000, maxTokens: 16_384 },
+    { id: "claude-haiku-4.5", apiId: "claude-haiku-4.5", name: "Claude Haiku 4.5", api: "anthropic-messages", reasoning: true, variants: ["low", "high"], thinkingLevels: ["off", "low", "high"], input: ["text", "image"], contextWindow: 200_000, maxTokens: 8_192 },
+    { id: "gemini-2.5-pro", apiId: "gemini-2.5-pro", name: "Gemini 2.5 Pro", api: "openai-completions", reasoning: true, variants: ["medium", "high"], thinkingLevels: ["off", "medium", "high"], input: ["text", "image"], contextWindow: 1_000_000, maxTokens: 16_384 },
+  ];
+  const zcodeModels: import("../../shared/types.ts").PluginProviderModelView[] = [
+    { id: "glm-4.7", apiId: "glm-4.7", name: "GLM-4.7", api: "openai-completions", reasoning: true, variants: ["low", "medium", "high"], thinkingLevels: ["off", "low", "medium", "high"], input: ["text"], contextWindow: 128_000, maxTokens: 8_192 },
+    { id: "glm-4.6", apiId: "glm-4.6", name: "GLM-4.6", api: "openai-completions", reasoning: true, variants: ["high"], thinkingLevels: ["off", "high"], input: ["text"], contextWindow: 128_000, maxTokens: 8_192 },
+    { id: "glm-4.5-air", apiId: "glm-4.5-air", name: "GLM-4.5-Air", api: "openai-completions", reasoning: false, variants: [], thinkingLevels: ["off"], input: ["text"], contextWindow: 128_000, maxTokens: 8_192 },
+  ];
+  const providerCatalogItems = [
+    {
+      id: "zen-free",
+      version: "1.0.0",
+      hasProviders: true,
+      manifest: {
+        name: "zen-free",
+        displayName: "Zen Free",
+        description: "免费公开模型，无需登录即可启用，适合试用和日常对话。",
+        mockBrand: "mem",
+        extensions: {
+          "com.hob.plugins": {
+            publisher: "magpie-community",
+            sourceUrl: "https://github.com/magpie-community/plugins/tree/main/packages/zen-free",
+            categories: ["providers"],
+            unofficial: true,
+            reviewedVersion: "0.1.28",
+            permissions: ["network", "bun_runtime"],
+            providers: [{ package: "@magpie-community/opencode-zen-free-auth", version: "0.1.28", integrity: "sha512-mock" }],
+          },
+        },
+      },
+      installed: false,
+    },
+    {
+      id: "copilot",
+      version: scene === "provider-update-confirm" ? "0.5.0" : "0.4.2",
+      hasProviders: true,
+      manifest: {
+        name: "copilot",
+        displayName: "Copilot",
+        description: "使用 GitHub Copilot 订阅中的 Claude、GPT 与 o3 等模型。",
+        mockBrand: "github",
+        extensions: {
+          "com.hob.plugins": {
+            publisher: "magpie-community",
+            sourceUrl: "https://github.com/magpie-community/plugins/tree/main/packages/copilot",
+            categories: ["providers"],
+            unofficial: true,
+            reviewedVersion: scene === "provider-update-confirm" ? "0.5.0" : "0.4.2",
+            permissions: scene === "provider-update-confirm" ? ["network", "subprocess", "local_credentials", "bun_runtime"] : ["network", "bun_runtime"],
+            providers: [{ package: "@magpie-community/opencode-copilot-auth", version: scene === "provider-update-confirm" ? "0.5.0" : "0.4.2", integrity: "sha512-mock" }],
+          },
+        },
+      },
+      installed: false,
+    },
+    {
+      id: "zcode",
+      version: "1.1.0",
+      hasProviders: true,
+      manifest: {
+        name: "zcode",
+        displayName: "ZCode",
+        description: "接入 GLM 编程套餐模型，附带联网搜索与网页读取工具。",
+        mockBrand: "zhipu",
+        extensions: {
+          "com.hob.plugins": {
+            publisher: "magpie-community",
+            sourceUrl: "https://github.com/magpie-community/plugins/tree/main/packages/zcode",
+            categories: ["providers", "search"],
+            unofficial: true,
+            reviewedVersion: "1.1.0",
+            permissions: ["network", "bun_runtime"],
+            providers: [{ package: "@magpie-community/opencode-zcode-auth", version: "1.1.0", integrity: "sha512-mock" }],
+          },
+        },
+      },
+      installed: false,
+    },
+    {
+      id: "chatgpt",
+      version: "0.8.4",
+      hasProviders: true,
+      manifest: {
+        name: "chatgpt",
+        displayName: "ChatGPT 订阅",
+        description: "使用 ChatGPT Plus / Pro 订阅中的 GPT 与 Codex 模型。",
+        mockBrand: "openai",
+        extensions: {
+          "com.hob.plugins": {
+            publisher: "numman-ali",
+            sourceUrl: "https://github.com/numman-ali/opencode-openai-codex-auth",
+            categories: ["providers"],
+            unofficial: true,
+            reviewedVersion: "0.8.4",
+            permissions: ["network", "bun_runtime"],
+            providers: [{ package: "opencode-openai-codex-auth", version: "0.8.4", integrity: "sha512-mock" }],
+          },
+        },
+      },
+      installed: false,
+    },
+    {
+      id: "agy-cli",
+      version: "0.3.1",
+      hasProviders: true,
+      manifest: {
+        name: "agy-cli",
+        displayName: "Antigravity",
+        description: "通过运行 Hob 的机器上已登录的 agy CLI 接入 Antigravity 账号中的模型，支持动态获取可用模型列表与思考档。",
+        mockBrand: "google",
+        extensions: {
+          "com.hob.plugins": {
+            publisher: "magpie-community",
+            sourceUrl: "https://github.com/magpie-community/plugins/tree/main/packages/agy-cli",
+            categories: ["providers"],
+            unofficial: true,
+            reviewedVersion: "0.3.1",
+            summary: { zh: "通过运行 Hob 机器上的 agy CLI 接入 Antigravity 模型。", en: "Connect Antigravity models via the local agy CLI on the Hob host." },
+            permissions: ["network", "subprocess", "local_credentials", "bun_runtime"],
+            providers: [{ package: "@magpie-community/opencode-agy-cli-auth", version: "0.3.1", integrity: "sha512-mock" }],
+          },
+        },
+      },
+      installed: false,
+    },
+  ];
+  if (isProviderScene) {
+    pluginCatalog.unshift(...providerCatalogItems);
+  }
+
+  const copilotPlugin: PluginView = {
+    plugin: {
+      id: "copilot",
+      version: scene === "provider-update-confirm" ? "0.5.0" : "0.4.2",
+      source: "official",
+      enabled: scene !== "provider-update-confirm",
+      tools: {},
+      config: {},
+      ...(scene === "provider-update-confirm" ? { needsApproval: true, capabilityChanges: ["新增权限：subprocess", "新增权限：local_credentials"] } : {}),
+    },
+    manifest: providerCatalogItems[1]!.manifest,
+    config: {},
+    missing: [],
+    services: [],
+    providerHost: mockHost,
+    providers: [
+      {
+        hobProviderId: "plugin-copilot",
+        providerId: "github-copilot",
+        name: "Copilot",
+        single: false,
+        methods: [{ index: 0, type: "oauth", label: "设备码登录" }],
+        accounts: scene === "provider-login-device"
+          ? []
+          : scene === "provider-update-confirm" || scene === "provider-errors"
+            ? [{ id: "acc-1", providerId: "github-copilot", displayName: "lin@example.com", authType: "oauth", active: true, status: "logged_in", plan: "Pro", createdAt: twoHoursAgo, updatedAt: tenMinAgo }]
+            : [
+                { id: "acc-1", providerId: "github-copilot", displayName: "lin@example.com", authType: "oauth", active: true, status: "logged_in", plan: "Pro", createdAt: twoHoursAgo, updatedAt: tenMinAgo },
+                { id: "acc-2", providerId: "github-copilot", displayName: "work@example.org", authType: "oauth", active: false, status: "needs_relogin", plan: "Enterprise", lastError: "授权令牌已失效", createdAt: twoHoursAgo, updatedAt: twoHoursAgo },
+                { id: "acc-3", providerId: "github-copilot", displayName: "dev@example.net", authType: "oauth", active: false, status: "expired", plan: "Pro", lastError: "登录已于昨天过期", createdAt: twoHoursAgo, updatedAt: twoHoursAgo },
+              ],
+        activeAccountId: scene === "provider-login-device" ? undefined : "acc-1",
+        models: scene === "provider-login-device" ? [] : scene === "provider-errors" ? copilotModels.slice(0, 4) : copilotModels,
+        ...(scene === "provider-errors" ? { modelsCachedAt: twoHoursAgo, modelsError: "连接 api.example.com 超时（10 秒）。", modelsFellBack: true } : {}),
+        usageSupported: true,
+        ...(scene === "provider-errors"
+          ? { usage: { windows: [], error: "服务端返回 429，请求过于频繁，请稍后重试。", fetchedAt: nowIso } }
+          : scene === "provider-login-device"
+            ? {}
+            : {
+                usage: {
+                  plan: "Pro",
+                  fetchedAt: nowIso,
+                  windows: [
+                    { name: "5 小时", used: 40, display: "已用 40%", resetsAt: new Date(Date.now() + 2 * 3600_000).toISOString() },
+                    { name: "本周", used: 12, display: "已用 12%", resetsAt: new Date(Date.now() + 3 * 86400_000).toISOString() },
+                  ],
+                },
+              }),
+        ...(scene === "provider-login-device"
+          ? {
+              signIn: {
+                sessionId: "mock-device-1",
+                pluginId: "copilot",
+                providerId: "github-copilot",
+                methodIndex: 0,
+                kind: "device_code",
+                status: "waiting",
+                userCode: "ABCD-1234",
+                url: "https://github.com/login/device",
+                createdAt: nowIso,
+                expiresAt: in14Min,
+              },
+            }
+          : {}),
+      },
+    ],
+  };
+
+  const zcodePlugin: PluginView = {
+    plugin: { id: "zcode", version: "1.1.0", source: "official", enabled: true, assistants: ["hob", "page"], tools: { save_snippet: { enabled: false } }, config: {} },
+    manifest: providerCatalogItems[2]!.manifest,
+    config: {},
+    missing: [],
+    services: [
+      {
+        pluginId: "zcode",
+        name: "zcode-tools",
+        status: "connected",
+        tools: [
+          { name: "web_search", toolName: "zcode_web_search", enabled: true, description: "使用套餐内置搜索检索网页与技术文档。", inputSchema: {}, annotations: { readOnlyHint: true } },
+          { name: "read_webpage", toolName: "zcode_read_webpage", enabled: true, description: "读取指定网页正文并转为 Markdown。", inputSchema: {}, annotations: { readOnlyHint: true } },
+          { name: "save_snippet", toolName: "zcode_save_snippet", enabled: false, description: "将代码片段保存到 ZCode 账号收藏。", inputSchema: {}, annotations: { readOnlyHint: false } },
+        ],
+      },
+    ],
+    providerHost: { ...mockHost, status: scene === "provider-login-web" ? "running" : "stopped" },
+    providers: [
+      {
+        hobProviderId: "plugin-zcode",
+        providerId: "zcode",
+        name: "ZCode",
+        single: false,
+        methods: [
+          { index: 0, type: "oauth", label: "网页登录" },
+          { index: 1, type: "api", label: "API 密钥", placeholder: "sk-..." },
+        ],
+        accounts: scene === "provider-login-web" || scene === "provider-login-apikey"
+          ? []
+          : [{ id: "z-1", providerId: "zcode", displayName: "lin@example.com", authType: "oauth", active: true, status: "logged_in", plan: "GLM 编程套餐 Pro", hint: "模型与工具共用此账号", createdAt: twoHoursAgo, updatedAt: tenMinAgo }],
+        activeAccountId: scene === "provider-login-web" || scene === "provider-login-apikey" ? undefined : "z-1",
+        models: scene === "provider-login-web" || scene === "provider-login-apikey" ? [] : zcodeModels,
+        usageSupported: false,
+        ...(scene === "provider-login-web"
+          ? {
+              signIn: {
+                sessionId: "mock-web-1",
+                pluginId: "zcode",
+                providerId: "zcode",
+                methodIndex: 0,
+                kind: "server_poll",
+                status: "waiting",
+                url: "https://zcode.example.com/oauth/authorize",
+                createdAt: nowIso,
+                expiresAt: in9Min,
+              },
+            }
+          : scene === "provider-login-apikey"
+            ? {
+                signIn: {
+                  sessionId: "mock-api-tab",
+                  pluginId: "zcode",
+                  providerId: "zcode",
+                  methodIndex: 1,
+                  kind: "api",
+                  status: "pending",
+                  createdAt: nowIso,
+                  expiresAt: in9Min,
+                },
+              }
+            : {}),
+      },
+    ],
+  };
+
+  const chatgptPlugin: PluginView = {
+    plugin: { id: "chatgpt", version: "0.8.4", source: "official", enabled: true, tools: {}, config: {} },
+    manifest: providerCatalogItems[3]!.manifest,
+    config: {},
+    missing: [],
+    services: [],
+    providerHost: mockHost,
+    providers: [
+      {
+        hobProviderId: "plugin-chatgpt",
+        providerId: "openai-codex",
+        name: "ChatGPT 订阅",
+        single: false,
+        methods: [{ index: 0, type: "oauth", label: "网页登录" }],
+        accounts: [],
+        models: [],
+        usageSupported: false,
+        ...(scene === "provider-login-paste"
+          ? {
+              signIn: {
+                sessionId: "mock-paste-1",
+                pluginId: "chatgpt",
+                providerId: "openai-codex",
+                methodIndex: 0,
+                kind: "loopback_paste",
+                status: "waiting",
+                url: "https://auth.example.com/oauth/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback",
+                loopbackPasteAllowed: true,
+                createdAt: nowIso,
+                expiresAt: in9Min,
+              },
+            }
+          : {}),
+      },
+    ],
+  };
+
+  const agyPlugin: PluginView = {
+    plugin: { id: "agy-cli", version: "0.3.1", source: "official", enabled: true, tools: {}, config: {} },
+    manifest: providerCatalogItems[4]!.manifest,
+    config: {},
+    missing: [],
+    services: [],
+    providerHost: { ...mockHost, status: "stopped" },
+    providers: [
+      {
+        hobProviderId: "plugin-agy-cli",
+        providerId: "agy-cli",
+        name: "Antigravity",
+        single: true,
+        methods: [{ index: 0, type: "oauth", label: "本机 agy CLI" }],
+        accounts: [],
+        models: [],
+        usageSupported: true,
+        cli: { declared: true, name: "agy CLI", installed: false, installing: false },
+      },
+    ],
+  };
+
+  if (scene === "readme-plugins") {
+    const readmeCatalog: import("../../shared/types.ts").PluginCatalogView["plugins"] = [
+      {
+        id: "github",
+        version: "1.0.0",
+        manifest: {
+          name: "GitHub",
+          displayName: "GitHub",
+          description: L("查看和管理代码仓库、议题与拉取请求。", "Browse and manage repositories, issues and pull requests."),
+          mockIcon: githubIcon,
+          extensions: { "com.hob.plugins": { publisher: "GitHub", categories: ["development"] } },
+        },
+        installed: true,
+      },
+      {
+        id: "cloudflare",
+        version: "1.0.0",
+        manifest: {
+          name: "Cloudflare",
+          displayName: "Cloudflare",
+          description: L("管理域名解析、Workers、R2 与 D1 等 Cloudflare 资源。", "Manage DNS, Workers, R2, D1 and the rest of your Cloudflare account."),
+          mockIcon: cloudflareIcon,
+          extensions: { "com.hob.plugins": { publisher: "Cloudflare", categories: ["development"] } },
+        },
+        installed: true,
+      },
+      {
+        id: "gmail",
+        version: "1.0.0",
+        manifest: {
+          name: "Gmail",
+          displayName: "Gmail",
+          description: L("查找邮件、起草回复并管理收件箱。", "Search mail, draft replies and organize your inbox."),
+          mockIcon: gmailIcon,
+          extensions: { "com.hob.plugins": { publisher: "Google", categories: ["communication"] } },
+        },
+        installed: true,
+      },
+      {
+        id: "email",
+        version: "1.0.0",
+        manifest: {
+          name: "email",
+          displayName: L("邮箱", "Email"),
+          description: L("用应用专用密码连接任意支持 IMAP/SMTP 的邮箱。", "Connect any IMAP/SMTP mailbox with an app password."),
+          mockIcon: emailIcon,
+          extensions: { "com.hob.plugins": { publisher: "Hob", categories: ["communication"] } },
+        },
+        installed: false,
+      },
+      {
+        id: "bitwarden",
+        version: "2.0.3",
+        manifest: {
+          name: "Bitwarden",
+          displayName: "Bitwarden",
+          description: L("连接 Bitwarden 密码库，登录网站时由 Hob 直接填写密码。", "Connect your Bitwarden vault so Hob fills logins directly."),
+          mockIcon: bitwardenIcon,
+          extensions: { "com.hob.plugins": { publisher: "Bitwarden", categories: ["productivity"] } },
+        },
+        installed: true,
+      },
+      {
+        id: "copilot",
+        version: "1.0.1",
+        hasProviders: true,
+        manifest: {
+          name: "copilot",
+          displayName: "Copilot",
+          description: L("使用 GitHub Copilot 订阅中的 Claude、GPT 与 o3 等模型。", "Use Claude, GPT and o3 models from your Copilot subscription."),
+          mockIcon: copilotIcon,
+          extensions: {
+            "com.hob.plugins": {
+              publisher: "magpie-community",
+              categories: ["providers"],
+              unofficial: true,
+              reviewedVersion: "0.1.2",
+              permissions: ["network", "bun_runtime"],
+              providers: [{ package: "@magpie-community/opencode-copilot-auth", version: "0.1.2" }],
+            },
+          },
+        },
+        installed: true,
+      },
+      {
+        id: "chatgpt",
+        version: "1.0.1",
+        hasProviders: true,
+        manifest: {
+          name: "chatgpt",
+          displayName: L("ChatGPT 订阅", "ChatGPT"),
+          description: L("使用 ChatGPT Plus / Pro 订阅调用 GPT 与 Codex 模型。", "Use GPT and Codex models with ChatGPT Plus or Pro."),
+          mockIcon: chatgptIcon,
+          extensions: {
+            "com.hob.plugins": {
+              publisher: "numman-ali",
+              categories: ["providers"],
+              unofficial: true,
+              reviewedVersion: "4.4.0",
+              permissions: ["network", "bun_runtime"],
+              providers: [{ package: "opencode-openai-codex-auth", version: "4.4.0" }],
+            },
+          },
+        },
+        installed: false,
+      },
+      {
+        id: "zcode",
+        version: "1.0.1",
+        hasProviders: true,
+        manifest: {
+          name: "zcode",
+          displayName: "ZCode",
+          description: L("接入智谱 GLM 编程套餐与团队席位，支持网页登录与额度查询。", "Connect the GLM Coding Plan with web sign-in and quota tracking."),
+          mockIcon: zcodeIcon,
+          extensions: {
+            "com.hob.plugins": {
+              publisher: "magpie-community",
+              categories: ["providers"],
+              unofficial: true,
+              reviewedVersion: "0.1.69",
+              permissions: ["network", "bun_runtime"],
+              providers: [{ package: "@magpie-community/opencode-zcode-auth", version: "0.1.69" }],
+            },
+          },
+        },
+        installed: false,
+      },
+      {
+        id: "agy-cli",
+        version: "1.0.1",
+        hasProviders: true,
+        manifest: {
+          name: "agy-cli",
+          displayName: "Antigravity",
+          description: L("通过本机 agy CLI 接入 Antigravity 订阅模型与思考档。", "Connect Antigravity models through the local agy CLI."),
+          mockIcon: agyCliIcon,
+          extensions: {
+            "com.hob.plugins": {
+              publisher: "magpie-community",
+              categories: ["providers"],
+              unofficial: true,
+              reviewedVersion: "0.1.115",
+              permissions: ["network", "subprocess", "local_credentials", "bun_runtime"],
+              providers: [{ package: "@magpie-community/opencode-agy-cli-auth", version: "0.1.115" }],
+            },
+          },
+        },
+        installed: false,
+      },
+    ];
+    pluginCatalog.splice(0, pluginCatalog.length, ...readmeCatalog);
+    const makeConnected = (item: (typeof readmeCatalog)[number], role?: "vault"): PluginView => ({
+      plugin: { id: item.id, version: item.version, source: (item.source as "official" | "builtin" | undefined) ?? "official", enabled: true, assistants: ["hob", "page"], tools: {}, config: {} },
+      manifest: item.manifest,
+      config: {},
+      missing: [],
+      ...(role === "vault" ? { credentialRoles: ["list", "secret", "generate", "save", "delete"] as PluginView["credentialRoles"] } : {}),
+      services: [{ pluginId: item.id, name: item.id, status: "connected", missing: [], tools: [] }],
+    });
+    const readmeCopilot: PluginView = {
+      ...copilotPlugin,
+      plugin: { ...copilotPlugin.plugin, version: "1.0.1", enabled: true },
+      manifest: readmeCatalog[5]!.manifest,
+      providers: copilotPlugin.providers?.map((p) => ({
+        ...p,
+        accounts: [p.accounts[0]!],
+      })),
+    };
+    pluginViews.push(
+      makeConnected(readmeCatalog[0]!),
+      makeConnected(readmeCatalog[1]!),
+      makeConnected(readmeCatalog[2]!),
+      makeConnected(readmeCatalog[4]!, "vault"),
+      readmeCopilot,
+    );
+  } else if (scene === "tool-login-signed-out" || scene === "tool-login-device" || scene === "tool-login-signed-in" || scene === "tool-login-optional") {
+    const codeforgePlugin: PluginView = {
+      plugin: {
+        id: "codeforge",
+        version: "1.2.0",
+        source: "official",
+        sourceName: "Hob 官方",
+        enabled: true,
+        assistants: ["hob", "page"],
+        tools: {},
+        config: { SIGN_COMMITS: true },
+      },
+      manifest: {
+        name: "codeforge",
+        displayName: "CodeForge",
+        version: "1.2.0",
+        description: L(
+          "连接 CodeForge 代码托管与流水线，查看合并请求与构建状态，并在命令行中自动携带已登录身份。",
+          "Connect CodeForge repositories and pipelines, inspect merge requests and builds, and carry your signed-in identity in CLI commands.",
+        ),
+        extensions: { "com.hob.plugins": { publisher: "CodeForge", categories: ["development"], bin: "bin" } },
+      },
+      config: {
+        SIGN_COMMITS: {
+          type: "boolean",
+          title: L("提交时自动署名", "Sign commits automatically"),
+          description: L("通过自带命令行提交代码时附带协作署名。", "Append a co-author trailer when committing via the bundled CLI."),
+          default: true,
+          value: true,
+        },
+        WORKSPACE: {
+          type: "string",
+          title: L("工作区", "Workspace"),
+          description: L("选填。只用这个工作区的仓库；不填就是账号能访问的全部。", "Optional. Limit to repositories in this workspace; leave blank for all you can access."),
+          value: "",
+        },
+        API_TOKEN: {
+          type: "string",
+          title: L("访问令牌", "Access token"),
+          description: L("选填。不登录时用它连接，在 CodeForge 的个人设置里创建。", "Optional. Used when not signed in; create it in CodeForge personal settings."),
+          sensitive: true,
+          configured: true,
+        },
+        DEPLOY_KEY: {
+          type: "file",
+          title: L("部署密钥", "Deploy key"),
+          description: L("在 CodeForge 的项目设置里生成部署密钥，把下载的文件选上来。", "Generate a deploy key in CodeForge project settings and choose the downloaded file."),
+          sensitive: true,
+          configured: false,
+        },
+      },
+      missing: [],
+      login: {
+        service: "codeforge",
+        roles: ["status", "start", "poll", "logout"],
+        status: scene === "tool-login-signed-in"
+          ? {
+              signedIn: true,
+              account: "lin-dev",
+              detail: L(
+                "已登录 lin-dev · 应用已装在 2 个工作区上 · [管理授权](https://codeforge.example/apps)",
+                "Signed in as lin-dev · Installed on 2 workspaces · [Manage access](https://codeforge.example/apps)",
+              ),
+            }
+          : scene === "tool-login-optional"
+            ? {
+                signedIn: false,
+                optional: true,
+                detail: L("正在用访问令牌（lin-dev），不用再登录。", "Using the access token (lin-dev); no sign-in needed."),
+                startLabel: L("改用 CodeForge 登录", "Sign in with CodeForge instead"),
+              }
+            : { signedIn: false },
+      },
+      services: [
+        {
+          pluginId: "codeforge",
+          name: "codeforge",
+          status: "connected",
+          tools: [
+            { name: "list_repos", toolName: "codeforge_list_repos", enabled: true, description: L("列出当前账号可访问的代码仓库。", "List repositories accessible to the signed-in account."), inputSchema: {}, annotations: { readOnlyHint: true } },
+            { name: "list_merge_requests", toolName: "codeforge_list_merge_requests", enabled: true, description: L("按状态查看仓库的合并请求与评审意见。", "Inspect open merge requests and review comments."), inputSchema: {}, annotations: { readOnlyHint: true } },
+            { name: "create_merge_request", toolName: "codeforge_create_merge_request", enabled: true, description: L("为指定分支创建新的合并请求。", "Create a new merge request for a branch."), inputSchema: {}, annotations: { readOnlyHint: false } },
+            { name: "trigger_pipeline", toolName: "codeforge_trigger_pipeline", enabled: true, description: L("在目标分支触发一次持续集成流水线。", "Trigger a CI pipeline run on the target branch."), inputSchema: {}, annotations: { readOnlyHint: false } },
+          ],
+        },
+      ],
+    };
+    pluginViews.push(codeforgePlugin, email, vault);
+  } else if (isProviderScene) {
+    if (scene === "provider-install-progress") {
+      pluginViews.push(github, vault);
+    } else if (scene === "provider-install-done") {
+      pluginViews.push(copilotPlugin, github, vault);
+    } else if (scene === "provider-login-paste" || scene === "provider-login-cli") {
+      pluginViews.push(copilotPlugin, zcodePlugin, chatgptPlugin, agyPlugin, github, vault);
+    } else {
+      pluginViews.push(copilotPlugin, zcodePlugin, github, vault);
+    }
+  } else {
+    pluginViews.push(github, gmail, email, vault, custom);
+  }
+  const mockPluginProviderSummaries: import("../../shared/types.ts").PluginProviderSummary[] = isProviderScene
+    ? [
+        { id: "plugin-copilot", pluginId: "copilot", pluginName: "Copilot", providerId: "github-copilot", name: "Copilot", enabled: true, loggedIn: true, activeAccount: "lin@example.com", modelCount: 6 },
+        { id: "plugin-zen-free", pluginId: "zen-free", pluginName: "Zen Free", providerId: "zen-free", name: "Zen Free", enabled: true, loggedIn: true, activeAccount: "public", modelCount: 4 },
+        { id: "plugin-zcode", pluginId: "zcode", pluginName: "ZCode", providerId: "zcode", name: "ZCode", enabled: true, loggedIn: true, activeAccount: "lin@example.com", modelCount: 3 },
+        { id: "plugin-chatgpt", pluginId: "chatgpt", pluginName: "ChatGPT 订阅", providerId: "openai-codex", name: "ChatGPT 订阅", enabled: true, loggedIn: false, modelCount: 5, error: "需要重新登录" },
+      ]
+    : [];
+  const mockPluginModels: import("../../shared/types.ts").ModelInfo[] = isProviderScene
+    ? [
+        { ref: "anthropic/claude-sonnet-4-5", provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", reasoning: true, thinkingLevels: ["off", "low", "medium", "high"], input: ["text", "image"], contextWindow: 200_000, maxTokens: 16_384, cost: { input: 3, output: 15 } },
+        { ref: "plugin-copilot/gpt-4.1", provider: "plugin-copilot", id: "gpt-4.1", name: "GPT-4.1", reasoning: false, thinkingLevels: ["off"], input: ["text", "image"], contextWindow: 128_000, maxTokens: 16_384, cost: { input: 0, output: 0 } },
+        { ref: "plugin-copilot/o3-mini", provider: "plugin-copilot", id: "o3-mini", name: "o3-mini", reasoning: true, thinkingLevels: ["low", "medium", "high"], input: ["text"], contextWindow: 200_000, maxTokens: 32_768, cost: { input: 0, output: 0 } },
+        { ref: "plugin-chatgpt/gpt-5.2-codex", provider: "plugin-chatgpt", id: "gpt-5.2-codex", name: "GPT-5.2 Codex", reasoning: true, thinkingLevels: ["low", "medium", "high"], input: ["text", "image"], contextWindow: 200_000, maxTokens: 32_768, cost: { input: 0, output: 0 } },
+        { ref: "plugin-zcode/glm-4.7", provider: "plugin-zcode", id: "glm-4.7", name: "GLM-4.7", reasoning: true, thinkingLevels: ["off", "low", "medium", "high"], input: ["text"], contextWindow: 128_000, maxTokens: 8_192, cost: { input: 0, output: 0 } },
+        { ref: "plugin-zen-free/qwen3-coder-free", provider: "plugin-zen-free", id: "qwen3-coder-free", name: "Qwen3 Coder Free", reasoning: false, thinkingLevels: ["off"], input: ["text"], contextWindow: 128_000, maxTokens: 8_192, cost: { input: 0, output: 0 } },
+      ]
+    : [];
+  if (isProviderScene) {
+    db.settings.settings.providers = [db.settings.settings.providers[0]!];
+    db.settings.settings.models = {
+      ...db.settings.settings.models,
+      conversation: { ref: "anthropic/claude-sonnet-4-5", thinking: "medium" },
+      work: { ref: "plugin-copilot/gpt-4.1", thinking: "off" },
+      suggest: { ref: "plugin-zen-free/qwen3-coder-free", thinking: "off" },
+      roster: [
+        { ref: "anthropic/claude-sonnet-4-5", note: "", scores: { smart: 85, cost: 55, speed: 70 }, scoresConfirmed: true, thinking: "medium" },
+        { ref: "plugin-copilot/gpt-4.1", note: "", scores: { smart: 80, cost: 10, speed: 80 }, scoresConfirmed: true, thinking: "off" },
+        { ref: "plugin-copilot/o3-mini", note: "", scores: { smart: 85, cost: 15, speed: 65 }, scoresConfirmed: true, thinking: "medium" },
+        { ref: "plugin-chatgpt/gpt-5.2-codex", note: "", scores: { smart: 90, cost: 10, speed: 70 }, scoresConfirmed: true, thinking: "high" },
+        { ref: "plugin-zcode/glm-4.7", note: "", scores: { smart: 80, cost: 15, speed: 75 }, scoresConfirmed: true, thinking: "medium" },
+        { ref: "plugin-zen-free/qwen3-coder-free", note: "", scores: { smart: 70, cost: 0, speed: 85 }, scoresConfirmed: true, thinking: "off" },
+      ],
+    };
+  }
+  const mockProfileFields = (p: PluginView, profile: NonNullable<PluginView["profiles"]>[number]) => profile.config;
+  const mockProfileMissing = (profile: NonNullable<PluginView["profiles"]>[number]) => profile.missing;
+
   const groupRules: Record<string, Rule[]> = {};
   if (scene === "g-owns" || scene === "g-owns-dark") {
     const group = db.groups.find((item) => item.id === "g-dev")!;
@@ -1915,6 +3122,7 @@ export function createMock(scene: SceneId = "s1"): HobApi {
   let desktop = clone(DESKTOP_VIEWS[desktopMockScene()]);
   const providersView = (): ProvidersView => ({
     providers: db.settings.settings.providers.map((provider) => ({ ...provider, keyConfigured: keys.has(provider.id) })),
+    ...(mockPluginProviderSummaries.length ? { pluginProviders: clone(mockPluginProviderSummaries) } : {}),
     builtin: clone(MOCK_BUILTIN),
     settings: clone(db.settings),
     models: Object.fromEntries(
@@ -2020,7 +3228,41 @@ export function createMock(scene: SceneId = "s1"): HobApi {
   };
   let usageData: { timezone: string; rows: UsageRow[]; assistants: UsageAssistant[] } | undefined;
 
+  const starsDemo = new URLSearchParams(globalThis.location?.search ?? "").has("starsDemo");
+  if (starsDemo) {
+    db.items.hob = [
+      { kind: "user", id: "star-demo-user", at: minsAgo(40), text: "整理温室的浇水计划。" },
+      { kind: "assistant", id: "star-demo-answer", at: minsAgo(39), text: "温室的浇水计划：\n\n- 春季每三天检查土壤湿度。\n- 夏季清晨浇水，保持通风。\n\n记录模板在 [种植手册](https://example.org/garden)。" },
+      { kind: "assistant", id: "star-demo-code", at: minsAgo(20), text: "可以用这条命令查看温室记录：\n\n```sh\ngarden report --weekly\n```" },
+    ];
+  }
+  let stars: import("../../shared/types.ts").StarredMessage[] = starsDemo ? ["star-demo-answer", "star-demo-code"].map((id, i) => {
+    const item = db.items.hob.find((row) => row.id === id)! as Extract<Item, { kind: "assistant" }>;
+    return { conversation: { kind: "assistant" as const, id: "hob" }, itemId: id, speaker: "hob", at: item.at, starredAt: minsAgo(i), text: item.text };
+  }) : [];
   return {
+    stars: async () => ({ stars: clone(stars) }),
+    addStar: async ({ conversation, itemId }) => {
+      const item = (conversation.kind === "assistant" ? db.items[conversation.id] : db.groupItems[conversation.id])?.find((entry) => entry.id === itemId);
+      if (!item || (item.kind !== "user" && item.kind !== "assistant")) throw new ApiError(404, "原消息已不在");
+      const starItem = item as { id: string; at: string; text: string; speaker?: string };
+      const speaker = starItem.speaker ?? (item.kind === "user" ? "user" : conversation.id);
+      const star: import("../../shared/types.ts").StarredMessage = { conversation, itemId, speaker, at: starItem.at, starredAt: new Date().toISOString(), text: starItem.text };
+      stars = [star, ...stars.filter((old) => old.conversation.kind !== conversation.kind || old.conversation.id !== conversation.id || old.itemId !== itemId)];
+      emit({ type: "stars" });
+      return { star: clone(star) };
+    },
+    deleteStar: async ({ conversation, itemId }) => { stars = stars.filter((star) => star.conversation.kind !== conversation.kind || star.conversation.id !== conversation.id || star.itemId !== itemId); emit({ type: "stars" }); return { ok: true }; },
+    searchHistory: async (query) => {
+      const words = query.toLowerCase().trim().split(/\s+/);
+      const rows = [...Object.entries(db.items).flatMap(([id, items]) => items.map((item) => ({ ref: { kind: "assistant" as const, id }, item }))), ...Object.entries(db.groupItems).flatMap(([id, items]) => items.map((item) => ({ ref: { kind: "group" as const, id }, item })))];
+      const results = rows.flatMap(({ ref, item }) => {
+        if ((item.kind !== "user" && item.kind !== "assistant") || !words.every((word) => item.text.toLowerCase().includes(word))) return [];
+        const speaker = "speaker" in item ? String(item.speaker) : item.kind === "user" ? "user" : ref.id;
+        return [{ conversation: ref, conversationName: (ref.kind === "assistant" ? db.assistants.find((a) => a.id === ref.id)?.name : db.groups.find((g) => g.id === ref.id)?.name) ?? ref.id, itemId: item.id, speaker, speakerName: speaker === "user" ? "用户" : db.assistants.find((a) => a.id === speaker)?.name ?? speaker, at: item.at, snippet: item.text.slice(0, 150), starred: stars.some((star) => star.conversation.kind === ref.kind && star.conversation.id === ref.id && star.itemId === item.id) }];
+      }).sort((a, b) => b.at.localeCompare(a.at));
+      return { results: results.slice(0, 50), total: results.length };
+    },
     usage: async (): Promise<UsageView> => {
       const timezone = db.settings.settings.general.timezone;
       if (usageData?.timezone !== timezone) usageData = { timezone, ...mockUsageRows(timezone) };
@@ -2064,6 +3306,7 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       routines: clone(db.routines),
       approvals: clone(Object.values(db.approvals).filter((a) => a.status === "pending")),
       settings: clone(db.settings),
+      update: clone(mockUpdate),
     }),
     settings: async () => clone(db.settings),
     rules: async () => ({ rules: clone(globalRules) }),
@@ -2072,7 +3315,15 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       emit({ type: "rules" });
       return { rules: clone(globalRules) };
     },
-    models: async () => ({ ...clone(MOCK_MODELS), models: scene.startsWith("readme-") ? clone(MOCK_MODELS.models.slice(0, 2)).map((model, i) => ({ ...model, ref: i ? "anthropic/claude-sonnet" : "openai/gpt-5", name: i ? "Claude Sonnet" : "GPT-5" })) : clone(MOCK_MODELS.models), roster: clone(db.settings.settings.models.roster) }),
+    models: async () => ({
+      ...clone(MOCK_MODELS),
+      models: mockPluginModels.length
+        ? clone(mockPluginModels)
+        : scene.startsWith("readme-")
+          ? clone(MOCK_MODELS.models.slice(0, 2)).map((model, i) => ({ ...model, ref: i ? "anthropic/claude-sonnet" : "openai/gpt-5", name: i ? "Claude Sonnet" : "GPT-5" }))
+          : clone(MOCK_MODELS.models),
+      roster: clone(db.settings.settings.models.roster),
+    }),
     providers: async () => providersView(),
     claude: async () => ({ settings: clone(db.settings), status: { found: false, loggedIn: false } }),
     saveClaude: async (revision, claude) => {
@@ -2229,14 +3480,226 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       if (!desktop.url) return { ok: false, error: "请先填写云桌面地址。" };
       return { ok: true, health: clone(DESKTOP_HEALTH) };
     },
-    mcp: async () => ({ servers: MCP_MOCK.servers.map((server) => ({ ...server })) }),
-    putMcp: async () => ({ servers: MCP_MOCK.servers.map((server) => ({ ...server })) }),
-    patchMcp: async () => ({ servers: MCP_MOCK.servers.map((server) => ({ ...server })) }),
-    deleteMcp: async () => ({ servers: [] }),
-    testMcp: async () => ({ ok: true, tools: [{ name: "read_file", description: "读取一个文件" }, { name: "list_directory", description: "列出目录内容" }] }),
-    mcpImports: async () => ({ sources: ["pi（~/.pi/agent/mcp.json）"], items: [{ id: "pi:github", name: "github", source: "pi", kind: "http", exists: false, selectable: true }] }),
-    importMcp: async (ids) => ({ imported: ids, skipped: [] }),
-    search: async () => ({ providers: db.settings.settings.search.map((p) => ({ ...p, keyConfigured: p.name === "exa" || p.name === "tavily" })) }),
+    plugins: async () => clone({ plugins: pluginViews, migrationErrors: [], providerHost: mockHost }),
+    pluginCatalog: async () => clone({ sources: pluginSources, plugins: pluginCatalog.map(p => ({ ...p, source: p.source ?? "official", sourceName: p.sourceName ?? "Hob 官方", installed: pluginViews.some(v => v.plugin.id === p.id && v.plugin.source === (p.source ?? "official")) })) }),
+    refreshPluginSources: async () => ({ ok: true }),
+    addPluginSource: async url => { const source = { id: `source-${pluginSources.length}`, url, name: url }; pluginSources.push(source); return clone(source); },
+    deletePluginSource: async id => { const index = pluginSources.findIndex(source => source.id === id); if (index >= 0) pluginSources.splice(index, 1); return { ok: true as const }; },
+    installPlugin: async id => { const p = makePlugin(id, "official"); pluginViews.push(p); return clone(p); },
+    updatePlugin: async id => clone(mockPlugin(id)),
+    patchPlugin: async (id, patch) => { const p = mockPlugin(id); if (patch.enabled !== undefined) p.plugin.enabled = patch.enabled; if (patch.assistants !== undefined) p.plugin.assistants = patch.assistants ?? undefined; if (patch.tools) { p.plugin.tools = patch.tools; for (const service of p.services) for (const tool of service.tools) tool.enabled = p.plugin.tools[tool.name]?.enabled !== false; } return clone(p); },
+    savePluginConfig: async (id, values) => { const p = mockPlugin(id); for (const [key, value] of Object.entries(values)) { const field = p.config[key]; if (!field) throw new Error(`未声明的配置项 ${key}`); if (field.sensitive) field.configured = value !== null && value !== ""; else { field.value = value; if (value === null) delete p.plugin.config[key]; else p.plugin.config[key] = value; } } p.missing = Object.entries(p.config).filter(([, field]) => field.required && !(field.sensitive ? field.configured : field.value !== undefined && field.value !== null && field.value !== "")).map(([key]) => key); for (const service of p.services) { service.status = p.missing.length ? "pending_config" : service.oauth?.declared && !service.oauth.loggedIn ? "needs_login" : "connected"; service.missing = p.missing; } return clone(p); },
+    addPluginProfile: async (id, name) => { const p = mockPlugin(id); if (!name.trim()) throw new Error("名称不能为空"); if ((p.profiles ?? []).some(profile => profile.name === name.trim())) throw new Error(`已经有叫「${name.trim()}」的配置了`); const profile = { id: `email-profile-${Date.now()}`, name: name.trim(), config: Object.fromEntries(Object.entries(p.config).map(([key, field]) => [key, { ...field, ...(field.sensitive ? { configured: false } : {}) }])), missing: Object.entries(p.config).filter(([, field]) => field.required).map(([key]) => key) }; (p.profiles ??= []).push(profile); return clone(p); },
+    updatePluginProfile: async (id, profileId, name) => { const p = mockPlugin(id); const profile = p.profiles?.find(item => item.id === profileId); if (!profile) throw new Error("配置不存在"); if (!name.trim()) throw new Error("名称不能为空"); if ((p.profiles ?? []).some(item => item.id !== profileId && item.name === name.trim())) throw new Error(`已经有叫「${name.trim()}」的配置了`); profile.name = name.trim(); return clone(p); },
+    deletePluginProfile: async (id, profileId) => { const p = mockPlugin(id); p.profiles = (p.profiles ?? []).filter(profile => profile.id !== profileId); return clone(p); },
+    savePluginProfileConfig: async (id, profileId, values) => { const p = mockPlugin(id); const profile = p.profiles?.find(item => item.id === profileId); if (!profile) throw new Error("配置不存在"); for (const [key, value] of Object.entries(values)) { const field = mockProfileFields(p, profile)[key]; if (!field) throw new Error(`未声明的配置项 ${key}`); if (field.sensitive) field.configured = value !== null && value !== ""; else field.value = value; } profile.missing = Object.entries(profile.config).filter(([, field]) => field.required && !(field.sensitive ? field.configured : field.value !== undefined && field.value !== null && field.value !== "")).map(([key]) => key); return clone(p); },
+    deletePlugin: async id => { const index = pluginViews.findIndex(p => p.plugin.id === id); if (index >= 0) pluginViews.splice(index, 1); return { ok: true }; },
+    addCustomPlugin: async id => { const p = makePlugin(id, "custom"); pluginViews.push(p); return clone(p); },
+    startPluginOAuth: async (id, name) => { const service = mockPlugin(id).services.find(s => s.name === name); if (service?.oauth) { service.oauth.loggedIn = true; service.status = "connected"; } return { authorized: true, callbackUrl: `${globalThis.location?.origin ?? "http://localhost"}/api/plugins/oauth/callback` }; },
+    disconnectPluginOAuth: async (id, name) => { const p = mockPlugin(id); const service = p.services.find(s => s.name === name); if (service?.oauth) { service.oauth.loggedIn = false; service.status = "needs_login"; } return clone(p); },
+    pluginLoginStatus: async (id) => clone(mockPlugin(id).login?.status ?? { signedIn: false }),
+    startPluginToolLogin: async () => ({
+      kind: "device_code" as const,
+      url: "https://codeforge.example/login/device",
+      userCode: "F7K2-9QMX",
+      expiresAt: new Date(Date.now() + 14 * 60_000).toISOString(),
+      interval: 5,
+    }),
+    pollPluginToolLogin: async () => ({ state: "pending" as const }),
+    logoutPluginToolLogin: async (id) => {
+      const p = mockPlugin(id);
+      if (p.login) p.login.status = { signedIn: false };
+      return { ok: true as const, status: { signedIn: false } };
+    },
+    removePluginLoginAuto: async (id, host, username) => { const p = mockPlugin(id); p.autoLogins = (p.autoLogins ?? []).filter(entry => entry.host !== host || entry.username !== username); return clone(p); },
+    pluginLogins: async id => { const p = mockPlugin(id); const logins = id === "vault" ? mockVaultLogins : []; return { service: p.services[0]?.name ?? id, logins: clone(logins), folders: [...new Set(logins.flatMap(login => login.folder ? [login.folder] : []))] }; },
+    pluginLoginSecret: async (_id, loginId) => ({ username: mockVaultLogins.find(login => login.id === loginId)?.username ?? "", password: "mock-vault-secret" }),
+    savePluginLogin: async (id, body) => { const p = mockPlugin(id); if (id === "vault") { const existing = mockVaultLogins.find(login => login.id === body.id); if (existing) Object.assign(existing, { name: body.name, username: body.username, uris: body.uris, folder: body.folder }); else mockVaultLogins.push({ id: body.id ?? `vault-${mockVaultLogins.length + 1}`, name: body.name, username: body.username, uris: body.uris, ...(body.folder ? { folder: body.folder } : {}), hasPassword: true, hasTotp: false }); } return { id: body.id ?? `mock-${p.plugin.id}` }; },
+    deletePluginLogin: async (_id, loginId) => { const index = mockVaultLogins.findIndex(login => login.id === loginId); if (index >= 0) mockVaultLogins.splice(index, 1); return { ok: true as const }; },
+    pluginProviderHost: async () => clone({ status: "running" as const, bunVersion: "1.4.2", bunInstalled: true, pid: 41234, idleMs: 600_000 }),
+    approvePlugin: async (id) => {
+      const p = mockPlugin(id);
+      p.plugin.needsApproval = false;
+      p.plugin.capabilityChanges = undefined;
+      p.plugin.enabled = true;
+      return clone(p);
+    },
+    pluginProviders: async (id) => {
+      const p = mockPlugin(id);
+      return clone({
+        providers: p.providers ?? [],
+        providerHost: p.providerHost ?? { status: "running" as const, bunVersion: "1.4.2", bunInstalled: true, pid: 41234, idleMs: 600_000 },
+      });
+    },
+    refreshPluginModels: async (id, providerId) => {
+      const p = mockPlugin(id);
+      const prov = p.providers?.find((item) => item.providerId === providerId);
+      return clone({ models: prov?.models ?? [], plugin: p });
+    },
+    setPluginModelOverride: async (id, providerId, body) => {
+      const p = mockPlugin(id);
+      const prov = p.providers?.find((item) => item.providerId === providerId);
+      const model = prov?.models.find((item) => item.id === body.modelId);
+      if (!prov || !model) throw new ApiError(400, `模型 ${body.modelId} 不在这个供应商的模型列表里。`);
+      const key = `${id}/${providerId}/${model.id}`;
+      if (!mockPluginModelOriginals.has(key)) mockPluginModelOriginals.set(key, clone(model));
+      Object.assign(model, body.override ? { ...body.override, overridden: true } : { ...mockPluginModelOriginals.get(key), overridden: false });
+      return clone({ providers: p.providers ?? [] });
+    },
+    pluginProviderUsage: async (id, providerId) => {
+      const p = mockPlugin(id);
+      const prov = p.providers?.find((item) => item.providerId === providerId);
+      return clone(prov?.usage ?? { windows: [], error: "演示模式暂无实时额度数据。", fetchedAt: new Date().toISOString() });
+    },
+    setPluginActiveAccount: async (id, providerId, accountId) => {
+      const p = mockPlugin(id);
+      const prov = p.providers?.find((item) => item.providerId === providerId);
+      if (prov) {
+        prov.activeAccountId = accountId;
+        for (const acc of prov.accounts) acc.active = acc.id === accountId;
+      }
+      return clone(p);
+    },
+    deletePluginAccount: async (id, providerId, accountId) => {
+      const p = mockPlugin(id);
+      const prov = p.providers?.find((item) => item.providerId === providerId);
+      if (prov) {
+        prov.accounts = prov.accounts.filter((acc) => acc.id !== accountId);
+        if (prov.activeAccountId === accountId) {
+          prov.activeAccountId = prov.accounts[0]?.id;
+          if (prov.accounts[0]) prov.accounts[0].active = true;
+        }
+      }
+      return clone(p);
+    },
+    pluginAuthPrompt: async () => ({ prompt: null }),
+    pluginAuthApiKey: async (id, providerId, body) => {
+      const p = mockPlugin(id);
+      const prov = p.providers?.find((item) => item.providerId === providerId);
+      const nowIso = new Date().toISOString();
+      const accountId = body.accountId ?? `acc-${Date.now()}`;
+      if (prov) {
+        for (const acc of prov.accounts) acc.active = false;
+        const existing = prov.accounts.find((acc) => acc.id === accountId);
+        if (existing) {
+          existing.active = true;
+          existing.status = "logged_in";
+          existing.lastError = undefined;
+          existing.updatedAt = nowIso;
+          if (body.displayName?.trim()) existing.displayName = body.displayName.trim();
+        } else {
+          prov.accounts.push({
+            id: accountId,
+            providerId,
+            displayName: body.displayName?.trim() || "个人账号",
+            authType: "api",
+            active: true,
+            status: "logged_in",
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          });
+        }
+        prov.activeAccountId = accountId;
+        prov.signIn = undefined;
+      }
+      return clone({ accountId, models: prov?.models ?? [], plugin: p });
+    },
+    pluginAuthStart: async (id, providerId, body) => {
+      const p = mockPlugin(id);
+      const prov = p.providers?.find((item) => item.providerId === providerId);
+      const nowIso = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
+      const session = {
+        sessionId: `mock-signin-${Date.now()}`,
+        pluginId: id,
+        providerId,
+        methodIndex: body.methodIndex,
+        kind: (prov?.cli?.declared ? "local_cli" : id === "chatgpt" ? "loopback_paste" : id === "zcode" ? "server_poll" : "device_code") as import("../../shared/types.ts").PluginSignInKind,
+        status: "waiting" as const,
+        url: id === "chatgpt" ? "https://auth.example.com/oauth/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback" : "https://example.com/login/device",
+        ...(id === "copilot" ? { userCode: "ABCD-1234" } : {}),
+        ...(id === "chatgpt" ? { loopbackPasteAllowed: true } : {}),
+        ...(prov?.cli?.declared ? { localCliNote: "这是运行 Hob 的那台机器上的登录，不是你当前使用的设备。" } : {}),
+        createdAt: nowIso,
+        expiresAt,
+      };
+      if (prov) prov.signIn = session;
+      return clone(session);
+    },
+    pluginAuthSession: async (id, providerId) => {
+      const p = mockPlugin(id);
+      const prov = p.providers?.find((item) => item.providerId === providerId);
+      if (prov?.signIn) return clone(prov.signIn);
+      const nowIso = new Date().toISOString();
+      return { sessionId: "none", pluginId: id, providerId, methodIndex: 0, kind: "device_code", status: "cancelled", createdAt: nowIso, expiresAt: nowIso };
+    },
+    pluginAuthPaste: async (id, providerId, body) => {
+      const p = mockPlugin(id);
+      const prov = p.providers?.find((item) => item.providerId === providerId);
+      const nowIso = new Date().toISOString();
+      if (!/^http:\/\/(127\.0\.0\.1|localhost):\d+\//.test(body.url.trim())) {
+        throw new Error("只接受本次登录发出的本机回调地址（127.0.0.1），其他地址已拒绝。");
+      }
+      if (prov) {
+        const accountId = `acc-${Date.now()}`;
+        for (const acc of prov.accounts) acc.active = false;
+        prov.accounts.push({ id: accountId, providerId, displayName: "user@example.com", authType: "oauth", active: true, status: "logged_in", plan: "Plus", createdAt: nowIso, updatedAt: nowIso });
+        prov.activeAccountId = accountId;
+        prov.signIn = { ...(prov.signIn ?? { sessionId: body.sessionId, pluginId: id, providerId, methodIndex: 0, kind: "loopback_paste" as const, createdAt: nowIso, expiresAt: nowIso }), status: "completed" as const, accountId };
+        return clone(prov.signIn);
+      }
+      return { sessionId: body.sessionId, pluginId: id, providerId, methodIndex: 0, kind: "loopback_paste", status: "completed", createdAt: nowIso, expiresAt: nowIso };
+    },
+    pluginAuthCode: async (id, providerId, body) => {
+      const p = mockPlugin(id);
+      const prov = p.providers?.find((item) => item.providerId === providerId);
+      const nowIso = new Date().toISOString();
+      if (prov) {
+        const accountId = `acc-${Date.now()}`;
+        for (const acc of prov.accounts) acc.active = false;
+        prov.accounts.push({ id: accountId, providerId, displayName: "user@example.com", authType: "oauth", active: true, status: "logged_in", createdAt: nowIso, updatedAt: nowIso });
+        prov.activeAccountId = accountId;
+        prov.signIn = { ...(prov.signIn ?? { sessionId: body.sessionId, pluginId: id, providerId, methodIndex: 0, kind: "code" as const, createdAt: nowIso, expiresAt: nowIso }), status: "completed" as const, accountId };
+        return clone(prov.signIn);
+      }
+      return { sessionId: body.sessionId, pluginId: id, providerId, methodIndex: 0, kind: "code", status: "completed", createdAt: nowIso, expiresAt: nowIso };
+    },
+    pluginAuthCancel: async (id, providerId, sessionId) => {
+      const p = mockPlugin(id);
+      const prov = p.providers?.find((item) => item.providerId === providerId);
+      const nowIso = new Date().toISOString();
+      const cancelled = { ...(prov?.signIn ?? { sessionId, pluginId: id, providerId, methodIndex: 0, kind: "device_code" as const, createdAt: nowIso, expiresAt: nowIso }), status: "cancelled" as const };
+      if (prov) prov.signIn = undefined;
+      return clone(cancelled);
+    },
+    pluginProviderCli: async (id, providerId) => {
+      const p = mockPlugin(id);
+      const prov = p.providers?.find((item) => item.providerId === providerId);
+      return clone(prov?.cli ?? { declared: false });
+    },
+    installPluginProviderCli: async (id, providerId) => {
+      const p = mockPlugin(id);
+      const prov = p.providers?.find((item) => item.providerId === providerId);
+      const next = { declared: true, name: prov?.cli?.name ?? "agy CLI", installed: true, installing: false };
+      if (prov) prov.cli = next;
+      return clone(next);
+    },
+    search: async () => ({
+      providers: db.settings.settings.search.map((p) => {
+        if (p.name === "openai") {
+          const matched = p.providerId
+            ? db.settings.settings.providers.find((mp) => mp.id === p.providerId && ((mp.kind === "builtin" && mp.id === "openai") || (mp.kind === "custom" && mp.api === "openai-responses")))
+            : undefined;
+          return {
+            ...p,
+            keyConfigured: p.providerId ? Boolean(matched) : false,
+            ...(p.providerId ? { resolvedProviderMissing: !matched } : {}),
+            standaloneKeyConfigured: false,
+          };
+        }
+        return { ...p, keyConfigured: p.name === "exa" || p.name === "tavily" };
+      }),
+    }),
     putSearch: async (revision, providers) => {
       if (revision !== db.settings.revision) throw new ApiError(409, "设置已在别处修改，已刷新");
       db.settings = { revision: revision + 1, settings: { ...db.settings.settings, search: providers } };
@@ -2262,6 +3725,7 @@ export function createMock(scene: SceneId = "s1"): HobApi {
             roster: models.roster ?? db.settings.settings.models.roster,
             conversation: models.conversation ?? db.settings.settings.models.conversation,
             work: models.work ?? db.settings.settings.models.work,
+            ...(models.suggest !== undefined ? { suggest: models.suggest } : db.settings.settings.models.suggest !== undefined ? { suggest: db.settings.settings.models.suggest } : {}),
             thinkingChoice: models.thinkingChoice ?? db.settings.settings.models.thinkingChoice,
             ...(models.thinking ?? db.settings.settings.models.thinking
               ? { thinking: models.thinking ?? db.settings.settings.models.thinking }
@@ -2282,8 +3746,9 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       if (old !== "test") throw new ApiError(403, "旧密码不正确");
     },
     about: async () => ({
-      version: "0.1.0",
+      version: "1.16.0",
       home: "/var/lib/hob",
+      update: clone(mockUpdate),
     }),
     memory: async () => clone({ ...memory, revision: db.settings.revision }),
     putMemory: async (revision, provider: MemoryProvider) => {
@@ -2339,6 +3804,7 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       jobs: clone(Object.values(db.jobs)),
       drafts: clone(Object.values(db.drafts)),
       delegations: clone(Object.values(db.delegations)),
+      cards: clone(Object.values(db.cards)),
       hasMore: false,
     }),
     profile: async (assistantId) => {
@@ -2431,12 +3897,15 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       if (!body.name.trim()) throw new ApiError(400, "群名不能为空。");
       if (members.length < 1) throw new ApiError(400, "群里至少要有一个助手。");
       if (!members.includes(body.ownerId)) throw new ApiError(400, "群主必须是群里的一员。");
+      const cwd = body.cwd?.trim();
+      if (cwd && !cwd.startsWith("/") && !cwd.startsWith("~")) throw new ApiError(400, "工作目录必须填写绝对路径（如 /workspace/app）。");
       const group: Group = {
-        id: `g-${Date.now().toString(36)}`,
+        id: uid("g-"),
         name: body.name.trim(),
         purpose: body.purpose.trim(),
         ownerId: body.ownerId,
         members,
+        ...(cwd ? { cwd } : {}),
         createdAt: new Date().toISOString(),
       };
       db.groups.push({ ...group, unread: 0, busy: [] });
@@ -2453,13 +3922,18 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       const title = body.title.trim();
       if (!title) throw new ApiError(400, "话题名不能为空。");
       if (title.length > 40) throw new ApiError(400, "话题名最多 40 个字。");
+      const cwd = body.cwd?.trim();
+      if (cwd && group.cwd) throw new ApiError(400, `所属群已绑定工作目录（${group.cwd}），话题自动沿用群目录，不支持单独指定。`);
+      if (cwd && !cwd.startsWith("/") && !cwd.startsWith("~")) throw new ApiError(400, "工作目录必须填写绝对路径（如 /workspace/app）。");
       const now = new Date().toISOString();
       const topic: Group = {
-        id: `g-${Date.now().toString(36)}`,
+        id: uid("g-"),
         name: title,
         purpose: group.purpose,
         ownerId: group.ownerId,
         members: [...group.members],
+        ...(group.replyMode ? { replyMode: group.replyMode } : {}),
+        ...(cwd ? { cwd } : {}),
         createdAt: now,
         parentId: group.id,
         createdBy: "user",
@@ -2532,6 +4006,7 @@ export function createMock(scene: SceneId = "s1"): HobApi {
         group.models = models;
       }
       if (patch.name !== undefined) group.name = patch.name.trim() || group.name;
+      if (patch.replyMode === "owner" || patch.replyMode === "all") group.replyMode = patch.replyMode;
       if (patch.purpose !== undefined) {
         group.purpose = patch.purpose;
         for (const topic of db.groups.filter((g) => g.parentId === groupId)) topic.purpose = patch.purpose;
@@ -2567,6 +4042,7 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       items: clone(db.groupItems[groupId] ?? []),
       approvals: clone(Object.values(db.approvals).filter((a) => a.groupId === groupId)),
       jobs: clone(Object.values(db.jobs).filter((j) => j.groupId === groupId)),
+      cards: clone(Object.values(db.cards).filter((card) => card.groupId === groupId)),
       hasMore: false,
     }),
     sendGroupMessage: async (groupId, body) => {
@@ -2664,6 +4140,12 @@ export function createMock(scene: SceneId = "s1"): HobApi {
     answerApproval: async (approvalId, answer) => {
       const ap = db.approvals[approvalId];
       if (!ap || ap.status !== "pending") return;
+      if (answer.self && ap.login) {
+        if (ap.login.fillLogin) ap.login.fillLogin.state = "self";
+        if (ap.login.entry) ap.login.entry.state = "self";
+        emit({ type: "approval", approval: clone(ap) });
+        return;
+      }
       ap.status = "answered";
       if (ap.questions?.length) {
         ap.answers = answer.answers ?? [];
@@ -2704,6 +4186,16 @@ export function createMock(scene: SceneId = "s1"): HobApi {
       emit({ type: "delegation", delegation: clone(next) });
       pushItem("hob", { kind: "delegation", id: uid("item-"), at: next.createdAt, delegationId: next.id });
       pushItem(next.to, { kind: "user", id: uid("item-"), at: next.createdAt, text: next.text, from: { assistantId: "hob", name: "Hob", delegationId: next.id } });
+    },
+    answerCard: async (cardId, action) => {
+      const card = db.cards[cardId];
+      if (!card) throw new ApiError(404, "卡片不存在");
+      if (cardId.includes("processing")) await new Promise((resolve) => setTimeout(resolve, 5_000));
+      card.status = "done";
+      card.updatedAt = new Date().toISOString();
+      card.result = { action: clone(action.action), ...(action.button_text ? { buttonText: action.button_text } : {}), ...(action.form_value ? { fields: clone(action.form_value) } : {}) };
+      emit({ type: "card", card: clone(card) });
+      return { card: clone(card) };
     },
     createDraft: async (draftId) => {
       const d = db.drafts[draftId];
@@ -2878,6 +4370,28 @@ export function createMock(scene: SceneId = "s1"): HobApi {
     events: (handlers) => {
       listeners.add(handlers.onEvent);
       const timers: ReturnType<typeof setTimeout>[] = [];
+      if (scene === "provider-install-progress") {
+        timers.push(setTimeout(() => emit({
+          type: "plugin-install",
+          pluginId: "copilot",
+          stage: "downloading_bun",
+          package: "@magpie-community/opencode-copilot-auth",
+          downloadedBytes: Math.round(28.4 * 1024 * 1024),
+          totalBytes: Math.round(42.0 * 1024 * 1024),
+          percent: 68,
+        }), 30));
+      }
+      if (scene === "provider-install-done") {
+        timers.push(setTimeout(() => emit({
+          type: "plugin-install",
+          pluginId: "copilot",
+          stage: "done",
+          package: "@magpie-community/opencode-copilot-auth",
+          downloadedBytes: Math.round(42.0 * 1024 * 1024),
+          totalBytes: Math.round(42.0 * 1024 * 1024),
+          percent: 100,
+        }), 30));
+      }
       if (scene === "act-demo") {
         timers.push(setTimeout(() => emit({ type: "router-activity", assistantId: "hob", activity: { state: "tool", label: "搜索：最新 AI 动态" } }), 2500));
         timers.push(setTimeout(() => {

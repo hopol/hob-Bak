@@ -88,20 +88,19 @@ describe("Router 技能工具", () => {
       setAssistantSkillEnabled(hob.home, "hob", skill.name, false);
       const events: string[] = [];
       hob.runtime.bus.subscribe((event) => { if (event.type === "skills") events.push(event.assistantId); });
-      const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "edit_skill")!;
+      const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "save_skill")!;
       const run = async (name: string, edits: { old: string; new: string }[]) => tool.execute("id", { name, edits }, undefined, undefined, {} as never);
-      expect((await run("none", [])).content[0].text).toBe("没有这个技能：none");
-      expect((await run(skill.name, [{ old: "不存在", new: "x" }])).content[0].text).toContain("正文里找不到这段原文：不存在");
-      expect((await run(skill.name, [{ old: "重复", new: "x" }])).content[0].text).toBe("这段原文出现了 2 次，多带几个字");
+      expect((await run("none", [])).content[0].text).toBe("from、edits、general 至少填一样：整份存填 from，改几处填 edits，换给谁用填 general。");
+      expect((await run(skill.name, [{ old: "不存在", new: "x" }])).content[0].text).toContain("SKILL.md 里找不到这段原文：不存在");
+      expect((await run(skill.name, [{ old: "重复", new: "x" }])).content[0].text).toBe("这段原文在 SKILL.md 里出现了 2 次，多带几个字。");
       expect((await run(skill.name, [{ old: "前 10 名", new: "前 5 名" }, { old: "不存在", new: "x" }])).isError).toBe(true);
       expect(listAssistantSkills(hob.home, "hob")[0].version).toBe(1);
-      expect((await run(skill.name, [{ old: "前 10 名", new: "前 5 名" }])).content[0].text).toBe("已更新技能「统计」，第 2 版。");
+      expect((await run(skill.name, [{ old: "前 10 名", new: "前 5 名" }])).content[0].text).toBe("已存技能「统计」（dir-size），第 2 版，是你的。");
       expect(readFileSync(skill.path, "utf8")).toContain("前 5 名");
       expect(readFileSync(join(skill.path, "../scripts/a.sh"), "utf8")).toBe("echo yes");
       expect(existsSync(join(skill.path, "../.history/1/SKILL.md"))).toBe(true);
       expect(events).toEqual(["hob"]);
-      // 改技能是给模型和技能页的事，对话里不落行
-      expect(hob.runtime.router.items("hob").items.filter((item) => item.kind === "note")).toEqual([]);
+      expect(hob.runtime.router.items("hob").items.filter((item) => item.kind === "note")).toEqual([expect.objectContaining({ text: "已存技能「统计」第 2 版" })]);
     } finally { hob.close(); }
   });
   it("通用技能可改可删；定时任务不绑定技能，只读技能仍拦住", async () => {
@@ -117,19 +116,31 @@ describe("Router 技能工具", () => {
       writeFileSync(join(local, "SKILL.md"), "---\nname: local-only\ndescription: 本机别的工具也用\n---\n正文\n");
       const tools = buildRouterTools(hob.runtime, "hob");
       const run = async (name: string, params: Record<string, unknown>) => (await tools.find((tool) => tool.name === name)!.execute("id", params as never, undefined, undefined, {} as never)).content[0].text;
-      expect(await run("edit_skill", { name: "table-summary", edits: [{ old: "正文", new: "新正文" }] })).toBe("已更新技能「table-summary」，第 2 版。");
+      expect(await run("save_skill", { name: "table-summary", edits: [{ old: "正文", new: "新正文" }] })).toBe("已存技能「table-summary」（table-summary），第 2 版，是通用的。");
       expect(readFileSync(join(hob.home, "skills", "table-summary", "SKILL.md"), "utf8")).toContain("新正文");
       const bind = await tools.find((tool) => tool.name === "create_routine")!.execute("id", { name: "汇总", instruction: "汇总表格", schedules: ["0 9 * * *"], skill: "table-summary" } as never, undefined, undefined, {} as never);
       expect(bind.isError).not.toBe(true);
       expect(hob.runtime.store.routines()[0]).not.toHaveProperty("skill");
-      expect(await run("edit_skill", { name: "table-summary" })).toBe("edits 和 general 至少填一样：改正文填 edits，换给谁用填 general。");
-      expect(await run("edit_skill", { name: "none", edits: [] })).toBe("没有这个技能：none");
-      expect(await run("edit_skill", { name: "local-only", edits: [{ old: "正文", new: "新" }] })).toBe("local-only 在本机 ~/.agents/skills 里，只能照着用，Hob 里改不了；要改得在那个目录里改，或者让任务另存一份 Hob 的技能。");
+      expect(await run("save_skill", { name: "table-summary" })).toBe("from、edits、general 至少填一样：整份存填 from，改几处填 edits，换给谁用填 general。");
+      expect(await run("save_skill", { name: "none", edits: [] })).toBe("from、edits、general 至少填一样：整份存填 from，改几处填 edits，换给谁用填 general。");
+      expect(await run("save_skill", { name: "local-only", edits: [{ old: "正文", new: "新" }] })).toBe("local-only 是只读的技能，不能改；换个名字另存一份。");
       expect(await run("delete_skill", { name: "table-summary" })).toBe("已删除技能「table-summary」，移到了归档。");
     } finally {
       if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous;
       hob.close();
     }
+  });
+  it("打断回顾时向助手说明已经保存的技能", async () => {
+    const hob = makeHob();
+    try {
+      hob.runtime.store.saveJob(base);
+      const reply = vi.spyOn(hob.runtime.jobs, "reply").mockResolvedValue([{ name: "report-guide", title: "报告整理", version: 2, updated: true }]);
+      const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "reply_job")!;
+      const result = await tool.execute("id", { jobId: "t-1", text: "接着检查" });
+      expect(result.content[0].text).toBe("已交给任务「检查」（t-1），它会接着做，结果会回到这里。它的回顾停了，已存的技能：「报告整理」（report-guide，第 2 版）。");
+      reply.mockResolvedValue([]);
+      expect((await tool.execute("id", { jobId: "t-1", text: "继续" })).content[0].text).toContain("它的回顾停了，还没存技能。");
+    } finally { hob.close(); }
   });
   it("派活不再点名技能：多填 skills 也照常开任务，助手叫停有名字", async () => {
     const hob = makeHob();

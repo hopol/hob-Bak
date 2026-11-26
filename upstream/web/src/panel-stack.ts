@@ -44,6 +44,26 @@ export function panelAssistant(stack: PanelPage[], sel: string | null): string {
   return member?.kind === "member" ? member.id : sel ?? "hob";
 }
 
+/**
+ * 右栏的云桌面看哪个助手的屏幕。
+ * 群信息页（选中群或话题、没推进成员页）：本群成员里屏幕正在跑的那个，群主排前；都没在跑时落在群主身上。
+ * watch 是会被看作「正在看」的屏幕：群信息页上是全体成员的，谁的屏幕被唤醒都能自动展开。
+ * 其余：右栏讲的那个助手。
+ */
+export function panelDesk(
+  stack: PanelPage[], sel: string | null, gsel: string | null,
+  groups: readonly { id: string; parentId?: string; ownerId: string; members: string[] }[],
+  desktop: { screens: readonly { id: string; running: boolean }[]; profiles: Record<string, string> },
+): { aid: string; screenId?: string; running: boolean; watch: string[] } {
+  const running = (screenId?: string) => !!screenId && desktop.screens.some((screen) => screen.id === screenId && screen.running);
+  const selected = gsel && !stack.some((page) => page.kind === "member") ? groups.find((group) => group.id === gsel) : undefined;
+  const root = selected?.parentId ? groups.find((group) => group.id === selected.parentId) ?? selected : selected;
+  const ids = root ? [root.ownerId, ...root.members.filter((id) => id !== root.ownerId)] : [panelAssistant(stack, sel)];
+  const aid = ids.find((id) => running(desktop.profiles[id])) ?? ids[0]!;
+  const screenId = desktop.profiles[aid];
+  return { aid, ...(screenId ? { screenId } : {}), running: running(screenId), watch: ids.flatMap((id) => desktop.profiles[id] ? [desktop.profiles[id]!] : []) };
+}
+
 export function popPage(stack: PanelPage[]): PanelPage[] {
   return stack.slice(0, -1);
 }

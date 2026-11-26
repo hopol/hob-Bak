@@ -52,6 +52,15 @@ describe("Select", () => {
     await menu.getByRole("option", { name: /Hob 开发/ }).click();
     expect(await page.locator('.gcreate .select-trigger').textContent()).toContain('沿用「Hob 开发」创建');
   }, BROWSER_TEST_TIMEOUT);
+  it("在当前按钮和选项中显示可选图标", async () => {
+    await fixture();
+    const trigger = page.getByRole("button", { name: "测试选择" });
+    expect(await trigger.getByTestId("icon-a").count()).toBe(1);
+    await trigger.click();
+    expect(await page.getByRole("option", { name: "丙" }).getByTestId("icon-c").count()).toBe(1);
+    await page.getByRole("option", { name: "丙" }).click();
+    expect(await trigger.getByTestId("icon-c").count()).toBe(1);
+  }, BROWSER_TEST_TIMEOUT);
   it("点击外部或按 Escape 关闭", async () => {
     await fixture();
     const trigger = page.getByRole("button", { name: "测试选择" });

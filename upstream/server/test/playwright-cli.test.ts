@@ -182,6 +182,27 @@ describe("playwright-cli", () => {
     } finally { await session.dispose(); hob.close(); }
   });
 
+  it("中止桌面调用时向正在执行的请求传递中止信号", async () => {
+    const hob = makeHob();
+    hob.runtime.settings.setDesktop(hob.runtime.settings.get().revision, { url: "http://127.0.0.1:1", enabled: true });
+    writeSecret(hob.home, "desktop:token", "token");
+    const controller = new AbortController();
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const request = vi.spyOn(hob.runtime.desktop, "request").mockImplementation((_path, init) => new Promise((_resolve, reject) => {
+      entered();
+      init?.signal?.addEventListener("abort", () => reject(new Error("中止")), { once: true });
+    }));
+    const session = new DesktopToolSession(hob.runtime, "hob", true, "截图");
+    try {
+      const pending = session.tools()[0].execute("shot", {}, controller.signal);
+      await started;
+      controller.abort();
+      expect((await pending).isError).toBe(true);
+      expect(request.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    } finally { await session.dispose(); hob.close(); }
+  });
+
   it("未开启云桌面时不创建本地连接", async () => {
     const hob = makeHob();
     const session = new DesktopToolSession(hob.runtime, "hob");

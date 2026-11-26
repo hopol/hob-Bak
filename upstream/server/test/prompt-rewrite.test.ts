@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { answerApproval } from "../src/actions.ts";
 import { buildRouterTools } from "../src/router-tools.ts";
-import { registerAskLoginTool, registerAskTool, registerReportTool } from "../src/worker-tools.ts";
+import { registerAskTool, registerLoginTool, registerReportTool } from "../src/worker-tools.ts";
 import loreEntry from "../src/lore-entry.ts";
 import { makeHob } from "./helpers.ts";
 
@@ -28,27 +28,29 @@ describe("工具说明和确认选项", () => {
     } finally { hob.close(); }
   });
 
-  it("ask_login 出登录卡，Worker 先把登录请求交给助手", async () => {
+  it("没有凭据提供者时 login 只请用户自己登录：Router 出登录卡，Worker 先把登录请求交给助手", async () => {
     const hob = makeHob();
     try {
-      const router = buildRouterTools(hob.runtime, "hob").find((tool) => tool.name === "ask_login")!;
+      const router = buildRouterTools(hob.runtime, "hob").find((tool) => tool.name === "login")!;
       const ask = vi.spyOn(hob.runtime.jobs, "askQuestion").mockResolvedValue("用户已完成登录");
-      const worker = registerAskLoginTool(hob.runtime, "t-login");
+      const worker = registerLoginTool(hob.runtime, "t-login");
       const params = { site: "测试站", reason: "需要用户完成两步验证" };
+      expect(router.parameters.properties).not.toHaveProperty("account");
+      expect(worker.parameters.properties).not.toHaveProperty("account");
       await router.execute("r", params);
       const approval = hob.runtime.store.approvals()[0];
-      expect(approval).toMatchObject({ login: params, source: "router", options: [{ key: "A", label: "已登录" }] });
+      expect(approval).toMatchObject({ title: "需要登录：测试站", login: params, source: "router", options: [{ key: "A", label: "已登录" }] });
       expect(hob.runtime.router.items("hob").items).toContainEqual(expect.objectContaining({ kind: "question", approvalId: approval.id }));
       await worker.execute("w", params);
-      expect(ask).toHaveBeenCalledWith("t-login", { title: "需要登录：测试站", detail: params.reason, options: [{ key: "A", label: "已登录" }], recommended: "A", login: params });
+      expect(ask.mock.calls[0]).toEqual(["t-login", { title: "需要登录：测试站", detail: params.reason, options: [{ key: "A", label: "已登录" }], login: params }, undefined]);
     } finally { hob.close(); }
   });
 
-  it("ask_login 的完成答案和用户另发消息都会结束登录卡", async () => {
+  it("login 的完成答案和用户另发消息都会结束登录卡", async () => {
     const hob = makeHob();
     try {
       vi.spyOn(hob.runtime.router, "answerEvent").mockResolvedValue();
-      const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "ask_login")!;
+      const tool = buildRouterTools(hob.runtime, "hob").find((item) => item.name === "login")!;
       await tool.execute("login", { site: "测试站", reason: "需要完成验证" });
       const first = hob.runtime.store.approvals()[0];
       expect((await answerApproval(hob.runtime, first.id, { key: "A" })).status).toBe(200);

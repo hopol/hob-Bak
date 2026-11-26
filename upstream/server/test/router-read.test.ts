@@ -47,6 +47,23 @@ describe("Router read", () => {
     } finally { hob.close(); rmSync(work, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); }
   });
 
+  it("技能清单里列出的技能文件能读，同目录以外的照旧拒绝", async () => {
+    const hob = makeHob({}, { memory: "lore" });
+    try {
+      const root = join(hob.home, "system", "lore", "skills");
+      mkdirSync(join(root, "demo", "scripts"), { recursive: true });
+      writeFileSync(join(root, "demo", "SKILL.md"), "---\nname: demo\ndescription: 演示\n---\n做法\n");
+      writeFileSync(join(root, "demo", "scripts", "run.mjs"), "脚本");
+      writeFileSync(join(root, "private.txt"), "secret");
+      symlinkSync(join(root, "private.txt"), join(root, "demo", "link.txt"));
+      hob.runtime.pi.loreSkillPaths = [root];
+      const read = buildRouterTools(hob.runtime, "hob").find((tool) => tool.name === "read")!;
+      expect((await read.execute("x", { path: join(root, "demo", "SKILL.md") })).content[0].text).toContain("做法");
+      expect((await read.execute("x", { path: join(root, "demo", "scripts", "run.mjs") })).content[0].text).toBe("脚本");
+      for (const path of [join(root, "private.txt"), join(root, "demo", "link.txt")]) expect((await read.execute("x", { path })).isError).toBe(true);
+    } finally { hob.close(); }
+  });
+
   it("超长首行返回前 3900 字并可继续读后续行", async () => {
     const hob = makeHob();
     try {

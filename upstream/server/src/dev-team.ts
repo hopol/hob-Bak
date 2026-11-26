@@ -3,12 +3,14 @@
 // 这 5 个是 hidden，平时从群成员里找；主助手的提示词只列没收起的助手，不会把它们当成转交对象。
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Locale } from "../../shared/i18n.ts";
 import { t } from "../../shared/i18n.ts";
 import type { Assistant, Group } from "../../shared/types.ts";
 import { archiveAssistantsDir, systemDir } from "./config.ts";
 import type { CreateGroupInput } from "./groups.ts";
 import type { Store } from "./store.ts";
+import type { PluginStore } from "./plugin-store.ts";
 
 export interface DevTeamRole {
   id: string;
@@ -75,6 +77,104 @@ export function migrateProductOwnerDuty(store: Store): void {
   }
 }
 
+/** 自带的 Hacker：和 Hob 一起置顶，安全和逆向的事找它。补充提示词随包带在 hacker-instructions.md，建的时候原样写进去。 */
+export const HACKER = {
+  id: "hacker",
+  name: "Hacker",
+  sprite: "shield",
+  duty: "安全与逆向",
+  dutyLong: "安全研究、逆向分析、抓包和调试：分析程序、协议和数据格式，读二进制和内存，写验证用的脚本。",
+};
+
+/**
+ * 建一次 Hacker（老用户升级后也补上）。已经有 id 为 hacker 的助手（包括归档了的）就不再建，只记下标记；
+ * 用户删了也不补回来。
+ */
+export function seedHacker(store: Store, locale: Locale): void {
+  if (readSeeded(store.home).hacker) return;
+  if (!takenIds(store).has(HACKER.id)) {
+    store.saveAssistant({
+      id: HACKER.id,
+      name: HACKER.name,
+      duty: t(HACKER.duty, {}, locale),
+      dutyLong: t(HACKER.dutyLong, {}, locale),
+      sprite: HACKER.sprite,
+      instructions: readFileSync(new URL("./hacker-instructions.md", import.meta.url), "utf8").trim(),
+      primary: false,
+      pinned: true,
+      hidden: false,
+      notify: true,
+      createdAt: new Date().toISOString(),
+    });
+  }
+  writeSeeded(store.home, { hacker: true });
+}
+
+export function seedBuiltinVault(plugins: PluginStore, onUpdated?: (id: string) => void): void {
+  // 自带密码库跟着 Hob 版本走：装着的是自带的那份、Hob 带了新版本时，启动就换上（install 在版本没变时什么都不做）
+  const installed = plugins.list().find(plugin => plugin.id === "vault" && plugin.source === "builtin");
+  if (installed) {
+    try { if (plugins.install("vault", true).version !== installed.version) onUpdated?.("vault"); }
+    catch (error) { console.error("更新自带密码库失败，下次启动再试：", error instanceof Error ? error.message : error); }
+  }
+  const seeded = readSeeded(plugins.home);
+  if (seeded.vault) return;
+  if (plugins.list().some(plugin => plugin.id === "vault")) {
+    writeSeeded(plugins.home, { vault: true });
+    return;
+  }
+  try {
+    plugins.install("vault");
+    writeSeeded(plugins.home, { vault: true });
+  } catch (error) {
+    console.error("安装自带密码库失败，下次启动再试：", error instanceof Error ? error.message : error);
+  }
+}
+
+export const DEFAULT_BUNDLED_PLUGINS = ["github"] as const;
+
+export function defaultPluginsRoot(): string {
+  return fileURLToPath(new URL("../../vendor/default-plugins", import.meta.url));
+}
+
+export function markDefaultPluginUninstalled(home: string, id: string): void {
+  const seeded = readSeeded(home);
+  const existing = seeded.plugins ?? {};
+  const isDefault = (DEFAULT_BUNDLED_PLUGINS as readonly string[]).includes(id);
+  if (!isDefault && !Object.hasOwn(existing, id)) return;
+  if (existing[id] === "uninstalled") return;
+  writeSeeded(home, { plugins: { ...existing, [id]: "uninstalled" } });
+}
+
+export function seedDefaultPlugins(
+  plugins: PluginStore,
+  options: { root?: string; ids?: readonly string[] } = {},
+): void {
+  const root = options.root ?? defaultPluginsRoot();
+  const ids = options.ids ?? DEFAULT_BUNDLED_PLUGINS;
+  const seeded = readSeeded(plugins.home);
+  const recorded: Record<string, "installed" | "uninstalled"> = { ...(seeded.plugins ?? {}) };
+  let changed = false;
+  for (const id of ids) {
+    if (recorded[id]) continue;
+    if (plugins.list().some((plugin) => plugin.id === id)) {
+      recorded[id] = "installed";
+      changed = true;
+      continue;
+    }
+    const sourceDir = join(root, id);
+    if (!existsSync(join(sourceDir, "plugin.json"))) continue;
+    try {
+      plugins.installBundled(id, sourceDir);
+      recorded[id] = "installed";
+      changed = true;
+    } catch (error) {
+      console.error(`安装默认自带插件 ${id} 失败，下次启动再试：`, error instanceof Error ? error.message : error);
+    }
+  }
+  if (changed) writeSeeded(plugins.home, { plugins: recorded });
+}
+
 /** 默认建的那个群：自带的敏捷团队走「软件开发」这一套。 */
 export const DEV_TEAM_GROUP = {
   name: "敏捷团队",
@@ -101,6 +201,9 @@ export function devTeamGroup(locale: Locale) {
 
 interface SeededFile {
   devTeam?: boolean;
+  hacker?: boolean;
+  vault?: boolean;
+  plugins?: Record<string, "installed" | "uninstalled">;
 }
 
 function seededPath(home: string): string {

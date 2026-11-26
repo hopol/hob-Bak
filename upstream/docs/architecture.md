@@ -14,7 +14,7 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
 
 1. **助手对用户负责，任务对一件活负责。** 助手能执行命令、读取和修改文件，几步就能做完的事自己做；需要摸索、步骤多或耗时的事交给任务。技能归助手，助手能读技能、改正文。定位见 [助手和任务的定位](../.scratch/v2/design-assistant-and-task.md)。
 2. **任务必须明说结果。** 任务会话（Worker）结束前必须调用 `report(outcome, summary)`，outcome ∈ 完成 / 卡住 / 等你批。一轮跑完没调用 = 系统追问一次，再不报就记为"卡住：没交代结果"。
-3. **结果完整交回。** 事件带前 3,000 字和全文路径；Router 的工具大结果落盘；压缩和任务一样，接近模型上下文上限时才压。
+3. **结果完整交回。** 事件带前 3,000 字和全文路径；Router 的工具大结果落盘，`read` 和 `show_assistant` 的结果保留全文（后者供助手完整查看说明）；压缩和任务一样，接近模型上下文上限时才压。
 4. **任何时候都看得见。** 正在干的活在右栏“正在做”实时显示（读了什么、跑了什么），任务卡片点开能看完整过程。
 
 提示词只写事实，见 AGENTS.md。
@@ -28,7 +28,17 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
   - 启动时和每次服务商变动，把设置里的服务商套进引擎：内置服务商 `setRuntimeApiKey` / `removeRuntimeApiKey`，兼容接口 `registerProvider` / `unregisterProvider`。
   - 思考档也按 Hob 自己的设置写给引擎（见下文“思考档”）：兼容接口写进模型的 `thinkingLevelMap`，内置服务商写进 `HOB_HOME/system/engine/models.json` 的 `providers.<id>.modelOverrides`，写完 `refresh()` 一次让引擎重读。
   - 会话文件一律放在 `HOB_HOME` 下（不放进引擎目录）。
-  - 不加载用户装的扩展、主题、AGENTS.md；技能只加载下文指定的来源。使用自定义 `ResourceLoader`（见 pi 示例 `examples/sdk/12-full-control.ts`）。工具由 Hob 自己给。
+  - 不加载用户装的扩展、主题；`AGENTS.md` 只在会话绑定了工作目录时读那个目录根上的一份（见下文“工作目录”）；技能只加载下文指定的来源。使用自定义 `ResourceLoader`（见 pi 示例 `examples/sdk/12-full-control.ts`）。工具由 Hob 自己给。
+
+### 工作目录（`server/src/workspace.ts`）
+
+非主助手、群、话题可以在创建时绑一个项目目录（`cwd`），之后不能改。在哪个会话里就用哪个会话的目录，全部经 `resolveWorkspaceCwd` 解析：
+
+- 群和话题：群绑了，群和它所有话题都用群的，话题不能另绑；群没绑，话题用自己的；都没绑就是没绑定。成员助手自己的 `cwd` 在群里不生效。
+- 单聊：用助手自己的 `cwd`。
+- 没绑定：会话照旧在 `assistants/<id>/work`，任务在自己的目录。
+
+绑定后：会话的命令和文件工具默认在这个目录；会话打开时读一次目录根上的 `AGENTS.md`（没有就读 `CLAUDE.md`，最多 32,000 字），整个会话不变，保住提示词缓存；系统提示词写明绑定目录和助手自己的目录；派出的任务不填 `cwd` 就落在绑定目录，填了只能是它里面的子目录（`jobs.start` 里检查，例如并行任务各用一份 worktree）。绑定目录不能是数据目录、它里面的目录或它的上级；目录后来失效，会话回落到默认目录并在提示词里说明。
 
 ### 启动时的环境隔离（`server/src/boot.ts`）
 
@@ -52,11 +62,12 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
   rules.json                 全局规则 Rule[]（首次启动或升级时初始化；空数组保留）
   system/                    配置、凭据和引擎内部状态：/api/files 和读文件工具整个挡住
     config.json              启动项：端口、host、密码哈希、cookie 签名密钥（0600）
-    settings.json            界面可改的设置（主题、时区、关于你、服务商、模型、并发、卡住判定、推送邮箱），带 revision，写入走 CAS
+    settings.json            界面可改的设置（主题、时区、网络代理、不走代理的地址、关于你、服务商、模型、并发、卡住判定、推送邮箱），带 revision，写入走 CAS
     secrets.json             密钥（0600，原子写），接口只写不读回：provider:<id>、imageApiKey
     push.json                Web Push：VAPID 密钥 + 订阅设备（0600，原子写）
     seeded.json              首次启动建过的内置内容（devTeam: true = 敏捷团队已建）
-    engine/                  引擎目录：auth.json（引擎写的凭据）、models.json（Hob 写给引擎的内置服务商思考档）、mcp.json（MCP 服务配置，设置 → MCP 写）、bin（rg / fd）、资源
+    engine/                  引擎目录：auth.json、models.json、bin（rg / fd）、资源；旧 mcp.json 迁移后保留为 mcp.json.bak
+    plugins.json             已装插件、来源、开关、助手范围、工具开关和非敏感配置
     lore/                    Lore 连接（config.json，格式 { base_url, api_token }，0600、原子写）
     memory/                  本地记忆（捆绑的本地记忆插件）
     moves.json               v1 → v2 迁移记下的「旧路径 → 新路径」；会话里的老路径按最长前缀解析
@@ -67,6 +78,7 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
     github/                  GitHub 抓取缓存
     usage-prices.json        models.dev 拉下来的模型单价和上次更新的时间（一天最多更新一次）
   knowledge/                 知识库（几个助手共用）：entries.json、collections.json、blobs/、pages/、text/、index/
+  plugins/<id>/              已安装插件：plugin.json、mcp.json、图标和可选 skills/
   skills/                    全局技能（来源标签 hob）
   assistants/<id>/
     profile.json             Assistant（名字、职责、头像、置顶、通知…）
@@ -133,7 +145,9 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
 ## 核心对象（契约在 `shared/types.ts`，前后端共用，改它要两边一起改）
 
 - **Assistant（助手）**：主助手 `id = "hob"` 唯一内置，首次启动自动创建；其余都是用户数据。首次启动另外带上「敏捷团队」：5 个收起的助手（产品负责人、架构师、开发、测试、发布）和一个默认群，只建一次，标记写在 `system/seeded.json`，用户删了、归档了都不补回来；这 5 个是 `hidden`（收起的助手），老用户已经占了同名 id（`po`、`dev`…）就换一个不冲突的，不覆盖原来的助手。`duty` 是职责简介，`dutyLong` 是详细职责；创建助手时从草稿复制，旧助手启动时从对应的已创建草稿幂等回填。长期记忆不属于某个助手（见下文“记忆”）。
-- **Item（对话条目）**：对话 = 有序的 Item 列表。用户消息、助手回复从 pi 会话的消息得出；卡片类（question / job / draft / note / file）用 pi 的自定义条目 `customType: "hob.item"` 存在同一个 `router.jsonl` 里，**不进模型上下文**。卡片的可变状态（审批是否已选、任务进度、草稿是否已建）在 approvals.json / jobs / drafts.json 里，条目只存 id 引用，渲染时合并。老数据里还有 `todos` 条目（以前收起的一份待办），现在不再写入、界面也不显示。
+- **助手的补充提示词**：`Assistant.instructions` 存在助手的 `profile.json`，用户通过资料面板或 PATCH 修改，主助手可用 `update_assistant` 修改任何助手，普通助手可修改自己；创建助手时草稿 `Draft.instructions` 原样带入。只去首尾空白，空字符串视为没有。原文紧接身份那几句、原样进入单聊、群和话题的系统提示词，不加标题和别的话；任务提示词也带所属助手的补充提示词；其他助手的名单不包含它。助手和草稿的补充提示词在重启时保留，旧群说明仍归档。
+- **Item（对话条目）**：对话 = 有序的 Item 列表。用户消息、助手回复从 pi 会话的消息得出；卡片类（question / job / draft / note / file / card）用 pi 的自定义条目 `customType: "hob.item"` 存在同一个 `router.jsonl` 里，**不进模型上下文**。卡片的可变状态（审批是否已选、任务进度、草稿是否已建）在 approvals.json / jobs / drafts.json / cards.json 里，条目只存 id 引用，渲染时合并。老数据里还有 `todos` 条目（以前收起的一份待办），现在不再写入、界面也不显示。
+- **卡片**：卡片正文是服务端校验过的声明式 JSON 子集，完整记录按助手或群写在 `cards.json`，时间线只保存 `{ kind: "card", cardId }`。主人有两种：助手卡记 `assistantId`，插件卡同时记插件、服务、回调工具和调起它的助手。助手卡允许展示或交互；交互卡操作后锁成 `done`，结果保存在卡片记录里，并以 `[hob-event]` 系统消息回到原助手。插件卡的表单值只在一次回调调用的内存参数里经过 Hob，卡片记录、时间线、会话文件、模型消息、SSE 和日志都不写这些值；插件可以返回新卡整卡替换、toast、字段错误或文字事件，插件不可用时卡片保留并禁用操作；插件更新到新版本时，它更新前出的、还没处理的卡作废并写明原因（卡片内容是出卡时旧版定下的，字段和回调可能已经变了）。模型后续历史只接收一行标题和摘要（没有摘要时用「表单 N 项」或「表格 N 行」），不接收卡片 JSON。Hob 在飞书子集上加的扩展字段：`input` 的 `min_length`、`generate`（密码框旁的「生成」按钮）；`select_static` 的 `display`（`dropdown` 画成下拉、`chips` 画成圆角小块，不写时选项少画小块、多了画下拉）；`div` 的 `icon`（`file` / `doc` 画成文件行，`check` 画成结果行：勾 + 灰字）。`column_set` 每栏按 `weight` 分宽度。插件卡的来源行用插件自己在 `plugin.json` 里声明的图标，取不到用通用的插件图标。
 - **Job（任务）**：一次隔离执行 = Hob 进程里的一个 Worker pi 会话（`cwd` 给了就在那个目录干，不给就用 `HOB_HOME/assistants/<助手id>/jobs/<id>/work`）。任务记录带干活用的 `model` / `thinking`、`usage`（token 和花费）、`durationMs`；过程从 `worker.jsonl` 推导成 JobStep 列表（`server/src/transcript.ts`），实时动作走 `job_step` 事件。`assistantName` 记下建任务时的助手名，助手归档后任务详情照样显示。结束的任务可以接着做（续做）：上一轮结束时的状态、原因、用时存进 `rounds`，对话里再放一张带 `round`（第几轮）的任务卡。界面上同一个任务只显示最新一轮那张卡（`Items.tsx` 的 `visibleItems`），它跟着任务实时变；前几轮按 `rounds` 在任务详情里切换着看。
 - **Approval（审批）**：选择题卡片。来源可以是 Router（不阻塞，答案作为下一条用户消息回到 Router）或旧数据中的 Worker 提问（新任务只向助手提问，不生成用户审批卡）。带 `always` 的选项（"以后这类直接…"）选中后自动写一条 `mode: "allow"` 的 Rule，并在对话里出一行"已记进 X 的规矩 · …"。审批仍属于提问的助手；转交回合中助手提出的审批，也在主助手的委派卡内展示同一条审批，两处调用同一答复接口。
 - **Routine（定时）**：cron 表达式（`croner` 库）。单聊定时到点先给所属助手送一条事件，由助手自己答复或开 local Job；任务结果作为带「⏱ 名字」标签的助手消息回到对话。群定时由群主负责，到点在目标群或话题留下记录并交给群主处理，检查脚本的 notify 输出直接发送。群主变化时定时跟随变更。运行记录包括任务和交给群主、交给助手的记录。定时任务保存「要做的事」是谁写的（`instructionBy`：用户自己写的，还是哪个助手）；到点时用户自己写的直接标明，助手写的标明助手是谁写的。
@@ -163,10 +177,10 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
 | 工具 | 作用 |
 |---|---|
 | `read` / `bash` / `edit` / `write` | 读取文件、执行命令、修改或写入文件；简单明确的事由助手自己做，复杂或耗时的事交给任务 |
-| `start_job(title, note, files?, cwd?, expect_minutes?, after?)` | 开任务，立即返回 jobId；任务看到 `note` 和显式 `files` 的路径，对话里出任务卡片。`cwd` 指定工作目录，不能指定 Hob 数据目录；不填就用任务自己的目录。相对路径以助手工作目录为准；`after` 要等哪些任务做完 |
+| `start_job(title, note, files?, cwd?, expect_minutes?, after?)` | 开任务，立即返回 jobId；任务看到 `note` 和显式 `files` 的路径，对话里出任务卡片。`cwd` 指定工作目录，不能指定 Hob 数据目录；不填就用任务自己的目录。会话绑定了工作目录时，不填就用绑定目录，填的话只能是它里面的子目录。相对路径以助手工作目录为准；`after` 要等哪些任务做完 |
 | `check_job(jobId)` | 查看任务状态、过程、结果和所用技能；主助手可看所有任务，其余助手只看自己的 |
 | `update_todos(items)` | 列一份待办，整份替换：每项只有 `text` 和 `status`（todo / doing / done）。单聊存 `assistants/<id>/todos.json`，群的综合和话题存 `groups/<gid>/todos.json`；同一份清单谁后写以谁为准。每轮开头把当前这份带给模型；全做完、清掉、话题关了、手上没活了的就收起（见下文「待办」） |
-| `save_job_as_skill(jobId, into?, general?, note?)` | 让已完成的原任务在自己的会话里新建或修补技能，进度和结果显示在原任务上；`general: true` 新建在 `HOB_HOME/skills`（所有助手都能用），填了 `into` 改的就是那份、不看它 |
+| `review_job(jobId, note?)` | 让已结束的原任务在自己的会话里回顾，任务用 `save_skill` 保存需要的技能；进度和结果显示在原任务上 |
 | `reply_job(jobId, text)` / `stop_job(jobId)` | 给在跑的任务补话 / 停掉 |
 | `ask_user(title, detail?, options[]?, questions[])` | 出选择题卡片（不阻塞）；`options` 最多 3 个，可标 `always`；一张卡问几个问题用 `questions`（每个问题 2 到 3 个选项，可标推荐哪个），用户答完答案一起回来 |
 | `set_rule(text, mode)` / `remove_rule(ruleId)` | 改要先问你；对话里出"已记进 X 的规矩 · …"。主助手多一个可选 `assistantId`，改那个助手的 |
@@ -177,14 +191,14 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
 | `show_group(groupId?, query?, page?)` | 所有助手都能用：不填 id 列出全部群（群主、成员、进行中的话题数），填了看群或话题的详情和消息，带 query 在消息里找。每页 20 条 |
 | `create_group(name, purpose, members, ownerId)` | 所有助手都能用：创建群 |
 | `update_group(groupId, ...)` / `manage_topic(action, groupId?, topicId?, title?, note?)` | 仅 Hob：改群、开关重命名群话题 |
-| `edit_skill(name, edits?, general?, assistantId?)` / `delete_skill(name, replaced_by?, assistantId?)` | 替换技能正文，保留 frontmatter、旧版和附件；`general` 换它给谁用（true 换成通用的，false 收回本群 / 自己的）。删除会检查正在使用的任务；`replaced_by` 用来指定接替的技能。主助手多一个可选 `assistantId`，改那个助手的 |
+| `save_skill(name, from?, edits?, general?, assistantId?)` / `delete_skill(name, replaced_by?, assistantId?)` | 助手和任务都用 `save_skill` 从工作目录整份保存技能或替换已有文本；`general` 换范围，主助手单聊可指定 `assistantId`。删除会检查正在使用的任务；`replaced_by` 指定接替的技能 |
 | `set_avatar(sprite, color?, prop_art?, assistant?)` | 换头像：内置道具/颜色，或 custom（+ prop_art 自画）；主助手可传 assistant 给其他助手换；成功后推 assistant 事件，对话里出一行「已换头像」 |
 | `overview(sinceHours = 24)` | 只读，各助手这段时间的工作日志、结束的任务、在跑的任务、未答审批（写早报/汇总用） |
 | `message_assistant(assistantId, note, files?)` | 所有助手都能用：只把助手写的交接说明和显式文件交给另一个助手，创建持久化委派卡并在发起方对话显示转交记录，目标回合及关联任务结束后只向发起方回流一次结果，本轮结束；转交回合中不能再转交；普通助手不能转给主助手（主助手没法再往下转），要交给它用 `hand_back` |
 | `message_group(groupId, title, note, files?)` | 所有助手都能用：只把助手写的交接说明和显式文件交给一个群，在群里开话题并由群主接手，结论回到发起方对话 |
 | `open_topic(title? / topic?, note, files?)` | 群主在综合里开新话题或转到已有话题；只把助手写的交接说明和显式文件放进话题，本轮结束 |
 | `hand_back(text, reason)` | 仅非主助手：别人转来的事交回发起方；用户直接找你的事交回 Hob，由它转给合适的助手；本轮结束 |
-| `send_file(path)` | 把文件作为文件卡片发到对话；相对路径以助手工作目录为准 |
+| `send_file(path)` | 把文件作为文件卡片发到对话；相对路径以助手工作目录为准。页面只读得到 Hob 自己的目录和任务工作目录，范围外的文件先复制到 `assistants/<id>/files/sent/` 再发；密钥类文件照样拒绝 |
 | `generate_image(prompt, size?, refs?)` | 配置图像生成且助手能力开启时可直接生图，结果自动显示在对话 |
 | `show_page(title, summary, html)` | 助手写正文 HTML 片段，Hob 套上自带样式（亮暗跟随）和离线 CSP 存为单页，发页面卡后结束本轮；对话生成时通过实时事件展示草稿；通用设置可关闭 |
 | `web_search(query, depth?, max?)` / `web_fetch(url, raw?)` | 已启用联网搜索时可直接搜索或读取网页，搜索服务商按设置的优先级使用 |
@@ -192,7 +206,7 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
 - 事件消息（任务结束、定时结果、别的助手回复、审批答案）以用户角色进入 Router 上下文，但前缀固定的标记 `[hob-event]`，**不渲染成用户气泡**。
 - 事件那一轮可以不说话：模型最后一段回 `NO_REPLY`（`shared/no-reply.ts`），这一轮写的字一段都不给用户看，卡片、文件、提示行照常。确认语和开场白多半写在调工具之前，所以事件那一轮的文字不边写边推，到这一轮结束、或者用户插话进来（模型读到用户消息）时才出；单聊刷新后由 `walk` 按同样的分界推导，群里由 `GroupManager.settleEventTurn` 写进时间线。什么时候回 `NO_REPLY` 由提示词讲、模型判断；这个词本身任何一轮都不显示。
 - 对话按“同一次回复”分组：组内条目贴着，组间拉开。事件之后的第一条带 `lead`（由会话条目推导，实时推送的条目算法相同）；任务提问和文件先交给助手，助手决定如何呈现。
-- 出卡片的工具（`start_job` / `ask_user` / `message_assistant` / `message_group`）的工具结果带 `terminate: true`：pi 在一批工具结果全部 terminate 时停止本批之后的模型请求，所以出了卡片这一轮就结构上结束，模型不会再补一句“卡在上面了”。同一批里混了别的工具（如 `set_rule`）就不提前结束，这是 pi 的规则。`create_assistant` 出的助手卡不结束本轮：建好之后还要说一句建了什么。
+- 出卡片的工具（`start_job` / `ask_user` / `send_card` / `message_assistant` / `message_group`）的工具结果带 `terminate: true`：pi 在一批工具结果全部 terminate 时停止本批之后的模型请求，所以出了交互卡片这一轮就结构上结束，模型不会再补一句“卡在上面了”。展示卡片的 `send_card` 不结束本轮；同一批里混了别的工具（如 `set_rule`）就不提前结束，这是 pi 的规则。`create_assistant` 出的助手卡不结束本轮：建好之后还要说一句建了什么。
 - 所有助手的单聊都有建助手、建群、查看助手、查看群、overview、转交助手和交给群的工具；主助手能管理其他助手、群和话题，普通助手只能用 update_assistant 改自己的名字、职责和详细职责。群会话工具名单保持现状。每次成功修改资料或群，按原有规则在对话和群里落提示。
 - Router 正在回复时你又发消息 → `steer`；Router 空闲时来事件 → 直接开新一轮；忙时来事件 → 排在 Hob 自己的队列里，等这一轮结束再送（不交给引擎的 `followUp` 队列：那样正文在入队时就定死了）。
   - 事件的正文和「现在」那一块在真正送进会话时才生成。任务的事件（结果、提问、超时提醒）带任务的轮次：送的时候任务已经进了下一轮，就只说一句「第 N 轮的结果已经被第 N+1 轮取代，现在：……」；同一个任务排着好几条，只送最新一条。群会话同理，正文在那一轮开始时才取。
@@ -221,7 +235,7 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
   - **界面只显示进度**：会话输入框上方一条（正在做的那项、`k/n`、细进度条，点开只读清单），左栏话题行一个 `k/n` 小标签。老数据里时间线那些 `kind: "todos"` 条目不再显示。以前的 `projects/` 老文件不读也不删，时间线里老的 `kind: "project"` 条目不显示。
 - **话题的接口**：`GET /api/groups` 返回群和话题（话题带 `parentId`，状态由 `closedAt` 和待办推出）；`POST /api/groups/:gid/topics {title}` 开话题；`POST /api/groups/:tid/close {note?}` 关闭；`POST /api/groups/:tid/reopen` 重新打开；关闭后 `POST /api/groups/:tid/messages` 回 400。`POST /api/groups` 和 `PATCH /api/groups/:id` 忽略传入的旧 `workflow` 字段并保留文件原值，话题只能改名。
 - **每个成员一份群会话**：会话键是 `<assistantId>@<gid>`（话题是 `@<tid>`），单聊还是 `assistantId`。文件分别落在 `groups/<gid>/members/<aid>.jsonl` 和 `assistants/<aid>/router.jsonl`，上下文互不搅扰。群会话的工具包括做事和沟通用的工具，以及管理本群规则、定时和技能的工具；主助手在群里还可管理助手、群和话题，改其他助手的规则、定时和技能在单聊里做。展示页面按助手存，进群要另做，先不给（`show_page`）。系统提示词把「一对一」那段换成群里的规矩，群主在综合里能开话题、多一段开话题的说明。话题会话在群那段后面接一句「这里是群「…」的话题「…」」，群名写所属的群。云桌面一个助手只有一个屏幕，单聊和它的群会话共用一个。
-- **卡片和结果都留在群里**：`start_job`、`ask_user`、`send_file`、`generate_image` 的卡片进群的时间线（发言人是这个成员），任务卡和提问卡带 `groupId`；任务结果、任务提问、超时提醒、沉淀结果作为事件送进派它的成员在这个群里的会话，由它在群里说，回复里 @ 了别人照常接力。审批答案也回到群会话。群归档了、或者成员已经被移出，卡片和事件落回单聊，不报错。群里派的任务带的是这一轮的来由（见下面「交接」）。
+- **卡片和结果都留在群里**：`start_job`、`ask_user`、`send_card`、`send_file`、`generate_image` 的卡片进群的时间线（发言人是这个成员），任务卡、提问卡和助手卡带 `groupId`；插件卡也记录调起它的成员。任务结果、任务提问、超时提醒、沉淀结果作为事件送进派它的成员在这个群里的会话，由它在群里说，回复里 @ 了别人照常接力。审批答案和助手卡答案也回到群会话。群归档了、或者成员已经被移出，卡片和事件落回单聊，不报错。群里派的任务带的是这一轮的来由（见下面「交接」）。
 - **谁说话由代码定**：用户的消息 @ 了谁、引用谁的消息，就轮到谁；都没有就轮到群主。成员的回复里 @ 了别的成员，接着轮到他们（被 @ 的本人不算）。没轮到的成员不调模型。同一成员同时被叫两次就排队；排到时它上次之后已经没有新条目（前面那一轮已经带上了要给的），这一轮就不跑、不调模型。一条用户消息引出的助手回合超过 20 个就停，时间线里留一行「群里接力太多次，先停在这里」，并给群主发一个事件。事件送进群会话时也算新的一串回合。
 - **用户中途说话插进正在跑的那一轮**：轮到的成员在这个群里正说着（它的群会话在流式），新条目用 `steer` 插进那一轮，不另排一轮；会话刚好跑完（不在流式）就照原来的路子排队。事件那一轮的输入先列它还没见过的群条目、再写 `[hob-event]`，排队期间用户说的话这一轮就看得到。
 - **一轮的输入**：这个群时间线里它上次说完以后的条目，按「名字：内容」一行行列出，最后是叫到它的那条；卡片写成一句事实。给到哪一条记在 `state.json` 的 `seen`（只调了工具没说话的回合也不重复给）。单聊那套转交接管和「过期待答提问」不跑（那是单聊的）。
@@ -255,8 +269,8 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
 - 任务用 `ask_user` 提问后，问题送到所属助手的会话；助手收到这条提问的那一轮（或之后的某一轮）结束时，如果没有用 `reply_job` 接住，也没有留下 Router 的用户确认或登录卡，就把任务结束为 `stuck`，原因是「提问没有得到答复：问题」。提问卡标为 `expired`，结束事件照常送回助手。助手转问用户时任务继续等；用户答卡后下一轮助手仍未接住，照同一规则结束。单聊、群会话和转交给别的助手的任务都按任务实际回流的会话判断；问题没送到会话时直接结束为受阻，并写清投递失败。
 - 活动流：从 Worker 的工具事件生成 ActivityLine（`读 路径` / `跑 命令` / `改 路径` / `搜 模式`），统计 reads / commands / edits，实时推给前端，Job 里保留最近 200 行。
 - report 的 summary 进卡片和 Router 事件（≤ 600 字）；完整的最后一条回复和 summary 写 `report.md`。
+- 看门狗和工具时限：单聊、群、话题使用 `settings.work.routerStallMinutes`（默认 6 分钟），任务使用 `settings.work.jobStallMinutes`（默认 15 分钟）。一次工具调用到时后中止该调用，把已有输出和中止原因交回模型，继续这一轮；命令显式传了 `timeout` 时按它指定的秒数等待。工具运行期间不按模型无响应计时，任务的工具输出也算活动。模型请求在时限内没有事件时中止该请求并用原上下文重试一次，状态行显示「模型没有响应，正在重试」；再无响应才停下对话并提示可重新发送，或把任务记为 `stuck`，原因是「模型没有响应」。工具等待用户答复时暂停本次工具计时，答复或取消等待后继续计算剩余时间；任务提问和登录交接在等答复时可以一直等。
 - Watchdog：
-  - `settings.work.jobStallMinutes`（默认 15 分钟）没有任何事件 → `stuck`（原因"N 分钟没动静"），不杀，推事件；
   - 一轮结束没 report → 自动追问一次，再不报 → `stuck`（"没交代结果"）；
   - 进程重启时还在 running/queued/waiting 的 Job → `failed`（"Hob 重启，任务中断"）。
 
@@ -297,27 +311,83 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
 
 设置页可从 pi、Claude Code、Codex 的本机技能目录复制到 Hob，限制大小并跳过越界链接；覆盖已存在的同名技能算一次新版本（旧的进历史）。设置页删除和助手删技能一样移到归档。
 
-任务完成后不自动沉淀；助手判断事情定下来后，用 `save_job_as_skill` 让原任务沉淀一次，也可从任务详情手动触发（不带 `into` 时默认改这个任务沉淀出来的那份）。新建归这个助手（群里归本群），`general` 填 true 就新建在 `HOB_HOME/skills`；填了 `into` 改的是那份，它在哪就在哪。
+任务完成后不自动沉淀；助手判断事情定下来后，用 `review_job` 让原任务回顾，也可从任务详情手动触发。助手自己做成的事也可以直接用 `save_skill` 保存。新建默认归这个助手（群里归本群），`general: true` 存成通用；改已有技能时不填 `general` 就保留原范围。
 
-沉淀就是任务的又一轮：在任务自己的会话（`worker.jsonl`）里接着发一条沉淀消息，模型、思考档位、系统提示词、技能、工具和自定义工具都和正常一轮一样，另外一定带上 `write`、`edit`。任务直接改目标技能目录里的文件，最后照常 `report`；群任务默认写本群技能，指定 `into` 时先找群技能再找成员技能。任务状态一直是已完成，不算新的一轮，不改 `rounds`，不推 `jobEnded`、`jobResumed`，不触发依赖、排队、看门狗和超时提醒，也不标助手忙；这一轮的用量和过程照常记在任务上（进度走 `job_step`，沉淀消息在过程里显示成「沉淀技能」）。开始沉淀时在 `jobs/<id>/sediment-base/` 记下目标归属，并按目标技能目录排队；轮到后把目录（每个技能目录不含 `.history`，加上 `skills.json`）复制到底稿，重启按记录的目标恢复。从拍底稿到对账或恢复结束，这个技能目录只归这一轮：设置里的导入、`edit_skill`、`delete_skill`、回滚、界面上删技能这期间都报错，写明是哪个助手或群在沉淀（`assistant-skills.ts` 的 `lockSkillsDir` / `assertSkillsDirFree`）。用量计数和启用开关只改 `skills.json` 里的两个字段，照旧能记。
+回顾是任务的又一轮：在任务自己的会话（`worker.jsonl`）接着发回顾消息，模型、思考档位、系统提示词和工具沿用原任务。任务在工作目录写好草稿，用 `save_skill` 整份保存或替换已有文本，每次调用校验后提交一个版本，保留最近五版并记录来源；一次回顾可以保存多份。任务状态、轮次和任务结果不变，过程和用量照常记录。保存时按调用顺序串行提交，同名只读技能不能修改。
 
-收尾时 `report` 不走普通收尾，改为拿技能目录和底稿对账：跑脚本留下的 `__pycache__` 直接删掉；已有技能变了就照底稿把旧版放进 `.history/<旧版本号>`（最多留 5 版）、版本号加一、记上 `fromJobId`，新目录（底稿里没有的都是这一轮建的）登记第 1 版，标题和说明以 SKILL.md 开头为准；底稿里有、现在没了的技能照底稿放回去。`skills.json` 以底稿和这一轮的结果重写：模型自己写进去的条目和字段不算，只有用量计数和启用开关照现在的留。校验不过时 `report` 返回 `isError` 和原因，这一轮接着做，改完再交。校验通过、有改动时记 `saved`（任务卡上显示沉淀状态，对话里不另落一行，技能页看得到版本）；没有改动就记 `empty`，原因取 `report` 的 result。这两种都不发结果事件给助手。没交 `report` 就停下时先提醒一次，还不交就按交了处理（result 用最后一段话），校验仍不过就把技能照底稿恢复、任务记 `failed`。
+回顾里的 `report` 记录结果；保存过技能记 `saved`，没有保存记 `empty`，两者都不叫醒助手。失败才通知助手。中途有人接着说时中断回顾并续做，已提交的版本保留，工作目录里的草稿留在原处；进程重启时回顾停止。助手和任务的 `edit` / `write` 不能直接改 Hob 数据，助手可写自己的工作目录和自己任务的工作目录，任务可写自己的工作目录；路径解析符号链接后检查。bash 不受这项限制。
 
 校验规则分两种。改已有的技能只查底线：有 SKILL.md、`name` 和目录名对得上、有 `description`、没有符号链接、SKILL.md 20000 字以内、`scripts/` 和 `references/` 里的附件每个 200 KB 以内。新建的再加 Hob 自己的约定：目录名 `^[a-z0-9][a-z0-9-]{1,47}$`、`description` 120 字以内、`metadata.title`（不空，带不带引号都认）、顶层只能有 `SKILL.md`、`scripts/`、`references/`（和 `.history`）、附件最多 20 个。导入的技能多半不合 Hob 的格式，改它们时不能用 Hob 的约定把它们挡住。
 
-沉淀这一轮里 `ask_user` 不出卡片、不改任务状态，直接回一句「沉淀时不用问」。沉淀中有人接着说（用户在任务卡片上补充、助手 `reply_job`）：中断沉淀会话，等它停下，照底稿把技能改回去，清掉任务上的沉淀状态（不留记录），再照常开新一轮；沉淀那段对话留在会话里。进程重启时沉淀中的任务同样照底稿恢复、记 `failed`。沉淀结果跟着那一轮记（`JobRound.sediment`），续做后前面的卡片各显示各的。只有沉淀失败才通知助手，`saved`、`empty` 不通知。
+回顾这一轮里 `ask_user` 不出卡片、不改任务状态，直接回一句「沉淀时不用问」。沉淀结果跟着那一轮记（`JobRound.sediment`），续做后前面的卡片各显示各的。
 
-## MCP
+## 脚本中的工具
 
-任务可以调用 [MCP](https://modelcontextprotocol.io) 服务提供的工具（本地命令 stdio / 远程地址 streamable HTTP）；对话层不执行东西，不加载 MCP。全局一份配置，所有助手派出的任务共用；不做按助手开关。
+助手和任务的 bash、定时检查脚本执行时，Hob 通过 `HOB_TOOLS_URL` 和临时 `HOB_TOOLS_TOKEN` 指向仅监听本机的工具接口，在原有 `NODE_OPTIONS` 后追加 `--import` 预加载文件。预加载只定义 `globalThis.tools`；`await tools.$list()` 返回工具名、标签、说明和参数 schema，`await tools.工具名(参数)` 返回结构化内容（如果工具提供）或文本字符串，工具错误抛出原始错误。没有环境变量和凭据失效分别报明原因。凭据按助手会话里的命令、任务命令或单次定时检查签发，命令或检查结束以及会话释放时作废。
 
-- **配置位置**：`HOB_HOME/system/engine/mcp.json`，就是引擎自己读的那份（`mcpServers` 格式，与其他 MCP 客户端一致）。Hob 不读用户的 `~/.pi/agent/mcp.json`，除非在「从本机导入」里明确导入（来源只读，同名跳过；也支持从 Claude Code 的 `~/.claude.json` 顶层和 Cursor 的 `~/.cursor/mcp.json` 导入）。写入：同目录临时文件 + rename，新建 0600，只改目标条目，其它键原样保留；文件坏了（JSON 解析失败）读的时候报错，不当成空列表。
-- **只给任务**：Worker 会话打开时若配置里有启用中的服务，加载引擎的 MCP 扩展和 tool_search 扩展，会话启动时后台连服务；工具白名单追加 `mcp__*` 和 `tool_search`。Router 会话不加载。改了配置：之后新开的任务生效，正在跑的任务不受影响（不重连）。
-- **提供方式**：每个服务选「直接提供」（`exposure: direct`，默认，工具直接声明给模型）或「按需搜索」（`deferred`，模型先搜索再调用，适合工具多的服务）。不提供 codemode（不加载 codemode 扩展，写文件时顶层 `autoEnableCodemode: false`）。单个工具可以关掉（`toolExposure` 里设 `hidden`）；服务整体可停用（`enabled: false`）。
-- **密钥处理**：环境变量和请求头的**值**不回传给前端，接口只报键名和「已设置」；整值 `${VAR}` 引用和 `!command` 不含密钥，原样回显。编辑时逐键「保留 / 替换 / 删除」，未动的值不回传。测试连接时密钥的明文值也会从错误信息和 stderr 里打掉。
-- **测试连接**（设置 → MCP → 服务详情）：connect → 列工具 → 关闭，单个服务 15 秒超时，显示错误和 stdio 的 stderr 末尾几行；stdio 子进程一定收掉（关 stdin 后对整个进程组 SIGTERM/SIGKILL）。需要 OAuth 登录的远程服务这版不做登录流程，状态显示「需要登录，暂不支持」。SSE 传输不受支持（填 `/sse` 结尾的地址会给明确提示）。
-- **任务过程**：任务详情里 MCP 工具调用显示成「服务名 · 工具名」，不露 `mcp__x__y` 原始名。
-- 接口：`GET /api/mcp`、`PUT /api/mcp/:name`、`PATCH /api/mcp/:name`（启用 / 提供方式 / 关掉的工具）、`DELETE /api/mcp/:name`、`POST /api/mcp/:name/test`、`GET|POST /api/mcp/import`，都在登录后；服务端实现 `server/src/mcp.ts`。
+可调用搜索、网页读取、知识库检索和该助手启用的生图工具，按该助手实际可用能力过滤；对话专用工具不提供。另外加上这个助手能用的插件工具（`pluginToolsForAssistant`，按需搜索的插件工具在脚本里也能直接调）。对话调用只更新实时活动（正在做的那一行），不往对话里写行，任务调用写入任务活动，检查调用保存在检查历史。插件令牌不放进脚本环境；脚本和 Hob 同属一个系统用户，能读取的文件与以前相同，这不是新的隔离层。
+
+## 插件和 MCP
+
+插件采用 Agent Plugins 1.0 目录（`plugin.json`、`mcp.json`、可选 `skills/`）；Hob 的图标、发布者和分类在清单 `extensions.com.hob.plugins` 下。官方源是 `https://github.com/FFatTiger/hob-plugins`，用户也可以添加其他 git 仓库或以 `.json` 结尾的 HTTP(S) 索引。git 源浅克隆，可用 `#分支`；JSON 源按索引的 `path` 和 `files` 拉文件，缺少 `files` 时只取两个清单和声明的图标。源配置在 `system/plugin-sources.json`，最近一次成功的快照在 `cache/plugin-sources/<源 id>/`。打开市场时无缓存先等待拉取，有缓存先展示、超过一小时后台更新；失败保留快照并显示原因。禁止越界路径和符号链接，每文件最多 1 MB、每源最多 20 MB；坏插件单独显示原因，不能安装。git 和 HTTP 使用 Hob 的代理设置并设置超时。
+
+插件内容在 `HOB_HOME/plugins/<id>/`，安装状态、源标识及源名、助手范围、工具开关和非敏感配置在 `system/plugins.json`；敏感配置和 OAuth 状态在 `system/secrets.json`，接口只返回是否填写。旧的 `official` 来源仍指官方源；更新从原来源取，源被移除后已安装插件仍可运行但不能更新。同 id 的不同来源分别列出，已安装其中一个时须先卸载才能安装另一个。`search_plugins` 在多源时报告每个结果的来源。
+
+插件可以在 `extensions["com.hob.plugins"].profiles` 声明多套配置，值是 `{ "title": "邮箱" }`；未声明的插件继续使用单份 `plugin.config`。声明后，`system/plugins.json` 使用 `profiles: [{ id, name, config }]`，敏感值放在 `plugin:<id>:profile:<profile id>:config:<key>`，profile id 由 Hob 生成并保持不变。`${hob.profiles}` 在启动插件时替换成 JSON 字符串 `[{ "name": "工作邮箱", "config": { "EMAIL_ADDRESS": "…" } }]`，只包含必填项完整的配置；这类插件不能使用 OAuth，也不能引用 `${user_config.X}`。
+
+插件声明 `userConfig`（`type: "file"` 的配置项在网页里选文件上传，存的是文件的文本内容，最大 64 KB，不是服务器上的路径）；MCP 配置中允许的位置用 `${user_config.KEY}` 引用，普通 `${VAR}` 自动推为必填敏感项。通用路径变量 `${hob.root}` 指 Hob 安装目录，`${hob.plugin_root}` 指已安装的插件目录，`${hob.plugin_data}` 指持久数据目录 `HOB_HOME/plugin-data/<id>`（按需创建）。必填项缺失时服务不连接。启动时将旧 `system/engine/mcp.json` 各服务迁移为自定义插件，完成后原文件改名为 `mcp.json.bak`；迁移失败保留原文件和原因。
+
+「邮箱」插件从 Hob 安装目录的 `server/mcp/email.mjs` 启动自带的 Node MCP 服务；启动时将已安装邮箱插件的旧服务路径迁移到新位置。服务以 IMAP 和 SMTP 连接邮箱；保存的附件位于 `HOB_HOME/plugin-data/email/`。未填写服务器时依次查内置表、域名的 HTTPS 自动配置、Thunderbird 配置库、MX 对应的企业邮箱内置表，最后从 MX 主机逐段去掉前缀，在 Thunderbird 配置库里查剩余域名。识别结果按域名在服务进程内缓存；配置页的选填项收在「更多设置」里。
+
+`PluginHost` 在进程内管理每个已启用服务的连接和状态，助手单聊、群会话和任务共享连接。stdio 服务连续 10 分钟没有工具调用会关闭本地进程并保留上次的工具列表，下次调用时自动重新连接，插件页照样显示「已连接」（停没停是内部省内存的事，不让用户操心）；声明 `extensions.com.hob.plugins.keepAlive: true` 的插件保持运行，远程 MCP 不受这条闲置停止规则影响。工具均从 `pluginToolsForAssistant` 按助手范围取得。助手还可用 `search_plugins` 查询插件市场及已安装的自定义插件：未安装、停用或未分配、缺配置或连接失败、已连接分别报告对应状态；后台任务没有此工具。工具名由插件 id 和服务工具名组成；插件超过 10 个工具时按需搜索（tool_search），否则直接提供；不给用户选。服务报错返回原因，结果经 pi-mcp 限制大小。设置变化重连服务并释放空闲会话，忙的会话在本轮后释放。OAuth 发现授权服务器，令牌保存在密钥文件，浏览器的 Origin 决定回调地址；需要重新授权时显示状态。旧 `/api/mcp*` 接口由 `/api/plugins*` 取代。
+
+- **工具插件登录（`_meta["hob/login"]`）**：工具插件可在 MCP 服务中放置对模型不可见的工具（`_meta.ui.visibility: ["app"]`），并以 `_meta["hob/login"]` 标明用途：`status`（返回 `{ signedIn, optional?, account?, detail? }`，`detail` 支持 Markdown 链接；`optional: true` 表示不登录也能用，比如已经填了令牌，这时登录只是附加选项，不显示「未登录」，登录按钮变成一行里的文字按钮，按钮上的字可以用 `startLabel` 给）、`start`（返回 `{ kind: "device_code", url, userCode, expiresAt?, interval? }` 或 `{ kind: "done" }`）、`poll`（返回 `{ state: "pending" | "done" | "error", message? }`）、`logout`。令牌由插件自行存在 `${hob.plugin_data}`（建议 0600）并自行续期，Hob 不经手令牌。`PluginHost` 在服务连接后查询初始 `status` 并随 `PluginView.login` 暴露；HTTP 接口为 `GET /api/plugins/:id/login/status` 与 `POST /api/plugins/:id/login/{start,poll,logout}`，插件返回的报错原样透传。插件列表对声明登录但 `signedIn` 为 `false` 的插件显示「未登录」（与「待配置」并列）；详情页在配置项上方显示登录状态行，设备码登录直接复用供应商插件的 `DeviceCodeLoginCard`。
+- **插件自带命令与 `hob/command`**：插件可在 `plugin.json` 的 `extensions["com.hob.plugins"].bin` 声明插件内的相对目录（禁止越界与符号链接）。从 git 源、JSON 源或随包目录安装时均确保命令目录内文件具备可执行权限。插件启用且分配给该助手时，该目录进入该助手单聊与群会话 `bash`、后台任务 `bash` 以及定时检查脚本的 `PATH`，顺序为 Hob 自带命令目录（`engineDir/bin`）→ 已启用且分配的插件命令目录（按安装顺序）→ 原有 `PATH`；停用或取消分配后下一条命令不再带入。插件令牌和配置不放进命令环境变量；命令需要向插件取凭据或调用内部能力时，使用这条命令的 `HOB_TOOLS_URL` 与临时 `HOB_TOOLS_TOKEN` 调脚本工具本地接口：标了 `_meta["hob/command"]: true` 的隐藏工具允许命令调用（不出现在 `tools.$list()` 中，对模型不可见），未标的隐藏工具命令也调不到；凭据在命令结束或会话释放时作废。
+- **默认自带插件**：随 Hob 默认发布的官方插件由 `scripts/update-default-plugins.mjs` 从官方源拷入 `vendor/default-plugins/<id>/`（随 npm 包与 Docker 镜像一起分发，当前含 `github`）。启动时 `seedDefaultPlugins` 对列表中未记录且未安装同 id 插件的条目离线安装并启用，来源记为 `official`（后续照常从官方源检查更新）；状态写入 `system/seeded.json` 的 `plugins` 字段，用户卸载后记为 `uninstalled` 不再自动装回，已从任意来源安装同 id 插件时不改动。
+
+## 带模型的插件
+
+带模型的插件把「模型供应商」作为插件的一种贡献能力（兼容 OpenCode V1 函数式供应商插件及 Magpie 扩展），而不是单独的插件类型：同一个插件可以只带工具（`mcp.json`）、只带模型（`providers`），或两样都带，共用插件目录、配置和状态。
+
+- **清单与元数据**：在 `plugin.json` 的 `extensions["com.hob.plugins"]` 下声明 `providers: [{ package, version, integrity, export?, defaultConfig? }]`（`integrity` 为 `sha512-…` SRI），同时可声明 `maintainer`、`sourceUrl`、`riskNotice`、`permissions`（如 `network`、`subprocess`、`local-auth`、`bun-runtime`）及 `categories`（带 `providers` 的插件在目录里自动带上 `providers` 分类和 `hasProviders: true`）。
+- **权限变化重确认**：安装时记住已批准的清单能力（`approvedPermissions`、`approvedProviders`）；更新插件后若新增了权限或变更了供应商包名，自动停用插件并置 `needsApproval: true`、`capabilityChanges`，在用户调用 `POST /api/plugins/:id/approve` 确认前禁止启用。
+- **按需下载 Bun 与包校验（`server/src/bun-runtime.ts`）**：首次安装带模型的插件时，按平台下载固定版本 Bun（`BUN_VERSION = 1.4.2`）到 `HOB_HOME/runtime/bun/<version>/bin/bun`，内置官方 `SHASUMS256.txt` 的 SHA-256 哈希，校验通过后再解压；没装这类插件时不下载。随后用该 Bun 在 `HOB_HOME/plugins/<id>/providers-runtime/` 下按固定版本安装 npm 包（`--ignore-scripts`），从 npm registry 下载对应 tarball 核对 `integrity`（SHA-512），不通过就回滚并报错。安装期间通过 SSE 推送 `plugin-install` 进度事件。
+- **共享 Bun 宿主进程（`server/src/provider-plugin-host.ts`、`server/src/provider-host.mjs`）**：所有启用的带模型插件共用一个 Bun 子进程，通过 stdio 上的行分隔 JSON-RPC 通信（请求/响应、流式 chunk、abort、反向回调）。首次用到才启动，之后一直运行、不因闲置退出：插件把对话会话放在宿主进程里，停掉后下一轮要整段重发、缓存全丢（设了 `HOB_PROVIDER_HOST_IDLE_MS` 才按这个毫秒数闲置退出），崩溃后标记 `crashed` 并在下次使用时自动重启。宿主子进程环境变量清掉 Hob 自身的密钥和 `HOB_PASSWORD`，只传每个插件自己的 `HOB_HOME/plugin-data/<id>`；插件代码仍以当前系统用户身份运行，不是沙箱隔离。
+- **兼容面（OpenCode V1 + Magpie 扩展）**：支持插件导出的 `config`、`auth`（`methods`、`prompts`、`loader` 返回的 `baseURL`/`apiKey`/`headers`/`fetch`、`refresh`/`refreshLead`、`usage`、`single`、`cli`、`icon`、`keyless`）、`provider.models`、`chat.headers`；向插件提供 `client`（`auth.set`）、`directory`、`worktree`、`serverUrl` 和 `Bun`。
+- **内部代理端点与模型注册（`server/src/provider-plugins.ts`）**：`ProviderPluginManager` 启动一个只监听 `127.0.0.1` 随机端口的 HTTP 服务，每次启动生成 32 字节随机令牌，拒绝缺少或错误 `Authorization: Bearer <token>` 及非本机来源的请求。每个已启用且有在用账号的插件供应商以 `plugin-<pluginId>`（单供应商）或 `plugin-<pluginId>-<providerId>` 注册进 pi 的 `ModelRegistry`（OpenAI Chat / OpenAI Responses / Anthropic Messages 三种协议），请求指向内部端点 `http://127.0.0.1:<port>/p/<pluginId>/<providerId>/*`，流式响应原样透传，浏览器/助手中止时一路 abort 到插件的 `fetch`；请求前按 `refreshLead` 自动刷新快过期的 OAuth 令牌，刷新失败标为 `expired`。
+- **思考档映射**：插件模型声明的 `variants` 键（`minimal` / `low` / `medium` / `high` / `xhigh` / `max`）映射为 Hob 的思考档，与 `off` 组合；插件未声明 `variants` 时默认不提供思考档（仍可在模型思考档设置里自定义）。
+- **凭据、多账号与模型缓存**：
+  - 账号元数据、当前在用账号（`activeAccountId`）和按账号缓存的模型列表保存在 `HOB_HOME/system/provider-plugins.json`；拉取模型失败保留上次成功的模型列表并在 `modelsError` 写原因，不以空数组冒充成功。
+  - 账号凭据（API Key 或 OAuth `access`/`refresh`/`expires`）按 `plugin:<pluginId>:provider:<providerId>:account:<accountId>` 存在 `HOB_HOME/system/secrets.json`（0600），不进日志、SSE 事件、对话或其它文件，只在需要时经内存传给宿主。
+  - 一个供应商默认支持多账号登录并切换「在用」账号；插件声明 `single: true` 时覆盖唯一账号。
+- **五种登录流程**：
+  1. **填密钥 / 免登录**（`api` / `keyless`）：按需执行 `prompts`，提交后保存账号并拉取模型；`keyless` 免输入密钥。
+  2. **设备码**（`device_code`）：从插件 `instructions` 提取用户码，前端展示网址与验证码，后台持续执行 `callback` 直到成功/取消/过期。
+  3. **服务端轮询**（`server_poll`）：前端打开插件给出的授权网址，宿主后台轮询厂商接口直到成功。
+  4. **本机回调粘贴**（`loopback_paste`）：检测授权链接里的 `localhost` / `127.0.0.1` 回调端口，浏览器与 Hob 不在同一台机器时，用户把浏览器最终停住的地址粘贴给服务端；服务端严格校验协议为 `http:`、主机为本机 loopback、端口属于本次登录会话允许的端口，在本机以 `redirect: "manual"` 单次回放 GET（绝不跟随跨主机跳转），拒绝一切其他地址。
+  5. **本机客户端**（`local_cli`）：通过插件 `auth.cli` 检测跑 Hob 这台机器上 CLI 是否安装，支持触发插件自带的 `install()` 或展示手动安装说明。
+- **HTTP 接口（均需登录 cookie；契约类型见 `shared/types.ts`）**：
+  - `GET /api/plugins` → 除已有字段外，每个 `PluginView` 带 `hasProviders`、`providers`（清单项）、`providerStates`（`PluginProviderStateView[]`）、`maintainer`、`sourceUrl`、`riskNotice`、`permissions`、`needsApproval`、`capabilityChanges`；顶层额外返回 `providerHost: ProviderHostStatusView`。
+  - `GET /api/providers` → 除 `providers` / `catalog` / `settings` / `models` 外，额外返回 `pluginProviders: PluginProviderSummary[]`，供设置 → 服务商页展示「来自插件 XXX」并跳回插件页；已登录插件的模型照常出现在 `models` 和 `GET /api/models`。
+  - `GET /api/plugins/provider-host` → 返回 `ProviderHostStatusView`（`status`: `stopped | starting | running | crashed`，`bunVersion`、`bunInstalled`、`pid?`、`error?`、`idleMs`）。
+  - `POST /api/plugins/:id/approve` → 确认更新后的权限/包变更并重新启用插件，返回 `PluginView`。
+  - `GET /api/plugins/:id/providers?load=1` → 返回 `{ providers: PluginProviderStateView[], providerHost }`；默认返回缓存状态，带 `load=1` 按需启动宿主加载插件元信息和登录方法。
+  - `POST /api/plugins/:id/providers/:providerId/models/refresh` `{ accountId? }` → 刷新指定（或在用）账号的模型列表，返回 `{ models, plugin }`。
+  - `GET /api/plugins/:id/providers/:providerId/usage?accountId=` → 返回 `PluginProviderUsageView`（`plan?`、`windows[]`、`error?`；拿不到时返回 `error`，不伪造 0）。
+  - `POST /api/plugins/:id/providers/:providerId/accounts/active` `{ accountId }` → 切换在用账号并同步引擎，返回 `PluginView`。
+  - `DELETE /api/plugins/:id/providers/:providerId/accounts/:accountId` → 删除账号及对应 secrets 并同步引擎，返回 `PluginView`。
+  - `POST /api/plugins/:id/providers/:providerId/auth/prompt` `{ methodIndex, inputs?, validateKey?, validateValue? }` → 取下一步交互表单（返回 `{ prompt }`）或校验字段（返回 `{ error }`）。
+  - `POST /api/plugins/:id/providers/:providerId/auth/api-key` `{ methodIndex, key?, inputs?, accountId? }` → 填密钥或 `keyless` 启用，返回 `{ accountId, models, modelsError?, plugin }`。
+  - `POST /api/plugins/:id/providers/:providerId/auth/start` `{ methodIndex, inputs?, accountId? }` → 启动 OAuth/设备码/本机回调/CLI 登录会话，返回 `PluginSignInSessionView`（含 `sessionId`、`kind`、`status`、`url?`、`userCode?`、`instructions?`、`allowPaste?`）。
+  - `GET /api/plugins/:id/providers/:providerId/auth/session/:sessionId` → 查询登录会话当前状态（`PluginSignInSessionView`）。
+  - `POST /api/plugins/:id/providers/:providerId/auth/paste` `{ sessionId, url }` → 提交 loopback 回调地址回放，返回 `{ ok: true, session }`。
+  - `POST /api/plugins/:id/providers/:providerId/auth/code` `{ sessionId, code }` → 提交手工授权码，返回 `PluginSignInSessionView`。
+  - `POST /api/plugins/:id/providers/:providerId/auth/cancel` `{ sessionId }` → 取消登录会话，返回 `PluginSignInSessionView`。
+  - `GET /api/plugins/:id/providers/:providerId/cli` → 检测本机 CLI 安装状态，返回 `PluginCliStatusView`。
+  - `POST /api/plugins/:id/providers/:providerId/cli/install` → 调用插件 `cli.install()` 安装本机 CLI，返回 `PluginCliStatusView`。
+- **SSE 实时事件（`HobEvent`）**：
+  - `{ type: "plugin-install", pluginId, stage, detail?, bytes?, totalBytes?, bunVersion?, packageName? }`：`stage` 依次为 `downloading_bun`、`verifying_bun`、`extracting_bun`、`installing_package`、`verifying_package`、`done`、`error`。
+  - `{ type: "plugin-providers", pluginId?, providerId?, host?, signIn? }`：宿主状态变化、登录会话推进/完成/失败/取消、账号或模型变更时广播，前端据此刷新插件详情、登录弹窗或宿主状态行。
 
 ## 从本机导入（可选）
 
@@ -341,9 +411,40 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
 - 任务工具 `generate_image(prompt, size?, refs?)`：图片存任务工作目录，返回绝对路径；任务要以 `report` 的 `files` 交回才会显示。
 - 图片进对话：任务的 `report.files` 先交给助手，由助手决定是否用 `send_file` 发到对话；前端渲染成内联缩略图（最大宽 320、圆角），点开全屏。`GET /api/files` 按扩展名给 content-type。
 
-## 云桌面
+## 填写登录
 
-可选的 desktopd v2 是独立容器，通过地址和 Bearer 令牌连接。每个助手按 `desktopProfile(assistantId)` 使用独立屏幕、窗口和 Chromium profile。屏幕按需启动，空闲回收后保留浏览器数据；有观看者或 CDP 连接时不回收。助手和任务用 `playwright-cli` 操作所属屏幕的浏览器；Hob 在引擎的 `bin` 写入启动器，并在每次 bash 执行时注入会话独立的本机转发地址和短期凭据。每个会话有独立的 CLI 缓存，即使命令显式指定相同的 `-s` 名称也不会串；会话结束时关闭其 CLI 守护进程。转发入口只监听 127.0.0.1，云桌面令牌留在 Hob 内；用户接管时拒绝新连接并断开已有连接，同一屏幕同时只给一个任务使用，助手遇到任务占用时提示任务名。任务结束或助手会话释放时断开。CLI 的官方技能从 `playwright-core` 原样加载。
+Hob 首次启动会安装自带的「密码库」插件，默认对所有助手开启，不需要账号。密码库把登录记录写入 `HOB_HOME/plugin-data/vault/vault.json`，用同目录随机生成的 32 字节 `vault.key` 以 AES-256-GCM 加密，两个文件都是 0600 并原子写入；`system/seeded.json` 记下只安装一次，用户停用或卸载后不会自动补回。Bitwarden 等外部插件可以同时启用，Hob 按同一凭据协议分别查找。
+
+所有声明 `list` 角色的凭据提供者都会在插件详情页显示登录列表。列表只通过 app-only 的 `list` 角色读取概况；密码显示、复制、编辑、删除和 CSV 导入分别调用 `secret`、`save`、`delete`，密码只在这一次请求和界面内存中经过，不写入 Hob 文件、事件、日志或会话。详情页支持 Bitwarden、Chrome 和 1Password 的 CSV 表头，文件只在浏览器内存里解析，重复的名称、用户名和网址会跳过。
+
+密码管理插件可以在 MCP 工具的 `_meta["hob/credentials"]` 上声明 `list`、`secret`、`generate`、`save` 四个角色；这些工具同时带 `_meta.ui.visibility: ["app"]`，不进入助手和任务的模型工具列表。Hob 按角色调用它们，`list` 只拿登录概况，`secret` 只在一次填写操作中拿账号、密码和可选的当前两步验证码，`delete` 是只给界面用的 app-only 角色；模型只看到插件提供的 `list_logins` 和 `save_login`。
+
+登录只有一个工具 `login(site, reason, account?, self?)`，单聊、群和任务里都有；该出哪张卡由 Hob 看过页面和密码管理器以后决定（这两件事只有 Hob 知道），助手只管「登录这个网站」。没有云桌面或助手没有凭据提供者时，`login` 直接出一张自己登录卡（标题「需要登录：网站」、助手写的 reason、「去登录」打开云桌面、用户点「完成」后回助手 `用户已在「{site}」完成登录。`），没有 `account` 参数。
+
+有凭据提供者时，`login` 先读取当前显示的云桌面页面（`login.ts` 的 `prepareLogin`），再按顺序决定：
+
+0. `self` 是 true（用户说要自己登录）→ 不读页面、不找候选，直接出自己登录卡。
+1. 页面上有验证码框（`autocomplete="one-time-code"`，或页面上没有密码框且某个输入框的 name/id 含 otp、totp、2fa、mfa、verification、code）→ 自己登录卡，reason 显示在卡上。
+2. 从助手启用的凭据提供者里按网站名称、保存的网址和可选用户名找候选：名称包含 `site`，或保存网址的主机名和 `site` 的主机名相同、互为父子域名（页面 `login.example.net` 对保存的 `example.net`），主机名完全一样的排在前面。有候选但页面对不上 → 不填，出「没有填写密码」卡（当前页面、保存的网址、「可能是仿冒的页面」），不去密码库取密码。核对规则：页面主机名必须等于某个候选保存网址的主机名，或是它的子域名；反向的父域名和相似的仿冒域名不通过。
+3. 候选和网址对得上：页面上没有可见的用户名框也没有密码框 → 回「没有账号密码框」那句（见下）；设了这个网站以后都允许、或 10 分钟内批准过 → 直接填，不出卡；其余 → 批准卡。
+4. 没有候选：页面上有用户名框或密码框且有提供者带 `save` 角色 → 录入卡；没有能存的提供者 → 自己登录卡；页面上没有账号密码框 → 同一个助手 10 分钟内对同一主机第一次回「当前页面（网址）上没有账号密码框。先打开登录表单再调 login；…再调一次 login，Hob 会请用户自己登录。」，第二次就出自己登录卡（助手看过页面，确认只能用别的方式登录才会再调）。
+
+三种卡都用提问卡外壳和同一套样式（`web/src/components/Items.tsx` 的 `FillLoginCard` / `LoginEntryCard` / `LoginCard`）：
+
+- 批准卡：标题「在 {主机名} 登录」，白底行组里「网站」带绿色「和保存的网址一致」、「账号」带提供者和文件夹（几个候选时是单选）；按钮左边文字按钮「我自己登录」，右边「不允许」「这次允许」「这个网站以后都允许」。用户允许后，Hob 再次核对页面，通过 CDP 填可见的用户名和密码输入框（密码优先 `autocomplete="current-password"` 的那个）；密码只在这次内存调用和页面填写之间经过，报错原因里出现了密码也换成「[已隐藏]」。只有用户名框时先填用户名，十分钟内同一网站同一账号再次调用不重复询问，等用户进入密码步骤后再填密码。自动填写设置只保存提供者、条目 id、主机名、用户名和时间（`system/login-auto.json`），插件详情页可以改回每次询问。
+- 录入卡（`login.entry`）：密码管理器里没有这个网站的账号时用。标题「在 {主机名} 登录」，白底行组里「网站」、用户名输入框（预填 `account`）、密码输入框（`type=password`，可显示隐藏）；有两个以上带 `save` 的提供者时多一行「存到」下拉，自带密码库排第一当默认。按钮左边「我自己登录」，右边「不登录」「保存并登录」（用户名和密码都填了才能点）。提交后密码只在这一次请求里经过：Hob 调提供者 `save`（`name` 用助手写的网站名、`uris: ["https://{主机名}"]`），再照批准卡的办法核对并填进当前页面（两步登录只填用户名并记 10 分钟）；审批记录只留提供者、用户名和结果。没存上：接口回原因，卡上 toast 显示，表单保持可填，不回模型；存上了没填上：卡片和回助手的话都写明已存进哪个提供者、为什么没填。
+- 批准卡、录入卡上点「我自己登录」（`POST /api/approvals/:id { self: true }`）：同一张卡换成自己登录卡的样子（标题改成「需要登录：网站」），还挂着等用户登完，不另发卡、不回模型；用户点「完成」后照自己登录卡回答。卡片收起后保留网站、账号两行，下面写「已登录 · 这次允许」/「已拒绝」/「已存进{提供者}并填好」/「没有登录」/「已选择自己登录」等结果。
+
+回给模型的文字都在 `login.ts` 的 `loginCard` / `prepareLogin` 里：出卡的三种情况都结束这一轮（`terminate`），用户在卡上作答后作为 `[hob-event]` 回到助手（任务里回到任务）。
+
+填进页面以后密码就在网页里了，助手自己的浏览器命令会把它带出来：`playwright-cli snapshot` 的无障碍快照里有密码框的值，`eval` 读输入框也能读到。所以 Hob 填过的密码同时记在这个进程的内存里（`rememberFilledSecret`，按助手的屏幕分，最多 20 个）；助手、任务的 `playwright-cli` 启动器把每条命令的输出和它写进 `.playwright-cli/` 的快照文件先 POST 回这个会话的浏览器转发入口（`BrowserRelay`，令牌只在命令的环境里），由 Hob 抹掉这些密码再还给命令行，模型和会话文件里看到的都是「••••」。转发入口不在了（会话已结束）就照原样输出。Hob 自己报错时也用同一份清单脱敏。这是正常流程里的保护；助手真要存心去翻页面（截图、读内存、用别的工具）挡不住，和票 254 的边界一致。
+
+`fill_new_password` 只在同时有 `list`、`secret`、`generate` 和 `save` 四种角色时提供。它先检查当前页面的可见密码框和主机名，再判断凭据列表里同一主机名、同一用户名是否已有条目：有则更新原条目（修改密码），没有则新建（注册）。用户批准后按给出的长度和字符种类调用 `generate`，先用 `save` 写入密码管理器，再重新核对页面，通过 CDP 填 `autocomplete="new-password"` 的全部输入框；没有这类标记时注册页填全部可见密码框，修改密码页有三个密码框时保留第一个旧密码框（填原来的密码）并填其余新密码框，只有两个框就都填新密码。用户名框为空时一并填入。批准卡只保存生成规则、网站、用户名、条目和文件夹等元数据；生成的密码不进审批、会话、事件、日志或 `HOB_HOME`。注册后 30 分钟内同一网站同一用户名再次调用（网站不接受密码后的重试）仍是注册，批准卡照样出，但更新刚存的那一条，不多存；列表里那条不是这次流程存的才算修改密码。失败若已保存会明确告诉助手已存进哪一条。
+
+端到端测试（`server/test/fill-login-e2e.test.ts`）不需要真的云桌面：云桌面的地址和令牌本来就来自部署环境变量 `HOB_DESKTOP_URL` / `HOB_DESKTOP_TOKEN`（见 `DesktopService`），测试把它们指向 `server/test/fixtures/fake-desktopd.mjs`——一个只实现 desktopd 的 `/api/health`、`/api/events`、`/api/screens/:id/browser/start` 和 `/cdp/:id` WebSocket 转发的小服务，`/cdp/:id` 原样转给本机 Chrome 的 `--remote-debugging-port`。假网站在 `fake-sites.mjs`（一步登录、两步登录、注册、改密码、仿冒页、几个没存账号的站、只有第三方登录按钮的页、登录后出验证码的页），Chrome 用 `--host-resolver-rules` 把这几个主机名指到它；假密码管理插件在 `credentials-fixture.mjs`（密码库是一个 JSON 文件，`HOB_FAKE_FAIL_FILE` 指向的文件内容决定哪一步报错，跑着的时候能切换）。本机找不到 Chrome（也没设 `HOB_TEST_CHROME`）时整组跳过。
+
+
+可选的 desktopd v2 是独立容器，通过地址和 Bearer 令牌连接。每个助手按 `desktopProfile(assistantId)` 使用独立屏幕、窗口和 Chromium profile。屏幕按需启动，空闲回收后保留浏览器数据；有观看者或 CDP 连接时不回收。助手和任务用 `playwright-cli` 操作所属屏幕的浏览器；Hob 在引擎的 `bin` 写入启动器，并在每次 bash 执行时注入会话独立的本机转发地址和短期凭据。每个会话有独立的 CLI 缓存，即使命令显式指定相同的 `-s` 名称也不会串；会话结束时关闭其 CLI 守护进程。转发入口只监听 127.0.0.1，云桌面令牌留在 Hob 内；用户接管时拒绝新连接并断开已有连接，同一屏幕同时只给一个任务使用，助手遇到任务占用时提示任务名。任务结束或助手会话释放时断开。CLI 的官方技能从 `playwright-core` 原样加载。Hob 自己连当前页面（填写登录、新密码）时，「当前显示的标签页」按 `document.hasFocus()` 的那个、再按 `visibilityState` 是 `visible` 的那个、最后才是列表里的最后一个来取（`currentPage`）：Playwright 列出页面的顺序和 Chrome `Target.getTargets` 的顺序都不可靠，标签页一多就不能拿位置当当前页面。headless Chrome 里所有标签页都报 `visible`、`hasFocus` 也不稳定，所以端到端测试的浏览器里始终只留一个标签页。
 
 登录态是跨屏幕共享的。desktopd 在 `/data/shared-login/cookies.json` 保存公共 cookie 快照，在 `/data/shared-login/state.json` 记每个 profile 是否完成首次迁移；每个 profile 启动时通过 CDP 合并旧 profile 的 cookie 并导入公共快照。每个带调试口的浏览器每 5 秒检查 cookie 变化，只把新增、变更和退出登录的 cookie 合进公共快照，再推给其他开着的浏览器；推送后刷新同一网站的页面，同一浏览器同一网站 60 秒最多刷新 3 次，浏览器正被任务或助手使用时延后到空闲再刷。localStorage、IndexedDB 和已保存密码不复制；依赖这些状态的网站由用户在桌面上完成登录。多个助手仍可同时操作各自屏幕，同一网站是否因新登录使旧会话失效由网站决定。
 
@@ -358,13 +459,14 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
 ## 设置（settings.json / secrets.json）
 
 - 界面能改的东西都在 `HOB_HOME/system/settings.json`：`{ revision, settings: { general, providers, models, image, work } }`。
-  - `general`：`theme`（system / light / dark）、`timezone`（默认系统时区）、`aboutYou`（称呼、语言、其他说明）。
+  - `general`：`theme`（system / light / dark）、`timezone`（默认系统时区）、`proxy`（HTTP/HTTPS 代理地址，空表示关闭）、`noProxy`（逗号分隔的 NO_PROXY 地址，默认 `localhost,127.0.0.1,::1`）、`aboutYou`（称呼、语言、其他说明）。
   - `models`：`roster`（能用哪些模型 + 每句定位 + 默认思考档）、`conversation` / `work` 两个角色、`thinking`（每个模型的自定义思考档，键是 `"服务商/模型"`；没存就用默认规则，见“思考档”）。
   - `providers`：`ProviderSettings[]`，只有 `kind: "builtin"`（引擎自带服务商，只填 Key）和 `kind: "custom"`（兼容接口：`id` slug、`name`、`api`、`baseUrl`、`models[]`，每个模型可带 `extra` 原样透传给引擎）。Key 在 `secrets.json` 的 `provider:<id>`，接口只给 `keyConfigured`。写入走 `PUT /api/providers/:id`。
   - `search`：联网搜索服务商顺序、开关和服务地址，密钥手动填写并存入 `secrets.json` 的 `search:<name>`。搜索与抓取工具对 Router 和 Worker 可用。
   - `image`：`{ source: "off" }` / `{ source: "openai", baseUrl, model, size? }`，写入走 `PUT /api/image`。
   - `work`：`maxJobs`（1–8）、`jobStallMinutes`、`routerStallMinutes`。
-- 全局规则独立存在 `HOB_HOME/rules.json`，`GET /api/rules` 读取，`PUT /api/rules` 整表保存并推送 `rules` 事件；`ask` 表示执行前确认，`allow` 表示一律照做。
+- 全局网络代理：设置 → 通用里的 `general.proxy` 只接受 `http://` 或 `https://`，可带用户名和密码；`general.noProxy` 使用标准 `NO_PROXY` 的逗号分隔主机列表。Hob 进程通过 undici 的全局 dispatcher 代理模型调用、插件远程连接、OAuth、联网搜索、网页抓取、图像生成、向量服务、市场索引、版本检查和价格表请求，命中 `noProxy` 的地址直连；清空代理后恢复默认 dispatcher。设置修改后立即切换，插件服务会按现有重载流程重启。
+- Hob 启动的本机插件进程、助手和任务的 bash、定时检查脚本都会收到 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 及对应小写变量；代理未设置时保留 Hob 继承的环境，不额外写入这些变量。邮箱插件用同一组环境变量连接 IMAP 和 SMTP，按 `NO_PROXY` 分别判断，旧 profile 里的 `PROXY` 值忽略。 `HOB_HOME/rules.json`，`GET /api/rules` 读取，`PUT /api/rules` 整表保存并推送 `rules` 事件；`ask` 表示执行前确认，`allow` 表示一律照做。
 - `GET /api/settings` 返回整份（带 revision）；`PUT /api/settings {revision, patch}` 按节合并，revision 不是当前的 → 409，前端重新拉取并提示。
 - 改完即生效：时区影响提示词里的“现在时间”和定时调度，并发和卡住判定下一轮/下一次检查就用新值。
 - `aboutYou` 进了所有助手的系统提示词（“关于用户”一节：填了哪行出哪行，全空就不出）。
@@ -401,13 +503,13 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
 
 - 登录：`POST /api/login {password}` → HttpOnly cookie（签名随机 token，存内存 + `config.json` 里的 secret）。其余 `/api/*` 都要 cookie。
 - REST（详见 `shared/types.ts` 的 `Api` 注释）：
-  - `GET /api/bootstrap` → 助手列表（带最后一句、未读、是否在忙）、在跑和最近的任务、定时、未答审批、设置（带 revision）
+  - `GET /api/bootstrap` → 助手列表（带最后一句、未读、是否在忙）、在跑和最近的任务、定时、未答审批、设置（带 revision）、版本检查结果（`update`，有结果时返回）
   - `GET /api/settings` / `PUT /api/settings {revision, patch}` → 读 / 按节合并写设置
   - `GET /api/providers` → 已配的服务商、引擎自带的服务商目录、整份设置，以及每个已配置服务商的模型和思考档（`models`，键是服务商 id；内置服务商列出引擎目录里的全部模型）；`POST /api/providers/test` 测试连接（内置服务商发起少量模型调用，兼容接口访问模型列表，失败不保存配置）
   - `PUT /api/models/thinking {ref, levels}` → 存一个模型的自定义思考档（`null` = 恢复默认），返回新 revision 的整份设置和这个模型现在的思考档、`PUT /api/providers/:id`（新建或改，Key 可选留空沿用）、`DELETE /api/providers/:id`、`POST /api/providers/discover {api, baseUrl, apiKey?, id?}`（从兼容接口拉模型列表）、`GET /api/providers/import`（本机能导入的服务商，不带 Key）、`POST /api/providers/import {ids}`（导入所选，同 id 覆盖）
   - `GET /api/models`（可用模型 + 名单里哪些不可用）
   - `GET /api/usage`、`PUT /api/usage/price {revision, model, price}`（消耗，见下文“消耗”）
-  - `POST /api/password {old, new}`、`GET /api/about`（版本、数据目录）
+  - `POST /api/password {old, new}`、`GET /api/about`（版本、数据目录、版本检查结果；`main.ts` 启动时和每 6 小时查一次 npm 上 `hob-bot` 的 `latest`，只放内存，变化时同时推 `update` SSE 事件）
   - `GET /api/assistants/:id/items?before&limit` → 条目 + 引用到的 approvals/jobs/drafts
   - `GET /api/assistants/:id/profile` → 助手 + rules + routines + 最近工作日志
   - `POST /api/assistants/:id/messages {text, quote?, files?}`、`POST /api/assistants/:id/stop`、`POST /api/assistants/:id/read`
@@ -445,7 +547,7 @@ Hob 是常驻助手。你只跟助手说话；几步就能完成的事助手自�
 - 照 `docs/design/v2/index.html` 做（那是唯一的视觉真相源：CSS 变量、尺寸、组件都直接搬）。截图 `s1~s6.png` 是验收对照。
 - 头像：都是 Hob 的像素小火苗，换一种颜色、带一件职责道具（安全帽、放大镜、Wi-Fi…），数据和画法在 `shared/sprites.ts`，前端画成 SVG。sprite 记成「道具」或「道具:颜色」；库里没有贴合职责的道具时，AI 可以自己画一件：sprite 记成 `custom` 或 `custom:颜色`，画法存在 `Assistant.prop`（`{ art, pal, dx }`，格式和 PROPS 里的一项相同；校验在 `shared/sprites.ts` 的 `validateCustomProp`，前后端共用，最多 16 行 × 16 字符、最多 6 种颜色、不能动火苗的 o y e 和描边 k、不能盖住眼睛、至少 6 个像素），草稿同样能带一份；自画道具在头像选择器里排第一个，换成内置道具后画法保留、能换回来；建助手时模型按职责挑道具（道具表同时生成提示词里的那行说明），和已有助手撞了就自动换颜色（自画的图案各不相同，不算撞）；助手设置里可以换道具和颜色。
 - 桌面三栏：左栏助手（置顶大头像可按住拖动换位置，先后存助手的 pinOrder，下面是分组列表、收起的助手、底部设置）、中间对话、右栏（正在做 + 定时 / 定时编辑 / 助手设置，可收起）。设置是整页：桌面左侧分栏导航 + 右侧内容，手机先列表再进入。
-- 设置页：通用、服务商、模型、记忆、图像生成、联网搜索、技能、MCP、任务、消耗、通知、关于都是真页面。
+- 设置页：通用、服务商、模型、记忆、图像生成、联网搜索、技能、任务、消耗、通知、关于都是真页面；MCP 服务从插件页管理，旧的 `#/settings/mcp` 地址跳到 `#/plugins`。
 - 手机（宽 < 768px）：列表页（顶部在跑的任务行 + 助手）和对话页两级。
 - 浅色为主，深色按系统或设置切换（index.html 里的 `.dark` 变量）。
 - 不用 UI 组件库、不用 CSS 框架；React + 手写 CSS。

@@ -29,10 +29,10 @@ const server = createServer(async (req, res) => {
   }
 });
 
-// 截图里等这两处文字出现，说明那段数据已经渲染好了；换成英文截图时等英文文字
+// 截图里等这些文字出现，说明那段数据已经渲染好了；换成英文截图时等英文文字
 const WAIT = {
-  zh: { assistant: "交给「写作」", group: "网站加深色模式" },
-  en: { assistant: "Assigned to Writing", group: "Dark mode for the website" },
+  zh: { assistant: "交给「写作」", group: "网站加深色模式", cards: "周末上线前，定一下这几项", plugins: "Cloudflare" },
+  en: { assistant: "Assigned to Writing", group: "Dark mode for the website", cards: "A few details before the weekend release", plugins: "Cloudflare" },
 };
 
 let browser;
@@ -46,7 +46,7 @@ try {
     await mkdir(output, { recursive: true });
     const query = lang === "en" ? "&lang=en" : "";
 
-    async function open(scene, mobile = false) {
+    async function open(scene, mobile = false, hash = "") {
       const context = await browser.newContext({
         viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
         deviceScaleFactor: 2,
@@ -55,8 +55,11 @@ try {
         // 界面语言没定过时跟浏览器首选语言走，截图时把它定成这一轮要的语言
         locale: lang === "en" ? "en-US" : "zh-CN",
       });
+      await context.addInitScript(() => {
+        localStorage.setItem("hob.push-prompt-dismissed", "1");
+      });
       const page = await context.newPage();
-      await page.goto(`${base}?mock=1&scene=${scene}${query}`);
+      await page.goto(`${base}?mock=1&scene=${scene}${query}${hash}`);
       await page.waitForTimeout(1300);
       return { page, context };
     }
@@ -78,6 +81,16 @@ try {
     await pc.page.getByText(WAIT[lang].group, { exact: true }).first().waitFor();
     await save(pc.page, "chat");
     await pc.context.close();
+
+    const cards = await open("readme-interactive-cards");
+    await cards.page.getByText(WAIT[lang].cards, { exact: true }).first().waitFor();
+    await save(cards.page, "cards");
+    await cards.context.close();
+
+    const plugins = await open("readme-plugins", false, "#/plugins/market");
+    await plugins.page.getByText(WAIT[lang].plugins, { exact: true }).first().waitFor();
+    await save(plugins.page, "plugins");
+    await plugins.context.close();
 
     const phones = [];
     for (const scene of ["readme-mobile-list", "readme-mobile-chat", "readme-mobile-todos"]) {

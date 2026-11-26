@@ -55,8 +55,15 @@ export function draftError(name: string, members: string[]): string | null {
 }
 
 /** 建群时交给服务端的字段。 */
-export function createBody(name: string, purpose: string, members: string[], ownerId: string) {
-  return { name: name.trim(), purpose: purpose.trim(), ownerId: ownerId || members[0]!, members };
+export function createBody(name: string, purpose: string, members: string[], ownerId: string, cwd = "") {
+  const trimmedCwd = cwd.trim();
+  return {
+    name: name.trim(),
+    purpose: purpose.trim(),
+    ownerId: ownerId || members[0]!,
+    members,
+    ...(trimmedCwd ? { cwd: trimmedCwd } : {}),
+  };
 }
 
 export function MemberList({ assistants, members, ownerId, onToggle, onOwner }: {
@@ -99,6 +106,7 @@ export function NewGroupDialog({ onClose }: { onClose: () => void }) {
   const s = useApp();
   const [name, setName] = useState("");
   const [purpose, setPurpose] = useState("");
+  const [cwd, setCwd] = useState("");
   const [members, setMembers] = useState<string[]>([]);
   const [ownerId, setOwnerId] = useState("");
   const [from, setFrom] = useState("");
@@ -125,7 +133,7 @@ export function NewGroupDialog({ onClose }: { onClose: () => void }) {
     const problem = draftError(name, members);
     if (problem) return setError(problem);
     setBusy(true);
-    const failure = await createGroup(createBody(name, purpose, members, ownerId));
+    const failure = await createGroup(createBody(name, purpose, members, ownerId, cwd));
     setBusy(false);
     if (failure) setError(t("建群失败：{error}", { error: failure }));
     else onClose();
@@ -148,6 +156,10 @@ export function NewGroupDialog({ onClose }: { onClose: () => void }) {
         <label className="gcreate-field">
           <span>{t("职责")}</span>
           <input value={purpose} placeholder={t("一句话，如「家里 NAS 和服务器上的存储和备份」")} onChange={(event) => setPurpose(event.target.value)} />
+        </label>
+        <label className="gcreate-field">
+          <span>{t("工作目录（可选）")}</span>
+          <input value={cwd} placeholder={t("如 /workspace/app，创建后不可修改")} onChange={(event) => setCwd(event.target.value)} />
         </label>
         <div className="gcreate-label">{t("成员")}</div>
         <MemberList assistants={s.assistants} members={members} ownerId={ownerId} onToggle={toggle} onOwner={setOwnerId} />

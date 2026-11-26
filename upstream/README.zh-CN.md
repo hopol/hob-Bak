@@ -26,13 +26,19 @@
 - **哪些事要先问你，由规则决定。** 全局规则和每个助手自己的规则，决定哪些操作要先等你确认、哪些直接照做。确认时可以顺手存成规则，下次同类的事不再问。
 - **事情交给对的助手。** 助手会把归别的助手管的事转交过去，转交卡跟着进度走，结果回到发起的那位；同类的事反复出现时，它会提议给你建一个专门的助手。
 - **定时任务有变化才叫醒助手。** 定时可以带一段检查脚本：到点先跑脚本，有新情况才让助手接手，没变化就不打扰你。
-- **做过的活能变成技能。** 任务做完、做法值得留下时，助手可以让它把步骤写成技能，以后派活直接带上；每次修改都留一个版本。
+- **做过的活能变成技能。** 做法值得留下时，谁做的谁来写成技能：助手自己做的它自己写，任务做的由助手让任务回顾后写。下次助手和任务都照着做，每次修改都留一个版本。
+
+## 对话里的卡片
+
+助手和插件可以直接在对话里发结构化卡片，把表格、分栏、折叠详情、开关或表单放进消息流，省得来回复制粘贴。需要你拍板或补充信息时，提问也做成了一张卡，能把多个选择题和填空题（文本、数字、日期时间）合在一起，一次填完提交。
+
+![对话里的交互卡片：Cloudflare 解析记录表格与折叠详情，下方是混合选择题和填空题的提问卡](docs/screenshots/cards.png)
 
 ## 助手团队
 
-把几个助手拉进一个群，就是一个小团队：不点名时由群主接话，`@` 可以点名某个成员，每个成员在这个群里可以用不同的模型。群的定时任务由群主统筹，到点后由群主决定开话题、派给谁。
+把几个助手拉进一个群，就是一个小团队：不点名时由群主接话（也可以设成全员回应：群主先回，其他成员依次轮到），`@` 可以点名某个成员，每个成员在这个群里可以用不同的模型。群的定时任务由群主统筹，到点后由群主决定开话题、派给谁。
 
-较大的事可以开一个话题，几个人在里面接力。手上的事要分几步，助手会列一份待办：每项只有「做什么」和「做到哪儿」，开始一项、做完一项就更新，你在输入框上面和任务卡上就看得到做到哪了。列不列、怎么拆，由助手按这件事判断。新装时自带一个敏捷团队群，有产品、架构、开发、测试和发布五个成员。
+较大的事可以开一个话题，几个人在里面接力。手上的事要分几步，助手会列一份待办：每项只有「做什么」和「做到哪儿」，开始一项、做完一项就更新，你在输入框上面和任务卡上就看得到做到哪了。列不列、怎么拆，由助手按这件事判断。新装时自带一个敏捷团队群，有产品、架构、开发、测试和发布五个成员；还有一个做安全研究和逆向分析的 Hacker，和 Hob 一起置顶。
 
 ![群里的一个话题：待办的进度和成员的任务卡](docs/screenshots/chat.png)
 
@@ -42,15 +48,23 @@
 
 ![手机上的 Hob：首页、对话里的任务卡和待办清单](docs/screenshots/mobile.png)
 
+## 插件市场
+
+从插件市场安装工具插件（目前有 GitHub、Cloudflare、Gmail、支持 IMAP/SMTP 的邮箱和 Bitwarden），助手和任务就多了一批趁手的工具。每个插件有自己的配置页，需要登录的服务可以直接登录，工具能逐个开关，也能指定给哪些助手用。市场里还有社区维护的供应商插件（Copilot、ChatGPT 订阅、GLM 编程套餐、Antigravity、OpenCode Zen Free，兼容 OpenCode 供应商插件，属于非官方接入），能直接复用你已有的订阅或账号。任意 MCP 服务都能作为自定义插件加进来；自建插件源或向官方市场提交新插件，见 [hob-plugins](https://github.com/FFatTiger/hob-plugins) 及[插件贡献指南](https://github.com/FFatTiger/hob-plugins/blob/main/CONTRIBUTING.zh-CN.md)。
+
+![插件市场：左栏是已安装的工具和供应商插件，右侧可按分类浏览和一键安装](docs/screenshots/plugins.png)
+
 ## 还能接上这些
 
-- **模型**：Anthropic、OpenAI、Google、DeepSeek、OpenRouter 等内置服务商只填 API Key；OpenAI 或 Anthropic 兼容接口也能用。npm 和源码安装还可以直接用本机 Claude Code 的订阅。
+- **模型**：Anthropic、OpenAI、Google、DeepSeek、OpenRouter 等内置服务商只填 API Key；OpenAI 或 Anthropic 兼容接口也能用。npm 和源码安装还可以直接用本机 Claude Code 的订阅，也可以从插件市场装供应商插件复用已有订阅或账号。
 - **知识库**：整理和预览文件，绑定给助手，引用能跳回原文；配了向量模型可以混合检索，PDF 也能建索引。
-- **联网搜索**：SearXNG、Exa、Tavily、Brave、Serper、Jina、Firecrawl、Perplexity、You.com、Ollama。
-- **MCP**：任务可以调用配置好的 MCP 服务，也能从 Claude Code、Cursor、pi 导入已有配置。
+- **联网搜索**：OpenAI Responses API、SearXNG、Exa、Tavily、Brave、Serper、Jina、Firecrawl、Perplexity、You.com、Ollama。
+- **密码**：自带一个本机密码库，也能接 Bitwarden。网站要登录时，Hob 核对网址、你批准后直接把账号密码填进云桌面的登录页，密码不经过助手；没存过的网站在卡片上填一次就存下。
 - **记忆**：存在本地，或者接入 [Lore](https://github.com/FFatTiger/lore)。
 - **页面和图片**：助手可以把对比、调研做成网页在侧栏打开；配上 OpenAI 兼容的图像接口就能画图和改图。
 - **云桌面**（可选）：每个助手一个浏览器，在一个里登录的网站，其他助手的浏览器里也是登录的；你可以在旁边看，也可以接管。
+- **项目目录**：建群、话题或助手时可以绑一个项目目录。在那里聊天，命令和文件默认就在这个目录，并读项目的 `AGENTS.md`；任务也在这个目录里跑，几个任务并行时可以各用一个子目录（比如 worktree）。
+- **收藏和搜索聊天记录**：把常用的结论、地址收藏起来随时找到；左栏能搜所有对话里的消息，助手也能自己翻以前的聊天记录。
 - **用量**：按模型、按助手统计请求数、token 和估算花费。
 
 ## 快速开始
@@ -83,7 +97,7 @@ docker compose up -d
 Hob 是单个 Node 进程，数据全在 `HOB_HOME`（默认 `~/.hob`）。
 
 - **长期运行**：用任意进程管理器跑，比如 `pm2 start hob --name hob`（源码目录里先 `npm run build`，再 `pm2 start deploy/pm2.config.cjs`）。前面加一层带 TLS 的反向代理；推送通知和添加到主屏幕都需要 HTTPS。
-- **Docker**：镜像是 `ghcr.io/ffattiger/hob`（amd64、arm64），数据在 `hob-data` 卷里；源码目录里加 `--build` 就用本地源码构建镜像。端口默认只绑本机，要局域网直连，把 `compose.yaml` 里的端口改成 `"30148:30148"`。任务和本地命令类的 MCP 服务都在容器里运行，镜像里有 git、curl、python3、ripgrep、fd、node 和 npx。要让任务处理宿主机上的项目，先建好 `workspace/` 目录（容器以 uid 1000 运行），再打开 `compose.yaml` 里 `./workspace:/workspace` 那行挂载。
+- **Docker**：镜像是 `ghcr.io/ffattiger/hob`（amd64、arm64），数据在 `hob-data` 卷里；源码目录里加 `--build` 就用本地源码构建镜像。端口默认只绑本机，要局域网直连，把 `compose.yaml` 里的端口改成 `"30148:30148"`。任务和本地命令类的插件服务都在容器里运行，镜像里有 git、curl、python3、ripgrep、fd、node 和 npx。要让任务处理宿主机上的项目，先建好 `workspace/` 目录（容器以 uid 1000 运行），再打开 `compose.yaml` 里 `./workspace:/workspace` 那行挂载。
 - **云桌面**：`docker compose --profile desktop up -d` 同时启动 Hob 和云桌面，令牌自动对上。单独部署、反向代理和资源占用见[云桌面说明](desktop/README.md)。
 - **Claude 订阅**：npm 或源码安装时，先在本机装好 Claude Code 并执行 `claude auth login`，再到 **设置 → 服务商** 启用 Claude 订阅。用量算在你的订阅额度里；Hob 不读取、不保存 Claude 凭证，Claude Code 自己的会话记录会写在 `~/.claude/projects/`。Docker 镜像不支持。
 - **备份和升级**：备份 `HOB_HOME` 就保留了全部数据。从 1.5 之前的版本升级，会自动迁移数据目录并留一份完整备份，细节和回退方法见 [1.5.0 发版说明](https://github.com/FFatTiger/hob/releases/tag/v1.5.0)；Docker 里回退用 `docker compose run --rm hob node bin/hob.mjs layout --restore`（先停掉 Hob）。
@@ -119,6 +133,10 @@ npm run typecheck
 前端地址加上 `?mock=1` 会改用浏览器里的模拟后端，不需要模型和服务端，README 里的截图就是这样拍的（`scripts/readme-screenshots.mjs`）。
 
 技术栈：Node 22 + TypeScript，Hono + SSE，Vite + React，CSS 全部手写；智能体引擎是进程内运行的 [pi](https://github.com/earendil-works/pi) SDK。设计、数据布局和工具列表见 [docs/architecture.md](docs/architecture.md)。
+
+### 编写和贡献插件
+
+官方工具插件（MCP）和兼容 OpenCode 的供应商插件统一维护在 [FFatTiger/hob-plugins](https://github.com/FFatTiger/hob-plugins)。贡献插件时，fork 该仓库并新建插件目录（`plugin.json` 配 `mcp.json`，或配锁死依赖的 `providers`、`package.json` 与 `bun.lock`），运行 `node scripts/build-index.mjs` 更新索引，在 Hob 里添加为自定义插件源实测通过后提 PR。完整字段规范和安全审核要求见[插件贡献指南](https://github.com/FFatTiger/hob-plugins/blob/main/CONTRIBUTING.zh-CN.md)。
 
 ## 许可证
 

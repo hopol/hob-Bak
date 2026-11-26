@@ -513,12 +513,12 @@ describe("Router", () => {
     }
   });
 
-  it("Router 憋着不出字：6 分钟没事件就叫停并明说", async () => {
+  it("模型连续两次不出字：重试一次后叫停并明说", async () => {
     // 真的等 6 分钟不行，把 Router 的看门狗调短
     const hob = makeHob();
     hob.runtime.router.stallOverrideMs = 60;
     try {
-      hob.faux.setResponses([() => new Promise<never>(() => undefined)]);
+      hob.faux.setResponses([() => new Promise<never>(() => undefined), () => new Promise<never>(() => undefined)]);
       await hob.runtime.router.send("hob", { text: "在吗" });
       await waitFor(() =>
         hob.runtime.router.items("hob").items.some((item) => item.kind === "note" && item.icon === "info"),
@@ -534,6 +534,21 @@ describe("Router", () => {
     }
   });
 
+  it("模型第一次不出字时自动重试并回复", async () => {
+    const hob = makeHob();
+    hob.runtime.router.stallOverrideMs = 100;
+    try {
+      const labels: string[] = [];
+      hob.runtime.bus.subscribe(event => { if (event.type === "router-activity" && event.activity) labels.push(event.activity.label); });
+      hob.faux.setResponses([() => new Promise<never>(() => undefined), text("继续完成。")]);
+      await hob.runtime.router.send("hob", { text: "在吗" });
+      await waitFor(() => hob.runtime.router.items("hob").items.some(item => item.kind === "assistant" && item.text === "继续完成。"));
+      expect(labels).toContain("模型没有响应，正在重试");
+      expect(hob.faux.state.callCount).toBe(2);
+      expect(hob.runtime.router.items("hob").items.some(item => item.kind === "note" && item.text.includes("无响应，已停止"))).toBe(false);
+    } finally { hob.close(); }
+  });
+
   it("叫停后请求还挂着停不下来：丢掉这份会话，下一条消息照样有回复", async () => {
     const hob = makeHob();
     hob.runtime.router.stallOverrideMs = 60;
@@ -545,7 +560,7 @@ describe("Router", () => {
       // 中断收不了尾：abort 一直不返回，模型那次请求也一直挂着
       const session = (hob.runtime.router as unknown as { routers: Map<string, { session?: { abort: () => Promise<void> } }> }).routers.get("hob")!.session!;
       vi.spyOn(session, "abort").mockImplementation(() => new Promise<void>(() => undefined));
-      hob.faux.setResponses([() => new Promise<never>(() => undefined)]);
+      hob.faux.setResponses([() => new Promise<never>(() => undefined), () => new Promise<never>(() => undefined)]);
       void hob.runtime.router.send("hob", { text: "在吗" });
       await waitFor(() => hob.runtime.router.items("hob").items.some((item) => item.kind === "note" && item.icon === "info"));
       await waitFor(() => !hob.runtime.router.isBusy("hob"));

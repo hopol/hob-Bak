@@ -9,6 +9,11 @@ export interface MentionAt {
 /** @ 后面最多认这么多字：超过就不当点名，免得半句话都被当成名字。 */
 const MAX_QUERY = 30;
 
+/** Enter and arrow keys used to confirm a Chinese/Japanese IME candidate. */
+export function isImeCompositionEvent(event: Pick<KeyboardEvent, "isComposing" | "keyCode">): boolean {
+  return event.isComposing || event.keyCode === 229;
+}
+
 /**
  * 光标前正在输入的 @：从光标往前找最近的 @（中间不能换行）。
  * 已经写完一个名字（名字后面跟了空格）就不算在点名，光标接着往下写不会弹列表。

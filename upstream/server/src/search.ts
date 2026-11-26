@@ -5,6 +5,8 @@ import { fetchViaGenericHtml } from "@juicesharp/rpiv-web-tools/providers/fetch-
 import { GitHubInterceptor } from "@juicesharp/rpiv-web-tools/providers/interceptors/github.ts";
 import { join } from "node:path";
 import type { SearchSettings, SearchProviderSetting } from "../../shared/search.ts";
+import type { ProviderSettings } from "../../shared/types.ts";
+import { createOpenAISearchProvider } from "./openai-search.ts";
 import { readSecrets } from "./secrets.ts";
 
 export type SearchClient = ReturnType<typeof createSearchProvider>;
@@ -17,9 +19,18 @@ function safeError(error: unknown, keys: string[]): string {
 }
 
 export class WebSearch {
-  constructor(readonly home: string, readonly settings: () => SearchSettings, readonly factory: Factory = createSearchProvider, readonly keyOverrides: Record<string, string> = {}) {}
+  constructor(
+    readonly home: string,
+    readonly settings: () => SearchSettings,
+    readonly factory: Factory = createSearchProvider,
+    readonly keyOverrides: Record<string, string> = {},
+    readonly modelProviders: () => ProviderSettings[] = () => [],
+  ) {}
   private keys() { return { ...readSecrets(this.home), ...this.keyOverrides }; }
-  private client(provider: SearchProviderSetting, keys: Record<string, string>): SearchClient {
+  private client(provider: SearchProviderSetting, keys: Record<string, string>, depth: "fast" | "deep" = "fast"): SearchClient {
+    if (provider.name === "openai" && this.factory === createSearchProvider) {
+      return createOpenAISearchProvider(provider, this.modelProviders(), keys, depth) as SearchClient;
+    }
     return this.factory(provider.name, { apiKey: keys[`search:${provider.name}`], baseUrl: provider.baseUrl });
   }
   async search(query: string, depth: "fast" | "deep" = "fast", max = 8) {
@@ -33,7 +44,8 @@ export class WebSearch {
     const merged = new Map<string, { title: string; url: string; snippet: string; sources: string[] }>();
     const run = async (p: SearchProviderSetting) => {
       try {
-        const response = await this.client(p, keys).search(query, count, AbortSignal.timeout(15_000));
+        const timeoutMs = p.name === "openai" ? (depth === "deep" ? 45_000 : 30_000) : 15_000;
+        const response = await this.client(p, keys, depth).search(query, count, AbortSignal.timeout(timeoutMs));
         return { p, response };
       } catch (error) { return { p, error: safeError(error, Object.values(keys)) }; }
     };
@@ -77,9 +89,13 @@ export class WebSearch {
   }
 }
 
-export function searchTools(home: string, settings: () => SearchSettings): ToolDefinition<any, any>[] {
+export function searchTools(
+  home: string,
+  settings: () => SearchSettings,
+  modelProviders: () => ProviderSettings[] = () => [],
+): ToolDefinition<any, any>[] {
   if (!settings().some((p) => p.enabled)) return [];
-  const service = new WebSearch(home, settings);
+  const service = new WebSearch(home, settings, undefined, {}, modelProviders);
   const output = async (run: () => Promise<unknown>) => {
     try { return { content: [{ type: "text" as const, text: JSON.stringify(await run()) }], details: undefined }; }
     catch (error) { return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }], details: undefined, isError: true }; }

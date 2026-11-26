@@ -20,6 +20,7 @@ import { listProviderImports, localPiDir, type ProviderImportCandidate } from ".
 import { thinkingPlan } from "../../shared/thinking.ts";
 import type { ModelCatalog } from "./models.ts";
 import type { PiHost } from "./pi.ts";
+import type { ProviderPluginManager } from "./provider-plugins.ts";
 import { readSecrets, writeSecret } from "./secrets.ts";
 import type { SettingsStore } from "./settings.ts";
 
@@ -211,8 +212,13 @@ export class ProviderService {
   private applied = new Map<string, ProviderSettings["kind"]>();
   /** 上次写给引擎的 modelOverrides（内置服务商的思考档），没变就不重写、不刷新引擎配置。 */
   private appliedOverrides?: string;
+  private providerPlugins?: ProviderPluginManager;
 
   constructor(private readonly options: ProviderServiceOptions) {}
+
+  setProviderPlugins(manager: ProviderPluginManager): void {
+    this.providerPlugins = manager;
+  }
 
   private get settings(): SettingsStore {
     return this.options.settings;
@@ -277,6 +283,13 @@ export class ProviderService {
 
   /** 一个模型现在的思考档（保存后回显给界面）。 */
   async thinkingOf(ref: string): Promise<ModelThinkingView | undefined> {
+    const pluginSummary = this.providerPlugins?.providerSummaries();
+    if (pluginSummary) {
+      for (const list of Object.values(pluginSummary.models)) {
+        const hit = list.find((view) => view.ref === ref);
+        if (hit) return hit;
+      }
+    }
     const provider = this.settings.settings.providers.find((item) => ref.startsWith(`${item.id}/`));
     if (!provider) return undefined;
     const runtime = await this.options.pi.runtime();
@@ -294,9 +307,10 @@ export class ProviderService {
     const customIds = new Set(
       settings.providers.filter((provider) => provider.kind === "custom").map((provider) => provider.id),
     );
+    const pluginIds = this.providerPlugins?.registeredHobProviderIds() ?? new Set<string>();
     const builtin = runtime
       .getProviders()
-      .filter((provider) => provider.id !== "claude-bridge" && !customIds.has(provider.id))
+      .filter((provider) => provider.id !== "claude-bridge" && !customIds.has(provider.id) && !pluginIds.has(provider.id))
       .map((provider) => ({ id: provider.id, name: provider.name }))
       .sort((a, b) => a.name.localeCompare(b.name));
     const models: Record<string, ModelThinkingView[]> = {};
@@ -307,7 +321,19 @@ export class ProviderService {
         settings.models.thinking,
       );
     }
-    return { providers: this.views(), builtin, settings: this.settings.get(), models };
+    const pluginSummary = this.providerPlugins?.providerSummaries();
+    if (pluginSummary) {
+      for (const [id, list] of Object.entries(pluginSummary.models)) {
+        models[id] = list;
+      }
+    }
+    return {
+      providers: this.views(),
+      ...(pluginSummary?.summaries.length ? { pluginProviders: pluginSummary.summaries } : {}),
+      builtin,
+      settings: this.settings.get(),
+      models,
+    };
   }
 
   /** 把设置里的服务商套进引擎：内置的设/清 Key，兼容接口注册/注销。 */
@@ -342,6 +368,7 @@ export class ProviderService {
     }
     await this.applyBuiltinThinking(runtime);
     await this.options.pi.configureClaude(runtime, this.options.home, this.settings.settings.claude);
+    await this.providerPlugins?.applyTo(runtime);
   }
 
   /**

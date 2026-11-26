@@ -5,7 +5,7 @@ import { Select } from "../src/components/Select.tsx";
 function Fixture() {
   const [value, setValue] = useState("a");
   return <><Select aria-label="测试选择" value={value} onChange={setValue} options={[
-    { value: "a", label: "甲" }, { value: "b", label: "不可选", disabled: true }, { value: "c", label: "丙" },
+    { value: "a", label: "甲", icon: <svg data-testid="icon-a" /> }, { value: "b", label: "不可选", disabled: true }, { value: "c", label: "丙", icon: <svg data-testid="icon-c" /> },
   ]} /><output>{value}</output><button>外部</button></>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

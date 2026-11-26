@@ -4,25 +4,33 @@ import { t } from "../../shared/i18n.ts";
 import { spriteArt, spriteEyes } from "../../shared/sprites.ts";
 import type { CustomProp, SpriteId } from "../../shared/types.ts";
 
-/** 同一行里连着的同色像素合成一个矩形，列表里几十个头像时少画很多节点。 */
+/** 画好的像素图按内容缓存成 SVG 图片：同一个头像在列表里出现几十次，也只拼一次。 */
+const pixelImages = new Map<string, { href: string; w: number; h: number }>();
+
+/**
+ * 不会动的像素部分画成一张图（一个节点），不再每个像素一个 <rect>：首页一次几十个头像，
+ * 逐个矩形要建几千个节点，回首页时那一帧会拖慢动画。同一行里连着的同色像素合成一个矩形。
+ */
 function SpritePixels({ art }: { art: ReturnType<typeof spriteArt> }) {
-  const rects: { x: number; y: number; w: number; fill: string }[] = [];
-  art.rows.forEach((row, y) => {
-    for (let x = 0; x < row.length; ) {
-      const ch = row[x];
-      let end = x + 1;
-      while (end < row.length && row[end] === ch) end++;
-      if (ch !== "." && art.pal[ch]) rects.push({ x, y, w: end - x, fill: art.pal[ch] });
-      x = end;
-    }
-  });
-  return (
-    <>
-      {rects.map((r, i) => (
-        <rect key={i} x={r.x} y={r.y} width={r.w + 0.02} height={1.02} fill={r.fill} />
-      ))}
-    </>
-  );
+  const key = `${art.rows.join("\n")}|${JSON.stringify(art.pal)}`;
+  let image = pixelImages.get(key);
+  if (!image) {
+    const w = Math.max(...art.rows.map((row) => row.length)), h = art.rows.length;
+    let rects = "";
+    art.rows.forEach((row, y) => {
+      for (let x = 0; x < row.length; ) {
+        const ch = row[x];
+        let end = x + 1;
+        while (end < row.length && row[end] === ch) end++;
+        if (ch !== "." && art.pal[ch]) rects += `<rect x="${x}" y="${y}" width="${end - x + 0.02}" height="1.02" fill="${art.pal[ch]}"/>`;
+        x = end;
+      }
+    });
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" shape-rendering="crispEdges">${rects}</svg>`;
+    image = { href: `data:image/svg+xml,${encodeURIComponent(svg)}`, w, h };
+    pixelImages.set(key, image);
+  }
+  return <image href={image.href} x={0} y={0} width={image.w} height={image.h} preserveAspectRatio="none" />;
 }
 
 export type AvatarMark = "busy" | "ask" | "stuck" | "done";

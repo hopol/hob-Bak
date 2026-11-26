@@ -183,6 +183,39 @@ body{font-family:Inter,"Noto Sans CJK SC","PingFang SC",system-ui,sans-serif;col
 .mcomp .ph{flex:1;color:var(--text3);font-size:14.5px}
 .mcomp .mic{width:34px;height:34px;border-radius:50%;background:var(--user);color:var(--utext);display:grid;place-items:center}
 .homebar{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);width:128px;height:5px;border-radius:3px;background:var(--text)}
+
+/* 插件效果图：和知识库、设置页共用整窗二级页结构 */
+.plugin-app{position:fixed;inset:0;display:flex;background:var(--bg);animation:page-in .24s ease-out}
+.plugin-app .setnav{width:216px;flex:none;display:flex;flex-direction:column;gap:2px;padding:22px 12px 16px;border-right:1px solid var(--line)}
+.plugin-app .setnavtitle{font-size:17px;font-weight:600;padding:0 10px 14px}
+.plugin-app .setnav .sp{flex:1}
+.plugin-app .navrow{display:flex;align-items:center;gap:6px;width:100%;height:34px;padding:0 10px;border:0;border-radius:9px;font-size:14px;color:var(--text);background:transparent;text-align:left;text-decoration:none}
+.plugin-app .navrow.sel{background:var(--field);font-weight:500}
+.plugin-app .knowledge-label{padding:25px 10px 8px;font-size:12px;color:var(--text2)}
+.plugin-navrow{gap:8px!important}
+.plugin-navrow .plugin-icon{width:28px;height:28px;border-radius:8px;font-size:14px}
+.plugin-navrow .plugin-icon img{width:18px;height:18px}
+.plugin-nav-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.plugin-dot{width:7px;height:7px;flex:none;border-radius:50%;background:currentColor}
+.plugin-dot.ok{color:var(--ok)}.plugin-dot.warn{color:var(--accent)}.plugin-dot.bad{color:var(--danger,var(--accent))}
+.plugin-main{flex:1;min-width:0;overflow:auto;padding:26px 30px 60px}
+.plugin-content{width:100%;max-width:724px;margin:0 auto}
+.plugin-title{font-size:24px;font-weight:600;letter-spacing:-.02em}
+.plugin-sub{font-size:14px;color:var(--text2);line-height:1.6;margin-top:6px}
+.plugin-count{margin:24px 0 10px}
+.plugin-card{display:flex;align-items:center;gap:14px;padding:12px;border-radius:10px;color:inherit;text-decoration:none}
+.plugin-card .info{flex:1;min-width:0}.plugin-card .name{font-weight:500;font-size:15px}.plugin-card .desc{color:var(--text2);font-size:13px;line-height:1.5;margin-top:4px}.plugin-card:hover{background:color-mix(in srgb,var(--text) 4%,var(--field))}
+.plugin-icon{width:46px;height:46px;border-radius:12px;background:var(--field);display:grid;place-items:center;color:var(--text3);flex:none}.plugin-icon img{width:28px;height:28px;object-fit:contain}
+.plugin-state{font-size:13px;color:var(--text2);white-space:nowrap}.plugin-state.ok{color:var(--ok)}.plugin-state.ok::before{content:'●';margin-right:4px}
+.plugin-section{padding:24px 0}.plugin-section h2{font-size:16px;font-weight:500;color:var(--text2)}.plugin-section .lbl{margin-top:16px}.plugin-section input{border:0;outline:0;width:100%;color:var(--text);font:inherit}.plugin-section a{color:var(--text);text-underline-offset:3px}
+.plugin-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:16px}.plugin-actions button,.plugin-card button{border:0;cursor:pointer;font:inherit}.plugin-actions a.pbtn{color:var(--text)}.plugin-actions button:disabled{opacity:.45;cursor:not-allowed}
+.plugin-list{margin-top:12px;padding:6px;border-radius:14px;background:var(--field);overflow:hidden}.plugin-tool{display:flex;align-items:center;gap:10px;padding:10px 12px;font-size:14px;border-radius:10px}.plugin-tool .sp{flex:1}.plugin-tool .kind{font-size:12px;color:var(--text2)}.plugin-tool .tool-info{flex:1;min-width:0}.plugin-tool .tool-name{font-size:13px;overflow-wrap:anywhere}.plugin-tool .tool-desc{font-size:12px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}.plugin-tool .tog{border:0;cursor:pointer}.plugin-tool .tog.off{background:var(--text3)}.plugin-tool .tog.off::after{right:auto;left:3px}.disclosure-row{display:flex;align-items:center;justify-content:space-between;width:100%;min-height:40px;padding:8px 0;border:0;border-radius:8px;background:transparent;color:var(--text);text-align:left}.disclosure-end{display:flex;align-items:center;gap:8px;color:var(--text3)}
+.plugin-scroll{max-height:186px;overflow:auto}.plugin-back{color:var(--text2);text-decoration:none;display:inline-flex;align-items:center;gap:4px;font-size:14px}.plugin-banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--field);border-radius:12px;padding:12px;margin-top:12px;font-size:14px}.plugin-banner .sp{flex:1}
+.plugin-categories,.plugin-mobile-head{display:none}
+@media(max-width:767px){
+  .plugin-app{flex-direction:column}.plugin-app .setnav{display:none}.plugin-mobile-head{display:flex;align-items:center;gap:6px;min-height:52px;padding:0 18px;border-bottom:1px solid var(--line)}.plugin-mobile-head .t{font-size:15px;font-weight:600}.plugin-categories{display:flex;gap:4px;padding:8px 12px;overflow-x:auto}.plugin-categories .navrow{width:auto;flex:none;white-space:nowrap}.plugin-mobile-new{display:block;width:max-content;margin:0 12px 4px}.plugin-main{padding:18px 14px 40px}.plugin-title{font-size:20px}.plugin-card{gap:10px;padding:12px}.plugin-card .plugin-state{white-space:normal;text-align:right}
+}
+@media(hover:hover){.plugin-app .navrow:hover{background:var(--field)}}
 </style>
 </head>
 <body>
@@ -238,6 +271,8 @@ const I={
   chev:'<path d="m9 6 6 6-6 6"/>',
   down:'<path d="m6 9 6 6 6-6"/>',
   user:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  plugin:'<path d="M8 3v5M16 3v5M5 8h14v3a7 7 0 0 1-14 0zM12 18v3"/>',
+  book:'<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21zM4 5.5v13A2.5 2.5 0 0 1 6.5 16H20"/>',
 };
 const ic=(n,s=16,w=1.7)=>`<svg class="i" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${I[n]}</svg>`;
 
@@ -264,6 +299,8 @@ function sidebar({sel='hob',badge='page',withBird=true,birdNew=false}={}){
     <div class="row"><div style="width:44px;display:grid;place-items:center;color:var(--ok)">${ic('clock',18)}</div><div class="main"><div class="l1"><span class="nm">早报</span><span class="tm">08:00</span></div><div class="pv">每天 08:00</div></div></div>
     <div class="row"><div style="width:44px;display:grid;place-items:center;color:var(--ok)">${ic('clock',18)}</div><div class="main"><div class="l1"><span class="nm">周报提醒</span><span class="tm">周五</span></div><div class="pv">每周五 17:00</div></div></div>
     <div class="side-foot">
+      <a class="frow" href="#plugin-installed" style="text-decoration:none">${ic('plugin',18)}<span class="sp">插件</span></a>
+      <div class="frow">${ic('book',18)}<span class="sp">知识库</span></div>
       <div class="frow">${tile(22)}<span class="sp">工作台</span>${ic('out',15)}</div>
       <div class="frow">${ic('gear',18)}<span class="sp">设置</span></div>
     </div></aside>`;
@@ -320,6 +357,9 @@ function panelSettings(){
     <div class="bigav">${av('page',68)}</div>
     <div class="lbl">名字</div><div class="field">写作</div>
     <div class="lbl">一句话职责</div><div class="field">周报和公众号文章</div>
+    <div class="lbl">详细职责</div><div class="field">整理资料，撰写和修改文章。</div>
+    <div class="lbl">补充提示词</div><div class="field" style="min-height:120px;white-space:pre-wrap">写作时先说明背景，再用具体例子展开。\n标题简洁，段落之间留出呼吸的空间。</div>
+    <div class="note">写给这个助手的话：性格、说话方式、工作方法、格式要求……都可以。会原样交给它。</div>
     <div class="lbl">要先问你</div>
     <div class="field" style="padding:2px 12px">
       <div class="rule"><span>删除草稿</span><span class="v">先问</span></div>
@@ -328,6 +368,14 @@ function panelSettings(){
     </div>
     <div class="lbl">通知</div>
     <div class="ctl"><span style="font-size:14px">需要我回答或做完时通知我</span><span class="sp"></span><span class="tog"></span></div>
+  </aside>`;
+}
+function panelGeneral(){
+  return `<aside class="panel">
+    <div class="phead"><span class="ib">${ic('left',17)}</span><span class="t">通用设置</span><span class="ib">${ic('dbl',17)}</span></div>
+    <div class="lbl">网络代理</div><div class="field">http://user:••••@proxy.example.test:8080</div>
+    <div class="note">填了以后，Hob 连接模型、插件、网页搜索，以及助手运行的命令，都通过这个代理。</div>
+    <div class="lbl">不走代理的地址</div><div class="field">localhost,127.0.0.1,::1</div>
   </aside>`;
 }
 
@@ -399,6 +447,7 @@ const S={
       </div>`),'Hob')}</div>`,
   s5:()=>`<div class="stage">${phoneList()}${phoneChat()}</div>`,
 };
+S['settings-general']=()=>`<div class="app">${sidebar({sel:'settings',badge:null,withBird:false})}${chat(head(av('hob',24),'设置'),'', '设置')}${panelGeneral()}</div>`;
 
 function sbar(){return `<div class="island"></div><div class="sbar"><span>08:12</span><span class="r">
   <svg width="18" height="12" viewBox="0 0 18 12"><rect x="0" y="8" width="3" height="4" rx="1" fill="currentColor"/><rect x="5" y="5.5" width="3" height="6.5" rx="1" fill="currentColor"/><rect x="10" y="3" width="3" height="9" rx="1" fill="currentColor"/><rect x="15" y="0" width="3" height="12" rx="1" fill="currentColor"/></svg>
@@ -436,8 +485,26 @@ function phoneChat(){
     <div class="homebar"></div></div></div>`;
 }
 
-const id=(location.hash||'#s1').slice(1);
-document.getElementById('root').innerHTML=(S[id]||S.s1)();
+// ---------- 插件效果图 ----------
+const pluginIcon=name=>`<div class="plugin-icon">${name==='GitHub'?'<svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" aria-label="GitHub"><path d="M12 .9a11.1 11.1 0 0 0-3.51 21.63c.55.1.76-.24.76-.54v-2.15c-3.09.67-3.74-1.31-3.74-1.31-.51-1.29-1.24-1.63-1.24-1.63-1.01-.69.08-.68.08-.68 1.12.08 1.71 1.15 1.71 1.15.99 1.7 2.6 1.21 3.23.93.1-.72.39-1.21.71-1.49-2.47-.28-5.07-1.24-5.07-5.49 0-1.21.43-2.2 1.14-2.98-.11-.28-.49-1.41.11-2.94 0 0 .93-.3 3.05 1.14a10.6 10.6 0 0 1 5.55 0c2.12-1.44 3.04-1.14 3.04-1.14.61 1.53.23 2.66.12 2.94.71.78 1.13 1.77 1.13 2.98 0 4.26-2.6 5.2-5.08 5.48.4.35.75 1.03.75 2.07v3.12c0 .3.2.65.77.54A11.1 11.1 0 0 0 12 .9Z"/></svg>':name==='Gmail'?'<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" aria-label="Gmail"><path d="M3 19V5l9 7 9-7v14M3 5l9 7 9-7"/></svg>':ic('plugin',28)}</div>`;
+const pluginToggle=(label,on=true)=>`<button class="tog ${on?'':'off'}" type="button" role="switch" aria-label="${label}" aria-checked="${on}" onclick="this.classList.toggle('off');this.setAttribute('aria-checked',!this.classList.contains('off'))"></button>`;
+const pluginTool=(name,kind,on=true)=>`<div class="plugin-tool"><span>${name}</span><span class="sp"></span><span class="kind">${kind}</span>${pluginToggle(name,on)}</div>`;
+const pluginServiceTool=([name,description,kind])=>`<div class="plugin-tool"><div class="tool-info"><div class="tool-name mono">${name}</div><div class="tool-desc" title="${description}">${description}</div></div><span class="kind">${kind}</span>${pluginToggle(name)}</div>`;
+const pluginLink=(page)=>`#plugin-${page}${location.hash.endsWith('-dark')?'-dark':''}`;
+function pluginNav(page,active){const row=(label,href,selected)=>`<a class="navrow${selected?' sel':''}" href="${href}">${label}</a>`;const dot=(tone,label)=>`<span class="plugin-dot ${tone}" title="${label}"></span>`;return `<nav class="setnav"><div class="setnavtitle">插件</div>${row('已安装',pluginLink('installed'),page==='installed'&&!active)}${row('市场',pluginLink('market'),page==='market')}<div class="knowledge-label">已安装的插件</div><a class="navrow plugin-navrow${active==='github'?' sel':''}" href="${pluginLink('github')}">${pluginIcon('GitHub')}<span class="plugin-nav-name">GitHub</span><span class="sp"></span>${dot('ok','已连接')}</a><a class="navrow plugin-navrow${active==='gmail'?' sel':''}" href="${pluginLink('gmail')}">${pluginIcon('Gmail')}<span class="plugin-nav-name">Gmail</span><span class="sp"></span>${dot('warn','待配置')}</a><a class="navrow plugin-navrow${active==='email'?' sel':''}" href="${pluginLink('email')}">${pluginIcon('邮箱')}<span class="plugin-nav-name">邮箱</span><span class="sp"></span>${dot('ok','已连接')}</a><a class="navrow plugin-navrow${active==='custom-service'?' sel':''}" href="${pluginLink('errors')}">${pluginIcon('自定义 MCP')}<span class="plugin-nav-name">自定义 MCP</span><span class="sp"></span>${dot('bad','需要重新登录')}</a><a class="navrow${page==='new'&&!active?' sel':''}" href="${pluginLink('new')}">＋ 添加自定义 MCP</a><span class="sp"></span><a class="navrow" href="#s1">返回 Hob</a></nav>`}
+function pluginShell(title,content,page='installed',active=''){const mobileBack=active?pluginLink('installed'):'#s1';const cats=!active?`<nav class="plugin-categories">${page==='installed'?'<a class="navrow sel" href="'+pluginLink('installed')+'">已安装</a>':'<a class="navrow" href="'+pluginLink('installed')+'">已安装</a>'}${page==='market'?'<a class="navrow sel" href="'+pluginLink('market')+'">市场</a>':'<a class="navrow" href="'+pluginLink('market')+'">市场</a>'}</nav><a class="navrow plugin-mobile-new" href="${pluginLink('new')}">＋ 添加自定义 MCP</a>`:'';return `<div class="setpage plugin-app${location.hash.endsWith('-dark')?' dark':''}">${pluginNav(page,active)}<div class="plugin-mobile-head"><a class="plugin-back" href="${mobileBack}">${ic('left',18)}</a><span class="t">${active?title:'插件'}</span></div>${cats}<main class="plugin-main"><div class="plugin-content">${content}</div></main></div>`}
+function pluginCard(name,desc,right,href){return `<a class="plugin-card" href="${pluginLink(href)}">${pluginIcon(name)}<div class="info"><div class="name">${name}</div><div class="desc">${desc}</div></div>${right}</a>`}
+function pluginList(market=false){return pluginShell('插件',`<div class="plugin-title">插件</div><div class="plugin-sub">连接常用工具，让助手在工作中使用。</div>${market?`<div class="plugin-sub plugin-count">发现并安装插件</div>${pluginCard('GitHub','查看和管理代码仓库、议题与拉取请求。','<span class="pbtn">已安装</span>','github')}${pluginCard('Gmail','查找邮件、创建草稿并管理邮件。','<span class="pbtn">已安装</span>','gmail')}`:`<div class="plugin-sub plugin-count">已安装 4 个插件</div>${pluginCard('GitHub','查看和管理代码仓库、议题与拉取请求。','<span class="plugin-state ok">● 已连接</span>','github')}${pluginCard('Gmail','查找邮件、创建草稿并管理邮件。','<span class="plugin-state">待配置</span>','gmail')}${pluginCard('邮箱','连接多个邮箱，查找邮件、创建草稿并管理邮件。','<span class="plugin-state ok">● 已连接</span>','email')}${pluginCard('自定义 MCP','连接自定义工具服务。','<span class="plugin-state">需要重新登录</span>','errors')}<div class="plugin-actions"><a class="pbtn" href="${pluginLink('new')}">＋ 添加自定义 MCP</a></div>`}`,market?'market':'installed')}
+const githubTools=[['search_repositories','Search for repositories matching a query.','只读'],['get_repository','Get details for a repository.','只读'],['list_issues','List issues in a repository.','只读'],['get_issue','Get details for an issue.','只读'],['search_issues','Search issues across repositories.','只读'],['create_issue','Create an issue in a repository.','会改动'],['update_issue','Update an existing issue.','会改动'],['add_issue_comment','Add a comment to an issue.','会改动'],['list_pull_requests','List pull requests in a repository.','只读'],['get_pull_request','Get details for a pull request.','只读'],['create_pull_request','Create a pull request.','会改动'],['update_pull_request','Update a pull request.','会改动'],['merge_pull_request','Merge a pull request.','会改动'],['get_pull_request_files','List files changed by a pull request.','只读'],['get_pull_request_comments','List comments on a pull request.','只读'],['create_pull_request_review','Create a review for a pull request.','会改动'],['list_branches','List branches in a repository.','只读'],['create_branch','Create a branch in a repository.','会改动'],['get_file_contents','Get the contents of a file.','只读'],['search_code','Search for code across repositories.','只读'],['create_or_update_file','Create or update a repository file.','会改动'],['delete_file','Delete a file from a repository.','会改动'],['list_commits','List commits on a branch.','只读'],['get_commit','Get details for a commit.','只读'],['list_releases','List releases in a repository.','只读'],['get_release','Get details for a release.','只读'],['list_tags','List tags in a repository.','只读'],['get_user','Get details for a user.','只读'],['list_workflows','List workflows in a repository.','只读'],['run_workflow','Start a workflow run.','会改动']];
+function pluginEmailDetail(){const tools=[['list_folders','列出邮箱里的文件夹，返回名称和未读数。Gmail 的标签也在这里。','只读'],['search_messages','按条件搜索邮件，最新的在前，返回每封的 folder、uid、发件人、主题、时间、是否已读。','只读'],['get_message','读一封邮件：发件人、收件人、抄送、主题、时间、纯文本正文和附件列表。','只读'],['send_message','发送一封邮件，参数和 create_draft 一样，发出后在已发送里留一份。','会改动']];return pluginShell('邮箱',`<div style="display:flex;align-items:center;gap:14px;margin-top:16px">${pluginIcon('邮箱')}<div><div class="plugin-title">邮箱</div><div class="plugin-sub">Hob · 官方 · 版本 1.0.0</div></div></div><section class="plugin-section"><h2>连接</h2><div class="plugin-tabs" style="display:flex;gap:6px;overflow:auto;margin:14px 0"><button class="pbtn solid">工作邮箱</button><button class="pbtn">QQ 邮箱</button><button class="pbtn">＋ 添加邮箱</button></div><div class="plugin-sub">已连接 · 工作邮箱（me@corp.example）</div><div class="lbl">名称</div><input class="field" value="工作邮箱" aria-label="名称"><div class="lbl">邮箱地址</div><input class="field" value="me@corp.example"><div class="lbl">应用专用密码</div><input class="field" type="password" placeholder="已填，留空不改"><button class="disclosure-row"><span>更多设置</span><span class="disclosure-end">4 项 ${ic('down')}</span></button><div class="plugin-actions"><button class="pbtn">保存</button><button class="pbtn">删除邮箱</button></div></section><section class="plugin-section"><h2>工具 <span class="plugin-state">${tools.length} 个</span></h2><div class="plugin-list">${tools.map(pluginServiceTool).join('')}</div></section><section class="plugin-section"><h2>给哪些助手用</h2><div class="plugin-list">${pluginTool('Hob','主助手')}${pluginTool('写作','助手')}</div></section>`,'installed','email')}
+function pluginDetail(github=false){const name=github?'GitHub':'Gmail';const tools=github?githubTools:[['search_messages','Search messages matching a query.','只读'],['get_message','Get the contents of a message.','只读'],['create_draft','Create a draft message.','会改动'],['modify_message_labels','Add or remove labels from a message.','会改动']];return pluginShell(name,`<div style="display:flex;align-items:center;gap:14px;margin-top:16px">${pluginIcon(name)}<div><div class="plugin-title">${name}</div><div class="plugin-sub">Hob · 官方 · 版本 1.0.0</div></div></div><section class="plugin-section"><h2>连接</h2><div class="plugin-sub">${github?'已连接':'待配置'}</div>${github?`<div class="lbl">个人访问令牌</div><input class="field" type="password" placeholder="已填，留空不改" aria-label="个人访问令牌"><div class="plugin-actions"><button class="pbtn">保存</button><button class="pbtn">断开连接</button></div>`:`<div class="lbl">OAuth 客户端 ID</div><input class="field" id="client-id" aria-label="OAuth 客户端 ID" placeholder="输入客户端 ID" oninput="pluginValidate()"><div class="note">在 <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">Google Cloud 控制台</a>创建客户端。</div><div class="lbl">OAuth 客户端密钥</div><input class="field" id="client-secret" type="password" aria-label="OAuth 客户端密钥" placeholder="输入客户端密钥" oninput="pluginValidate()"><div class="lbl">回调地址</div><div class="field" style="display:flex;align-items:center;gap:8px"><span class="mono" style="flex:1;overflow-wrap:anywhere;font-size:12px">https://hob.example.com/api/plugins/oauth/callback</span><button class="pbtn" type="button" onclick="navigator.clipboard.writeText('https://hob.example.com/api/plugins/oauth/callback');this.textContent='已复制'">复制</button></div><div class="plugin-actions"><button id="connect" class="pbtn solid" disabled>连接</button><span id="missing" class="note" style="margin:0">请填写 OAuth 客户端 ID 和 OAuth 客户端密钥</span></div>`}</section><section class="plugin-section"><h2>工具 <span class="plugin-state">${tools.length} 个</span></h2><div class="plugin-sub">选择提供给助手的工具。</div><div class="plugin-list ${github?'plugin-scroll':''}">${tools.map(pluginServiceTool).join('')}</div>${github?'<div class="note">滚动查看全部工具</div>':''}</section><section class="plugin-section"><h2>给哪些助手用</h2><div class="plugin-sub">选择可以使用此插件的助手。</div><div class="plugin-list">${pluginTool('Hob','主助手')}${pluginTool('写作','助手')}${pluginTool('研究','助手',false)}</div></section>${github?`<section class="plugin-section"><h2>技能</h2><div class="plugin-sub">此插件提供的技能</div><div class="plugin-list"><div class="plugin-tool"><span>处理代码协作</span><span class="sp"></span><span class="kind">插件技能</span></div></div></section>`:''}`,'installed',github?'github':'gmail')}
+function pluginValidate(){const missing=[];if(!document.getElementById('client-id').value.trim())missing.push('OAuth 客户端 ID');if(!document.getElementById('client-secret').value.trim())missing.push('OAuth 客户端密钥');document.getElementById('connect').disabled=!!missing.length;document.getElementById('missing').textContent=missing.length?'请填写 '+missing.join(' 和 '):'配置已填写，可以连接'}
+function pluginAssistant(){return pluginShell('助手设置',`<div style="display:flex;align-items:center;gap:14px;margin-top:16px">${av('page',52)}<div><div class="plugin-title">写作</div><div class="plugin-sub">助手设置</div></div></div><section class="plugin-section"><h2>插件</h2><div class="plugin-sub">选择这个助手可以使用的插件。</div><div class="plugin-list">${pluginTool('GitHub','已连接')}${pluginTool('Gmail','待配置')}${pluginTool('自定义 MCP','需要重新登录',false)}</div><div class="note">插件需要完成连接后才能使用。</div></section>`)}
+function pluginNew(){return pluginShell('添加自定义 MCP',`<div class="plugin-title">添加自定义 MCP</div><div class="plugin-sub">连接自定义工具服务。</div><section class="plugin-section"><div class="lbl">名称</div><input class="field" aria-label="名称"><div class="lbl">连接方式</div><select class="field"><option>远程地址</option><option>本机命令</option></select><div class="lbl">远程地址</div><input class="field" aria-label="远程地址"><div class="lbl">请求头（每行名称=值）</div><textarea class="field"></textarea><div class="plugin-actions"><button class="pbtn solid">添加</button></div></section>`,'new')}
+function pluginErrors(){return pluginShell('连接状态',`<div class="plugin-title" style="margin-top:16px">连接状态</div><div class="plugin-sub">查看连接问题并采取相应操作。</div><section class="plugin-section"><h2>自定义 MCP</h2><div class="plugin-banner"><span>需要重新登录</span><span class="sp"></span><button class="pbtn solid">重新连接</button></div></section><section class="plugin-section"><h2>示例服务</h2><div class="plugin-banner"><span>出错</span><span class="sp"></span><button class="pbtn">重新连接</button></div><div class="plugin-sub">服务返回：Authorization expired. Please sign in again.</div></section>`)}
+S['plugin-installed']=()=>pluginList();S['plugin-market']=()=>pluginList(true);S['plugin-new']=pluginNew;S['plugin-gmail']=()=>pluginDetail();S['plugin-github']=()=>pluginDetail(true);S['plugin-email']=pluginEmailDetail;S['plugin-assistant']=pluginAssistant;S['plugin-errors']=pluginErrors;
+function render(){const id=(location.hash||'#s1').slice(1).replace(/-dark$/,'');document.getElementById('root').innerHTML=(S[id]||S.s1)()}
+window.addEventListener('hashchange',render);render();
 </script>
 </body>
 </html>

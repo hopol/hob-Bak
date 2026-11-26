@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { setLocale } from "../../shared/i18n.ts";
 import { createMock } from "../src/mock.ts";
 
 describe("README 演示场景", () => {
@@ -48,5 +49,37 @@ describe("README 演示场景", () => {
     const conversation = await api.items("page");
     expect(conversation.items).toContainEqual(expect.objectContaining({ kind: "job", jobId: "readme-weekly" }));
     expect(conversation.approvals).toContainEqual(expect.objectContaining({ id: "readme-approval", source: "router", status: "pending" }));
+  });
+
+  it("交互卡片与升级版提问卡场景在中英文下引用完整且支持双语", async () => {
+    for (const locale of ["zh", "en"] as const) {
+      setLocale(locale);
+      const api = createMock("readme-interactive-cards");
+      const conversation = await api.items("hob");
+      expect(conversation.items.map((item) => item.kind)).toEqual(["user", "card", "question"]);
+      expect(conversation.cards).toContainEqual(expect.objectContaining({ id: "readme-card-dns", status: "open" }));
+      const approval = conversation.approvals.find((item) => item.id === "readme-ask-release");
+      expect(approval?.questions).toHaveLength(3);
+      expect(approval?.questions?.map((q) => q.input ?? "choice")).toEqual(["choice", "text", "date"]);
+      if (locale === "en") {
+        expect(approval?.title).toMatch(/^[A-Za-z0-9 ,.&'-]+$/);
+      }
+    }
+    setLocale("zh");
+  });
+
+  it("插件市场场景包含工具插件与供应商插件并支持双语", async () => {
+    for (const locale of ["zh", "en"] as const) {
+      setLocale(locale);
+      const api = createMock("readme-plugins");
+      const [installed, catalog] = await Promise.all([api.plugins(), api.pluginCatalog()]);
+      expect(catalog.plugins).toHaveLength(9);
+      expect(catalog.plugins.map((p) => p.id)).toEqual(expect.arrayContaining(["github", "cloudflare", "gmail", "bitwarden", "copilot", "chatgpt", "zcode", "agy-cli"]));
+      expect(installed.plugins.map((p) => p.plugin.id)).toEqual(["github", "cloudflare", "gmail", "bitwarden", "copilot"]);
+      if (locale === "en") {
+        expect(catalog.plugins.find((p) => p.id === "chatgpt")?.manifest.displayName).toBe("ChatGPT");
+      }
+    }
+    setLocale("zh");
   });
 });

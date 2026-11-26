@@ -23,7 +23,7 @@ describe("交接只使用助手写的说明", () => {
       expect(start).toHaveBeenCalledWith("hob", expect.objectContaining({
         instruction: "用户要求：“只改第三章，图表别动，改完给我对比。”",
         files: ["/draft.md"],
-      }));
+      }), undefined);
       expect(start.mock.calls[0]![1].instruction).not.toContain("最近的对话");
       expect(start.mock.calls[0]![1].instruction).not.toContain("用户原话");
     } finally { hob.close(); }
@@ -50,7 +50,7 @@ describe("交接只使用助手写的说明", () => {
       const delegation = vi.spyOn(hob.runtime.delegations, "start").mockResolvedValue({ id: "dg-test" } as never);
       const result = await toolOf(hob, "message_assistant").execute("c", { assistantId: "ops", note: "检查服务状态，失败时写清原因。", files: ["/check.txt"] });
       expect(result.terminate).toBe(true);
-      expect(delegation).toHaveBeenCalledWith("hob", "ops", "检查服务状态，失败时写清原因。", ["/check.txt"]);
+      expect(delegation).toHaveBeenCalledWith("hob", "ops", "检查服务状态，失败时写清原因。", ["/check.txt"], undefined);
     } finally { hob.close(); }
   });
 

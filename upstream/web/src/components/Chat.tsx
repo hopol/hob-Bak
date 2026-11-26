@@ -10,7 +10,7 @@ import { fileIcon } from "../file-icons.ts";
 import { Icon } from "../icons.tsx";
 import { fmtWhen } from "../util.ts";
 import { Avatar } from "../sprites.tsx";
-import { applyMention, filterMembers, mentionAt, stepPick } from "../mention.ts";
+import { applyMention, filterMembers, isImeCompositionEvent, mentionAt, stepPick } from "../mention.ts";
 import {
   expandPanel,
   toggleSideCollapsed,
@@ -32,6 +32,7 @@ import {
   stopGroup,
   attach,
   chatItems,
+  composerDraft,
   loadOlderItems,
   openFilePreview,
   photoUrl,
@@ -45,6 +46,7 @@ import { GroupCluster, membersOf } from "./Groups.tsx";
 import { ClosedTopic } from "./Topics.tsx";
 import { TodoStrip, type RunningJob } from "./Todos.tsx";
 import { DelayedText } from "./Empty.tsx";
+import { ComposerPlus } from "./ComposerPlus.tsx";
 
 export function conversationState(s: ReturnType<typeof useApp>) {
   const g = groupById(s, s.gsel);
@@ -367,13 +369,20 @@ function chatKey(sel: string | null, gen: number | undefined): string {
 
 function ConversationBody({ className, scrollRef, onScroll, state, scrollId, think, stick, mobile = false }: { className: string; scrollRef: React.RefObject<HTMLDivElement | null>; onScroll: React.UIEventHandler<HTMLDivElement>; state: ReturnType<typeof conversationState>; scrollId: string | null; think: ReturnType<typeof useLeave>; stick: { atBottom: boolean; toBottom: () => void }; mobile?: boolean }) {
   const { g, a, items, empty, busy } = state;
-  const assistants = useApp().assistants;
+  const s = useApp();
+  const assistants = s.assistants;
+  const suggestions = think.mounted ? undefined : g?.suggestions ?? a?.suggestions;
   return <>
     <div className={className} ref={scrollRef} onScroll={onScroll}><div className={`col${empty ? " mid" : ""}`}>
       {g?.parentId ? <div className="topic-open-line">{openLine(g, assistants)}</div> : null}
       <OlderStatus id={scrollId} group={Boolean(g)} />
       {empty ? (g ? <EmptyGroup g={g} /> : a ? <EmptyChat a={a} /> : null) : g ? <GroupItemList g={g} items={items as GroupItem[]} /> : <ItemList items={items} />}
       {think.mounted && g ? <GroupThinking g={g} /> : think.mounted && a ? <Thinking a={a} leaving={think.leaving} gap={items.at(-1)?.kind === "user"} /> : null}
+      <FollowUpStrip items={suggestions} group={Boolean(g)} prefix={groupSuggestionPrefix(g, items, assistants)} onPick={(text) => {
+        const hasText = composerDraft(s).text.length > 0;
+        setText(text);
+        if (!hasText) void send();
+      }} />
     </div></div>
     <JumpToBottom show={!stick.atBottom} busy={busy} onClick={stick.toBottom} />
   </>;
@@ -409,8 +418,29 @@ export function Chat() {
   );
 }
 
-export function Composer({ variant = "desktop", todos, jobs }: { variant?: "desktop" | "mobile"; todos?: TodoItem[]; jobs?: RunningJob[] }) {
+/** 推荐提问：接在最后一条回复气泡下面（群里和气泡一样缩进到头像右边）。 */
+function FollowUpStrip({ items, group, prefix, onPick }: { items?: string[]; group?: boolean; prefix?: string; onPick: (text: string) => void }) {
+  const leave = useLeave(Boolean(items?.length), 180);
+  if (!leave.mounted) return null;
+  return (
+    <div className={`followup-strip${group ? " in-group" : ""}${leave.leaving ? " leaving" : ""}`} role="list" aria-label={t("推荐提问")}>
+      {(items ?? []).map((item) => <button className="followup-chip" key={item} role="listitem" onClick={() => onPick(`${prefix ?? ""}${item}`)}>{item}</button>)}
+    </div>
+  );
+}
+
+function groupSuggestionPrefix(g: GroupSummary | undefined, items: Item[], assistants: AssistantSummary[]): string {
+  if (!g) return "";
+  const last = [...items].reverse().find((item) => item.kind === "assistant") as GroupItem | undefined;
+  if (!last || last.speaker === g.ownerId) return "";
+  const member = assistants.find((assistant) => assistant.id === last.speaker);
+  return member ? `@${member.name} ` : "";
+}
+
+/** 输入框上方的待办和附件都在这里排成一列。 */
+export function Composer({ variant = "desktop", todos, jobs }: { variant?: "desktop"; todos?: TodoItem[]; jobs?: RunningJob[] } | { variant: "mobile"; todos?: TodoItem[]; jobs?: RunningJob[] }) {
   const s = useApp();
+  const draft = composerDraft(s);
   const a = s.assistants.find((x) => x.id === s.sel);
   const g = groupById(s, s.gsel);
   const owner = g ? s.assistants.find((x) => x.id === g.ownerId) : undefined;
@@ -418,18 +448,18 @@ export function Composer({ variant = "desktop", todos, jobs }: { variant?: "desk
   const ta = useRef<HTMLTextAreaElement>(null);
   const compRef = useRef<HTMLDivElement>(null);
   // 光标位置要从当前文本的末尾算起（场景预填了「@」时也要直接弹出名单）
-  const [caret, setCaret] = useState(s.text.length);
+  const [caret, setCaret] = useState(draft.text.length);
   const [pick, setPick] = useState(0);
   /** Esc 关掉的那一下：这段字不再弹，改了字再弹 */
   const [muted, setMuted] = useState<string | null>(null);
   /** 名单浮在输入框上面：挂在 body 上按屏幕坐标摆，不被输入框的模糊层裁掉 */
   const [anchor, setAnchor] = useState<{ left: number; bottom: number; width: number } | null>(null);
-  const has = s.text.trim().length > 0 || s.attachments.length > 0;
-  const quote = useLeave(s.quote !== null, 180);
+  const has = draft.text.trim().length > 0 || draft.attachments.length > 0;
+  const quote = useLeave(draft.quote !== null, 180);
   // 群里打到 @ 就列成员：名字、职责，群主排第一
-  const typing = g ? mentionAt(s.text, caret, members.map((m) => m.name)) : null;
+  const typing = g ? mentionAt(draft.text, caret, members.map((m) => m.name)) : null;
   const options = g && typing ? filterMembers(members, g.ownerId, typing.query) : [];
-  const showing = Boolean(g && typing && options.length && muted !== s.text);
+  const showing = Boolean(g && typing && options.length && muted !== draft.text);
   const active = options.length ? pick % options.length : 0;
 
   useLayoutEffect(() => {
@@ -437,11 +467,11 @@ export function Composer({ variant = "desktop", todos, jobs }: { variant?: "desk
     // 左边和输入框对齐，最宽不超过输入框
     const next = rect ? { left: rect.left, bottom: window.innerHeight - rect.top + 8, width: Math.min(rect.width, 320) } : null;
     setAnchor((prev) => (prev?.left === next?.left && prev?.bottom === next?.bottom && prev?.width === next?.width ? prev : next));
-  }, [showing, s.text, s.attachments.length, variant]);
+  }, [showing, draft.text, draft.attachments.length, variant]);
 
   const choose = (member: AssistantSummary | undefined) => {
     if (!typing || !member) return;
-    const next = applyMention(s.text, typing, member.name);
+    const next = applyMention(draft.text, typing, member.name);
     setText(next.text);
     setPick(0);
     requestAnimationFrame(() => {
@@ -459,7 +489,7 @@ export function Composer({ variant = "desktop", todos, jobs }: { variant?: "desk
     el.style.height = "auto";
     const max = variant === "mobile" ? 120 : 180;
     el.style.height = `${Math.min(el.scrollHeight, max)}px`;
-  }, [s.text, s.nonce, variant]);
+  }, [draft.text, s.nonce, variant]);
 
   useEffect(() => {
     if (s.nonce) ta.current?.focus();
@@ -489,16 +519,16 @@ export function Composer({ variant = "desktop", todos, jobs }: { variant?: "desk
       <TodoStrip items={todos} jobs={jobs} busy={g ? g.busy.length > 0 : Boolean(a?.busy)} />
       {quote.mounted ? (
         <div className={`comp-quote${quote.leaving ? " leaving" : ""}`}>
-          <div className="quote">{s.quote?.text}</div>
+          <div className="quote">{draft.quote?.text}</div>
           <button className="hob-icon-btn" style={{ width: 20, height: 20 }} onClick={() => setQuote(null)} title={t("取消引用")}>
             <Icon name="close" size={13} />
           </button>
         </div>
       ) : null}
       {/* 附件：图片是带 × 的缩略图，其他文件是一张小卡（图标 + 名字），和 Telegram 一样 */}
-      {s.attachments.length ? (
+      {draft.attachments.length ? (
         <div className="comp-files">
-          {s.attachments.map((att) => {
+          {draft.attachments.map((att) => {
             const path = att.path ?? localPath(att);
             const state = att.status === "uploading" ? " uploading" : att.status === "failed" ? " failed" : "";
             return isImagePath(att.name) ? (
@@ -544,31 +574,24 @@ export function Composer({ variant = "desktop", todos, jobs }: { variant?: "desk
         document.body,
       ) : null}
       <div className="comp-main">
-        <label className="pl" title={t("加文件（也可粘贴截图）")}>
-          <Icon name="plus" size={19} />
-          <input
-            type="file"
-            multiple
-            hidden
-            onChange={(e) => {
-              const files = Array.from(e.target.files ?? []);
-              e.target.value = "";
-              if (files.length) attach(files);
-            }}
-          />
-        </label>
+        <ComposerPlus g={g} a={a} onFiles={attach} />
         <textarea
           ref={ta}
           className="ta"
           rows={1}
-          value={s.text}
-          placeholder={g ? (g.parentId ? t("在此话题中发言，未点名时由{owner}接手", { owner: sendName(owner?.name ?? "") }) : t("在综合中发言，未点名时由{owner}接手", { owner: sendName(owner?.name ?? "") })) : t("给{assistant}发消息", { assistant: sendName(a?.name ?? "") })}
+          value={draft.text}
+          placeholder={g ? (
+            g.replyMode === "all"
+              ? (g.parentId ? t("在此话题中发言，未点名时全员依次回应") : t("在综合中发言，未点名时全员依次回应"))
+              : (g.parentId ? t("在此话题中发言，未点名时由{owner}接手", { owner: sendName(owner?.name ?? "") }) : t("在综合中发言，未点名时由{owner}接手", { owner: sendName(owner?.name ?? "") }))
+          ) : t("给{assistant}发消息", { assistant: sendName(a?.name ?? "") })}
           onChange={(e) => {
             setText(e.target.value);
             setCaret(e.target.selectionStart ?? e.target.value.length);
           }}
           onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
           onKeyDown={(e) => {
+            if (isImeCompositionEvent(e.nativeEvent)) return;
             if (showing) {
               if (e.key === "ArrowDown") {
                 e.preventDefault();
@@ -587,11 +610,11 @@ export function Composer({ variant = "desktop", todos, jobs }: { variant?: "desk
               }
               if (e.key === "Escape") {
                 e.preventDefault();
-                setMuted(s.text);
+                setMuted(draft.text);
                 return;
               }
             }
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               void send();
             }
